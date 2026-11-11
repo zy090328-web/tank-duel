@@ -33,11 +33,32 @@ body {
   font-family: var(--font-body);
 }
 canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#namebox {
+  position: fixed; z-index: 5; left: 50%; top: max(14px, env(safe-area-inset-top, 0px)); transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; padding: 12px 14px; max-width: calc(100% - 32px); box-sizing: border-box;
+  background: var(--paper); border: 2px solid var(--graphite); border-radius: 14px; box-shadow: 0 6px 0 rgba(52, 57, 65, 0.18);
+  font-family: var(--font-body); font-size: 20px;
+}
+#namebox[hidden] { display: none; }
+#namebox input {
+  width: 9.5em; min-width: 0; font: inherit; color: var(--graphite); background: #fff; padding: 6px 10px;
+  border: 2px solid var(--graphite); border-radius: 10px; -webkit-user-select: text; user-select: text; touch-action: manipulation;
+}
+#namebox input:focus-visible, #namebox button:focus-visible { outline: 3px solid var(--blue-pen); outline-offset: 2px; }
+#namebox button {
+  font: inherit; font-family: var(--font-display); color: var(--paper); background: var(--red-pen);
+  border: 0; border-radius: 10px; padding: 7px 16px; touch-action: manipulation;
+}
 noscript { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; text-align: center; }
 </style>
 </head>
 <body>
 <canvas id="game" role="img" aria-label="Tank Duel: a two-player tank game played on one touch screen"></canvas>
+<div id="namebox" hidden>
+  <label for="nameinput">Your name</label>
+  <input id="nameinput" type="text" maxlength="12" autocomplete="off" autocapitalize="words" spellcheck="false" enterkeyhint="done">
+  <button id="nameok" type="button">OK</button>
+</div>
 <noscript>This game needs JavaScript turned on.</noscript>
 <script>
 (() => {
@@ -94,7 +115,12 @@ const C = {
   MINE_ARM: 0.8,         // seconds before a mine can go off
   MINE_TRIGGER: 0.5,     // a tank this close (centre to centre) sets an armed mine off
   MINE_R: 0.15,
-  PIERCE_SPEED: 3.4      // a piercing shot flies through walls, slowly, and never bounces
+  PIERCE_SPEED: 3.4,      // a piercing shot flies through walls, slowly, and never bounces
+
+  // game modes
+  RESPAWN_TIME: 2,       // deathmatch and hill: seconds before a destroyed tank comes back
+  SPAWN_SHIELD: 1.5,     // ...and how long it is shielded when it does (it cannot fire meanwhile)
+  HILL_R: 1.5            // hill: radius of the circle in the middle
 };
 
 /* ============================================================
@@ -222,6 +248,53 @@ const MAPS = [
     ".#####.#####.",
     "......1......" ]
 ];
+// Four-way maps for three to five tanks: every wall drawn here is repeated turned through 90, 180 and
+// 270 degrees, so all four sides of the arena are the same. Only one quarter needs drawing.
+const ROT4 = new Set();
+for (const m of [
+  // Crossroads
+  [ ".............",
+    ".#...........",
+    "..##.........",
+    "..#...#......",
+    "......#......",
+    ".............",
+    ".............",
+    ".............",
+    ".............",
+    ".............",
+    ".............",
+    "......1......",
+    "............." ],
+  // Pinwheel
+  [ ".............",
+    ".............",
+    "....#........",
+    "....#........",
+    "..###........",
+    ".....#.......",
+    ".............",
+    ".............",
+    ".............",
+    ".............",
+    ".............",
+    "......1......",
+    "............." ],
+  // Fort
+  [ ".............",
+    "...#.........",
+    ".............",
+    "...###.......",
+    ".............",
+    ".#...........",
+    ".............",
+    ".............",
+    ".............",
+    ".............",
+    ".............",
+    "......1......",
+    "............." ]
+]) { ROT4.add(MAPS.length); MAPS.push(m); }
 let COLS = 11, ROWS = 11;      // size of the map being played; set by loadMap
 const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const POWER_TYPES = ['laser', 'homing', 'guided', 'shield', 'spread', 'mine', 'pierce'];
@@ -260,16 +333,30 @@ const st = document.createElement('canvas');   // static layer: paper, grid, wal
 /* ---------- settings ---------- */
 const AMMO_MODES = ['unlimited', 'reload', 'limited', 'single'];
 const MAP_POOLS = ['all', 'classic', 'complex'], WIN_SCORES = [3, 5, 7];
-let settings = { ammo: 'unlimited', powerups: false, maps: 'all', winScore: C.WIN_SCORE };
+// classic: last tank standing takes the round. teams: the same, two sides. dm: destroyed tanks come back
+// and kills are counted. hill: tanks come back, and holding the circle in the middle scores.
+const GAME_MODES = ['classic', 'teams', 'dm', 'hill'];
+const GAME_NAME = { classic: 'Classic', teams: 'Teams', dm: 'Deathmatch', hill: 'Hill' };
+const GAME_TEXT = {
+  classic: 'Last tank standing wins the round.',
+  teams: 'Two teams; your side cannot hit you. Needs 3 or more tanks.',
+  dm: 'Destroyed tanks come back. Every kill is a point.',
+  hill: 'Stand alone in the circle in the middle to score.'
+};
+const KILL_GOAL = { 3: 5, 5: 10, 7: 15 }, HILL_GOAL = { 3: 20, 5: 30, 7: 45 };
+// soft: some walls break when shot. cpu: on one screen, play alone against this many computer tanks (0 = two people).
+let settings = { ammo: 'unlimited', powerups: false, maps: 'all', winScore: C.WIN_SCORE, game: 'classic', soft: false, cpu: 0 };
 function validSettings(s) {
   if (!s || !AMMO_MODES.includes(s.ammo)) return null;
   return { ammo: s.ammo, powerups: !!s.powerups, maps: MAP_POOLS.includes(s.maps) ? s.maps : 'all',
-    winScore: WIN_SCORES.includes(s.winScore) ? s.winScore : C.WIN_SCORE };
+    winScore: WIN_SCORES.includes(s.winScore) ? s.winScore : C.WIN_SCORE,
+    game: GAME_MODES.includes(s.game) ? s.game : 'classic', soft: !!s.soft, cpu: [1, 2, 3].includes(s.cpu) ? s.cpu : 0 };
 }
 // classic = the small 11x11 maps, complex = the 13x13 ones
 function mapPool() {
   const all = MAPS.map((_, i) => i);
-  if (NP >= 4) return all.filter(i => MAPS[i].length > 11);   // four or five tanks need the bigger maps
+  if (NP >= 4 || teamsOn()) return all.filter(i => MAPS[i].length > 11);   // four or five tanks, or teams, need the bigger maps
+  if (NP === 3 && settings.maps !== 'classic') return all.filter(i => MAPS[i].length > 11);
   if (settings.maps === 'classic') return all.filter(i => MAPS[i].length <= 11);
   if (settings.maps === 'complex') return all.filter(i => MAPS[i].length > 11);
   return all;
@@ -282,6 +369,28 @@ try { settings = validSettings(JSON.parse(localStorage.getItem('tankduel-setting
 function saveSettings() { try { localStorage.setItem('tankduel-settings', JSON.stringify(settings)); } catch (e) {} }
 let muted = false;
 try { muted = localStorage.getItem('tankduel-muted') === '1'; } catch (e) {}
+let myName = '', nameOpen = false, nameSentAt = 0;
+try { myName = String(localStorage.getItem('tankduel-name') || '').replace(/[<>]/g, '').trim().slice(0, 12); } catch (e) {}
+const nameBox = document.getElementById('namebox'), nameInput = document.getElementById('nameinput'), nameOk = document.getElementById('nameok');
+function openName() {
+  if (!nameBox || !nameInput || typeof nameInput.focus !== 'function') return;
+  nameOpen = true; nameBox.hidden = false; nameInput.value = myName;
+  try { nameInput.focus(); nameInput.select(); } catch (e) {}
+}
+function closeName(save) {
+  if (!nameOpen) return;
+  nameOpen = false; nameBox.hidden = true;
+  try { nameInput.blur(); } catch (e) {}
+  if (!save) return;
+  myName = cleanName(nameInput.value);
+  try { localStorage.setItem('tankduel-name', myName); } catch (e) {}
+  if (mode === 'guest') toHost({ n: myName });
+}
+if (nameOk && nameInput && nameOk.addEventListener) {
+  nameOk.addEventListener('click', () => closeName(true));
+  nameInput.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') closeName(true); else if (e.key === 'Escape') closeName(false); });
+  nameInput.addEventListener('keyup', e => e.stopPropagation());
+}
 
 /* ---------- game state ---------- */
 let walls = [], spawn = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
@@ -306,6 +415,23 @@ let roundT = 0, sdClosed = 0, sdStarted = false;   // play time this round; sudd
 let pickupTimer = 0, puBag = [];
 let quitArm = 0;
 let LETHAL = false;
+let teamOf = [];            // team (0 red, 1 blue) of each tank in a team match
+let names = [];             // what each tank's player is called
+let bots = new Set();       // tanks driven by the computer
+let soloMatch = false;      // one person on this screen against computer tanks
+let stats = [];             // per tank, this match: kills, deaths, shots, hits
+let soft = new Uint8Array(0), broken = [];     // breakable wall cells; the ones broken this round, in order
+let hillHolder = -1, hillT = [];               // hill: who holds the circle (-1 nobody, -2 contested); seconds held per tank
+const respawnMode = () => settings.game === 'dm' || settings.game === 'hill';
+const teamsOn = () => settings.game === 'teams' && NP > 2;
+const target = () => settings.game === 'dm' ? KILL_GOAL[settings.winScore] : settings.game === 'hill' ? HILL_GOAL[settings.winScore] : settings.winScore;
+const goalText = () => settings.game === 'dm' ? `first to ${target()} kills` : settings.game === 'hill' ? `hold it for ${target()} s` : `first to ${target()}`;
+const penOf = i => teamsOn() ? COL.pens[teamOf[i] ? 1 : 0] : (COL.pens[i] || COL.graphite);
+const sideOf = i => teamsOn() ? (teamOf[i] ? 1 : 0) : i;          // what scores[] is counted by: team or tank
+const canHurt = (owner, t) => owner === t.id || !teamsOn() || teamOf[owner] !== teamOf[t.id];
+const champion = () => { let b = 0; scores.forEach((v, i) => { if (v > scores[b]) b = i; }); return b; };
+const cleanName = v => String(v == null ? '' : v).replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 12);
+const nameOf = i => names[i] || (bots.has(i) ? 'CPU' : teamsOn() ? 'Player ' + (i + 1) : PEN_NAMES[i]);
 
 // mode: 'local' = two players on one screen; 'host' = this device runs the game for players on other devices;
 // 'guest' = this device drives one tank of a game hosted elsewhere and draws what the host sends
@@ -313,7 +439,7 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
 let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], particles = [], marks = [];
@@ -326,20 +452,97 @@ function loadMap(i) {
   mapId = ((i % MAPS.length) + MAPS.length) % MAPS.length;
   const m = MAPS[mapId];
   ROWS = m.length; COLS = m[0].length;
-  crushed = new Uint8Array(COLS * ROWS);
+  crushed = new Uint8Array(COLS * ROWS); soft = new Uint8Array(COLS * ROWS); broken = [];
+  const rot4 = ROT4.has(mapId), N = ROWS - 1, M = COLS - 1;
+  const mark = (r, c) => m[r][c] === '#';
   walls = [];
   for (let r = 0; r < ROWS; r++) {
     walls.push([]);
     for (let c = 0; c < COLS; c++) {
-      // a cell is a wall if it, or its 180-degree mirror cell, is marked '#'
-      walls[r].push(m[r][c] === '#' || m[ROWS - 1 - r][COLS - 1 - c] === '#');
+      // a cell is a wall if it, or a cell that turns onto it (180 degrees; on four-way maps also 90 and 270), is marked '#'
+      walls[r].push(mark(r, c) || mark(N - r, M - c) || (rot4 && (mark(c, N - r) || mark(N - c, r))));
     }
   }
   let sc = COLS >> 1, sr = ROWS - 2;
   for (let r = 0; r < ROWS; r++) { const c = m[r].indexOf('1'); if (c >= 0) { sc = c; sr = r; } }
-  walls[sr][sc] = false; walls[ROWS - 1 - sr][COLS - 1 - sc] = false;
-  spawn = [{ x: sc + 0.5, y: sr + 0.5 }, { x: COLS - sc - 0.5, y: ROWS - sr - 0.5 }];
-  if (NP > 2) spawn = spreadSpawns(NP, sc, sr);
+  const two = [[sr, sc], [N - sr, M - sc]];
+  const four = [[sr, sc], [sc, N - sr], [N - sr, M - sc], [N - sc, sr]];      // going round: bottom, left, top, right
+  for (const [r, c] of rot4 ? four : two) walls[r][c] = false;
+  if (settings.game === 'hill') carveHill(sc, sr);
+  if (settings.soft) markSoft(rot4);
+  const at = ([r, c]) => ({ x: c + 0.5, y: r + 0.5 });
+  if (teamsOn()) spawn = teamSpawns(sc, sr);
+  else if (NP <= 2) spawn = two.map(at);
+  else if (rot4 && NP === 4) spawn = four.map(at);
+  else spawn = spreadSpawns(NP, sc, sr);
+}
+
+// Hill: the circle in the middle is cleared of walls, and a way in is opened if the map had none.
+function carveHill(sc, sr) {
+  const cx = COLS / 2, cy = ROWS / 2, mc = COLS >> 1, mr = ROWS >> 1;
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (Math.hypot(c + 0.5 - cx, r + 0.5 - cy) < C.HILL_R + 0.2) walls[r][c] = false;
+  for (let k = 2; k < Math.min(mc, mr) && distField(sc, sr)[mr * COLS + mc] < 0; k++) {
+    walls[mr][mc - k] = walls[mr][mc + k] = walls[mr - k][mc] = walls[mr + k][mc] = false;
+  }
+}
+// Breakable walls: about four in ten wall cells, chosen the same way on every device and the same on every side of the map.
+function markSoft(rot4) {
+  const N = ROWS - 1, M = COLS - 1;
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    if (!walls[r][c]) continue;
+    let key = Math.min(r * COLS + c, (N - r) * COLS + (M - c));
+    if (rot4) key = Math.min(key, c * COLS + (N - r), (N - c) * COLS + r);
+    if (mulberry32(mapId * 7919 + key * 31 + 5)() < 0.42) soft[r * COLS + c] = 1;
+  }
+}
+function softAt(x, y, rad) {
+  const c0 = Math.max(0, Math.floor(x - rad)), c1 = Math.min(COLS - 1, Math.floor(x + rad));
+  const r0 = Math.max(0, Math.floor(y - rad)), r1 = Math.min(ROWS - 1, Math.floor(y + rad));
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    if (!walls[r][c] || !soft[r * COLS + c]) continue;
+    const dx = x - clamp(x, c, c + 1), dy = y - clamp(y, r, r + 1);
+    if (dx * dx + dy * dy < rad * rad) return r * COLS + c;
+  }
+  return -1;
+}
+function crackFx(x, y) {
+  for (let i = 0; i < 10; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 0.6 + Math.random() * 2.2, life = 0.25 + Math.random() * 0.3;
+    particles.push({ x: x + (Math.random() - 0.5) * 0.6, y: y + (Math.random() - 0.5) * 0.6, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life, max: life, col: COL.graphite, size: 0.04 + Math.random() * 0.04 });
+  }
+  sfx.crack();
+}
+function breakWall(idx) {
+  const r = (idx / COLS) | 0, c = idx % COLS;
+  if (!walls[r] || !walls[r][c] || !soft[idx]) return;
+  walls[r][c] = false; soft[idx] = 0; broken.push(idx);
+  crackFx(c + 0.5, r + 0.5);
+  buildStatic();
+}
+// a shot that touches a breakable wall breaks it and is spent
+function crack(b) {
+  if (!settings.soft) return false;
+  const i = softAt(b.x, b.y, C.BULLET_R + 0.01);
+  if (i < 0) return false;
+  breakWall(i);
+  return true;
+}
+// Teams start together: each team's tanks take the open cells nearest its end of the arena, the two ends mirrored.
+function teamSpawns(sc, sr) {
+  const d = distField(sc, sr), N = ROWS - 1, M = COLS - 1, cells = [], picks = [];
+  for (let i = 0; i < d.length; i++) if (d[i] >= 0) cells.push(i);
+  cells.sort((p, q) => d[p] - d[q] || p - q);
+  for (const i of cells) {
+    const c = i % COLS, r = (i / COLS) | 0;
+    if (picks.some(p => Math.abs(p.c - c) + Math.abs(p.r - r) < 2)) continue;
+    picks.push({ c, r });
+    if (picks.length >= MAX_PLAYERS) break;
+  }
+  const n = [0, 0];
+  return tanks.map(t => {
+    const k = teamOf[t.id] ? 1 : 0, p = picks[n[k]++] || picks[0];
+    return k ? { x: M - p.c + 0.5, y: N - p.r + 0.5 } : { x: p.c + 0.5, y: p.r + 0.5 };
+  });
 }
 
 // 3-5 tanks: pick open cells spread evenly on a circle round the middle, all reachable from each other.
@@ -451,8 +654,7 @@ function distField(tc, tr) {
   }
   return d;
 }
-function planWaypoint(m, target) {
-  const R = C.MISSILE_R + 0.05;
+function planWaypoint(m, target, R = C.MISSILE_R + 0.05) {
   const tc = clamp(Math.floor(target.x), 0, COLS - 1), tr = clamp(Math.floor(target.y), 0, ROWS - 1);
   let c = clamp(Math.floor(m.x), 0, COLS - 1), r = clamp(Math.floor(m.y), 0, ROWS - 1);
   if ((c === tc && r === tr) || lineClear(m.x, m.y, target.x, target.y, R)) return { x: target.x, y: target.y };
@@ -484,14 +686,21 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0;
+    t.respawn = 0; t.ai = null;
   });
+  hillHolder = -1;
   bullets = []; missiles = []; mines = []; pickups = []; beams = []; rings = []; particles = []; marks = [];
   netEvents = [];
   pickupTimer = C.PICKUP_FIRST; emptyT = 0;
   roundT = 0; sdClosed = 0; sdStarted = false;
 }
 function startMatch() {
-  scores = new Array(NP).fill(0); mapIdx = 0;
+  // teams need both sides manned
+  teamOf = tanks.map(t => teamOf[t.id] ? 1 : 0);
+  if (NP > 2) for (const k of [0, 1]) if (!teamOf.includes(k)) teamOf[NP - 1] = k;
+  scores = new Array(teamsOn() ? 2 : NP).fill(0); mapIdx = 0;
+  stats = tanks.map(() => ({ k: 0, d: 0, s: 0, h: 0 }));
+  hillT = new Array(NP).fill(0);
   // a new shuffled map order for every match, not opening on the same map twice in a row
   mapOrder = mapPool();
   for (let i = mapOrder.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [mapOrder[i], mapOrder[j]] = [mapOrder[j], mapOrder[i]]; }
@@ -506,19 +715,65 @@ function startRound() {
   state = 'countdown'; stateT = 0; lastCount = 0; winner = -1; drawReason = '';
   layout();
 }
-function beginFromMenu() { if (resumeMatch) { resumeMatch = false; startRound(); } else startMatch(); }
+// one screen: two people, or one person against computer tanks
+function setupLocal() {
+  soloMatch = settings.cpu > 0;
+  setTankCount(soloMatch ? 1 + settings.cpu : 2);
+  bots = new Set(soloMatch ? tanks.slice(1).map(t => t.id) : []);
+  teamOf = tanks.map(t => t.id % 2);
+  names = soloMatch ? tanks.map(t => t.id ? 'CPU ' + t.id : (myName || 'You')) : [];
+}
+function beginFromMenu() { if (resumeMatch) { resumeMatch = false; startRound(); } else { setupLocal(); startMatch(); } }
 function goMenu() {
   if (mode !== 'local') netLeave();
   state = 'title'; stateT = 0; resumeMatch = false; mapIdx = 0; quitArm = 0;
+  soloMatch = false; bots = new Set(); teamOf = []; names = []; stats = [];
   setTankCount(2); scores = [0, 0]; viewFlip = false;
   loadMap(0); resetEntities(); layout();
 }
 function finishRound() {
-  const alive = tanks.filter(t => t.alive);
-  winner = alive.length === 1 ? alive[0].id : -1;
   drawReason = '';
-  if (winner >= 0) { scores[winner]++; sfx.point(); }
+  if (respawnMode()) winner = champion();                 // the match is over: whoever reached the goal
+  else {
+    const sides = new Set(tanks.filter(t => t.alive).map(t => sideOf(t.id)));
+    winner = sides.size === 1 ? [...sides][0] : -1;
+    if (winner >= 0) { scores[winner]++; sfx.point(); }
+  }
   state = 'result'; stateT = 0;
+}
+// classic and teams: the round is over once at most one side has a tank left
+function roundOver() { return new Set(tanks.filter(o => o.alive).map(o => sideOf(o.id))).size <= 1; }
+
+// deathmatch and hill: back into the game, as far from the others as the map allows, shielded for a moment
+function respawnTank(t) {
+  const d = distField(Math.floor(spawn[0].x), Math.floor(spawn[0].y)), cx = COLS / 2, cy = ROWS / 2;
+  let best = null, bs = -1;
+  for (let i = 0; i < d.length; i++) {
+    if (d[i] < 0) continue;
+    const x = i % COLS + 0.5, y = ((i / COLS) | 0) + 0.5;
+    if (settings.game === 'hill' && Math.hypot(x - cx, y - cy) < C.HILL_R + 1.5) continue;
+    let near = 8;
+    for (const o of tanks) if (o.alive && o !== t) near = Math.min(near, Math.hypot(o.x - x, o.y - y));
+    for (const mn of mines) near = Math.min(near, Math.hypot(mn.x - x, mn.y - y) * 2);
+    const v = near + Math.random() * 1.5;
+    if (v > bs) { bs = v; best = { x, y }; }
+  }
+  if (!best) best = spawn[t.id] || spawn[0];
+  t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
+  t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.fireQ = 0;
+  t.respawn = 0; t.shield = C.SPAWN_SHIELD; t.ai = null;
+  rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
+  sfx.spawn(); netEv('spawn', t.id, r2(t.x), r2(t.y));
+}
+// hill: one side alone in the circle scores a point a second
+function hillStep(dt) {
+  const cx = COLS / 2, cy = ROWS / 2;
+  const inside = tanks.filter(t => t.alive && Math.hypot(t.x - cx, t.y - cy) < C.HILL_R);
+  hillHolder = inside.length === 1 ? inside[0].id : inside.length ? -2 : -1;
+  if (hillHolder < 0) return;
+  hillT[hillHolder] += dt;
+  scores[hillHolder] = Math.floor(hillT[hillHolder]);
+  if (scores[hillHolder] >= target() && state === 'play') { state = 'ending'; stateT = 0; }
 }
 
 /* ---------- actions ---------- */
@@ -549,6 +804,7 @@ function fire(t) {
   if (shotsLeft(t) <= 0) return false;
   const s = muzzle(t, C.BULLET_R);
   bullets.push({ id: ++entId, x: s.x, y: s.y, vx: s.dx * C.BULLET_SPEED, vy: s.dy * C.BULLET_SPEED, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0 });
+  if (stats[t.id]) stats[t.id].s++;
   if (settings.ammo !== 'unlimited') {
     t.ammo--;
     if (refills() && t.ammo <= 0) t.reload = reloadTime();
@@ -612,15 +868,15 @@ function usePower(t) {
 }
 
 // Every hit goes through here: a shield takes one hit in the tank's place.
-function hit(t) {
+function hit(t, by = -1) {
   if (t.shield > 0) {
     t.shield = 0;
-    rings.push({ x: t.x, y: t.y, r: 0.75, life: 0.3, max: 0.3, col: COL.pens[t.id] });
+    rings.push({ x: t.x, y: t.y, r: 0.75, life: 0.3, max: 0.3, col: penOf(t.id) });
     sfx.block();
     netEv('block', t.id, r2(t.x), r2(t.y));
     return false;
   }
-  kill(t);
+  kill(t, by);
   return true;
 }
 
@@ -633,18 +889,18 @@ function fireLaser(t) {
   // the beam cannot hurt the tank that fired it
   for (let i = missiles.length - 1; i >= 0; i--) {
     const m = missiles[i];
-    if (m.owner !== t.id && pathDist(path, m.x, m.y) < C.MISSILE_R + 0.06) { puff(m.x, m.y, COL.pens[m.owner]); removeMissile(i); }
+    if (m.owner !== t.id && pathDist(path, m.x, m.y) < C.MISSILE_R + 0.06) { puff(m.x, m.y, m.owner); removeMissile(i); }
   }
   for (const mn of mines) if (pathDist(path, mn.x, mn.y) < C.MINE_R + 0.05) mn.boom = true;
   if (!LETHAL) return;
-  for (const o of tanks) if (o !== t && o.alive && pathDist(path, o.x, o.y) < C.TANK_R * 0.92 + 0.04) hit(o);
+  for (const o of tanks) if (o !== t && o.alive && canHurt(t.id, o) && pathDist(path, o.x, o.y) < C.TANK_R * 0.92 + 0.04) hit(o, t.id);
 }
 
-// the closest living tank that is not `id` (falls back to `id` itself when nobody is left)
+// the closest living tank on another side than `id` (falls back to `id` itself when nobody is left)
 function nearestEnemy(id, x, y) {
   let best = id, bd = Infinity;
   for (const o of tanks) {
-    if (o.id === id || !o.alive) continue;
+    if (o.id === id || !o.alive || (teamsOn() && teamOf[o.id] === teamOf[id])) continue;
     const d = Math.hypot(o.x - x, o.y - y);
     if (d < bd) { bd = d; best = o.id; }
   }
@@ -657,41 +913,55 @@ function removeMissile(i) {
   const o = tanks[m.owner];
   if (o.guided === m) { o.guided = null; o.cool = C.FIRE_COOLDOWN; }
 }
-function puff(x, y, col) {
+function puff(x, y, owner) {
+  const col = penOf(owner);
   for (let i = 0; i < 8; i++) {
     const a = Math.random() * Math.PI * 2, s = 0.5 + Math.random() * 1.8;
     particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.3, max: 0.3, col: i % 2 ? col : COL.graphite, size: 0.04 });
   }
   sfx.pop();
-  netEv('puff', r2(x), r2(y), COL.pens.indexOf(col));
+  netEv('puff', r2(x), r2(y), owner);
 }
 function blast(m) {
-  rings.push({ x: m.x, y: m.y, r: C.GUIDED_BLAST, life: 0.4, max: 0.4, col: COL.pens[m.owner] });
+  rings.push({ x: m.x, y: m.y, r: C.GUIDED_BLAST, life: 0.4, max: 0.4, col: penOf(m.owner) });
   for (let i = 0; i < 22; i++) {
     const a = Math.random() * Math.PI * 2, s = 1 + Math.random() * 4, life = 0.25 + Math.random() * 0.4;
-    particles.push({ x: m.x, y: m.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 3 ? COL.pens[m.owner] : COL.graphite, size: 0.04 + Math.random() * 0.05 });
+    particles.push({ x: m.x, y: m.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 3 ? penOf(m.owner) : COL.graphite, size: 0.04 + Math.random() * 0.05 });
   }
   shake = Math.max(shake, 0.25);
   sfx.boom();
   netEv('blast', r2(m.x), r2(m.y), m.owner);
   for (const mn of mines) if (Math.hypot(mn.x - m.x, mn.y - m.y) < C.GUIDED_BLAST) mn.boom = true;     // a blast sets off mines inside it
+  if (settings.soft) {                                                                                   // ...and knocks down breakable walls
+    for (let i = 0; i < soft.length; i++) if (soft[i] && Math.hypot(i % COLS + 0.5 - m.x, ((i / COLS) | 0) + 0.5 - m.y) < C.GUIDED_BLAST + 0.35) breakWall(i);
+  }
   if (!LETHAL) return;
-  for (const t of tanks) if (t.alive && Math.hypot(t.x - m.x, t.y - m.y) < C.GUIDED_BLAST) hit(t);
+  for (const t of tanks) if (t.alive && canHurt(m.owner, t) && Math.hypot(t.x - m.x, t.y - m.y) < C.GUIDED_BLAST) hit(t, m.owner);
 }
 
-function kill(t) {
+function kill(t, by = -1) {
   t.alive = false; t.charge = 0;
   const seed = (Math.random() * 1e9) | 0;
-  marks.push({ x: t.x, y: t.y, col: COL.pens[t.id], seed });
+  marks.push({ x: t.x, y: t.y, col: penOf(t.id), seed });
   netEv('kill', t.id, r2(t.x), r2(t.y), seed);
   for (let i = 0; i < 30; i++) {
     const a = Math.random() * Math.PI * 2, s = 1 + Math.random() * 4.5, life = 0.35 + Math.random() * 0.6;
-    particles.push({ x: t.x, y: t.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 3 ? COL.pens[t.id] : COL.graphite, size: 0.04 + Math.random() * 0.06 });
+    particles.push({ x: t.x, y: t.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 3 ? penOf(t.id) : COL.graphite, size: 0.04 + Math.random() * 0.06 });
   }
   shake = 0.35;
   sfx.boom();
-  // the round ends once at most one tank is left
-  if (state === 'play' && tanks.filter(o => o.alive).length <= 1) { state = 'ending'; stateT = 0; }
+  if (stats[t.id]) stats[t.id].d++;
+  if (by >= 0 && by !== t.id && stats[by]) stats[by].k++;
+  if (respawnMode()) {
+    t.respawn = C.RESPAWN_TIME;
+    if (settings.game === 'dm' && state === 'play') {
+      // a kill is a point; destroying yourself (or being crushed) costs one
+      if (by >= 0 && by !== t.id) scores[by]++; else scores[t.id] = Math.max(0, scores[t.id] - 1);
+      if (scores.some(n => n >= target())) { state = 'ending'; stateT = 0; }
+    }
+    return;
+  }
+  if (state === 'play' && roundOver()) { state = 'ending'; stateT = 0; }
 }
 
 let lastBounceSound = 0;
@@ -727,7 +997,7 @@ function spawnPickups() {
 /* ---------- sudden death: the arena closes in, one ring of cells at a time ---------- */
 const ringOf = (c, r) => Math.min(c, r, COLS - 1 - c, ROWS - 1 - r);     // 0 = outer edge
 const ringCount = () => Math.ceil(Math.min(COLS, ROWS) / 2);
-const sdOn = () => C.SUDDEN_DEATH_TIME > 0 && roundT >= C.SUDDEN_DEATH_TIME;
+const sdOn = () => C.SUDDEN_DEATH_TIME > 0 && !respawnMode() && roundT >= C.SUDDEN_DEATH_TIME;
 function closeRing(k) {
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
     if (ringOf(c, r) === k && !walls[r][c]) { walls[r][c] = true; crushed[r * COLS + c] = 1; }
@@ -773,7 +1043,8 @@ function myInput() {
   return viewFlip && v.mag > 0 ? { x: -v.x, y: -v.y, mag: v.mag } : v;
 }
 function getInput(seat) {
-  if (mode === 'local') return keyVec(seat) || stickVec(seat);
+  if (bots.has(seat)) return botInput(seat);
+  if (mode === 'local') return soloMatch ? myInput() : (keyVec(seat) || stickVec(seat));
   if (seat === mySeat) return myInput();
   return remoteInput(seat);
 }
@@ -786,16 +1057,89 @@ function pressFire(seat) {
 }
 // a fire press from one side of this screen
 function pressFireFrom(p) {
-  if (mode === 'local') pressFire(p);
+  if (mode === 'local') pressFire(soloMatch ? 0 : p);
   else if (mode === 'host') pressFire(mySeat);
   else guestFire();
+}
+
+/* ---------- computer tanks ----------
+   A computer tank works the same stick and fire button as a person: it drives round the walls to
+   the nearest enemy (or the hill, or a pickup), turns to face them when it has a clear line, fires
+   after a short reaction time, and steps aside from shots coming straight at it. */
+const unitTo = (dx, dy, mag) => { const d = Math.hypot(dx, dy); return d < 1e-6 ? IDLE : { x: dx / d, y: dy / d, mag }; };
+function botInput(seat) {
+  const t = tanks[seat], dt = C.STEP;
+  if (!t || (state !== 'play' && state !== 'ending')) return IDLE;
+  const ai = t.ai || (t.ai = { replan: 0, wp: null, react: 0.4 + Math.random() * 0.5, dodge: 0, da: 0, wander: 0, wa: 0, chk: 0.6, px: t.x, py: t.y });
+  const foe = tanks[nearestEnemy(seat, t.x, t.y)], hasFoe = !!foe && foe.id !== seat && foe.alive;
+  ai.react -= dt;
+  if (t.guided && typeof t.guided === 'object') {
+    // steering a guided missile: fly it at the enemy and set it off beside them
+    const m = t.guided;
+    if (!hasFoe) return IDLE;
+    if (m.age >= C.GUIDED_ARM && Math.hypot(foe.x - m.x, foe.y - m.y) < 0.7) pressFire(seat);
+    ai.replan -= dt;
+    if (ai.replan <= 0 || !ai.wp) { ai.replan = 0.15; ai.wp = planWaypoint(m, foe); }
+    return unitTo(ai.wp.x - m.x, ai.wp.y - m.y, 1);
+  }
+  if (!t.alive) return IDLE;
+  if (ai.dodge > 0) { ai.dodge -= dt; return { x: Math.cos(ai.da), y: Math.sin(ai.da), mag: 1 }; }
+  for (const b of bullets) {
+    if (b.owner === seat && b.age < 0.3) continue;
+    if (!canHurt(b.owner, t)) continue;
+    const rx = t.x - b.x, ry = t.y - b.y;
+    if (Math.hypot(rx, ry) > 2.2) continue;
+    const sp = Math.hypot(b.vx, b.vy) || 1, along = (rx * b.vx + ry * b.vy) / sp, cross = (rx * b.vy - ry * b.vx) / sp;
+    if (along <= 0 || Math.abs(cross) > 0.5 || !lineClear(b.x, b.y, t.x, t.y, C.BULLET_R)) continue;
+    const side = cross >= 0 ? 1 : -1;                       // step off the shot's line, to the side already nearer
+    ai.da = Math.atan2(-b.vx * side, b.vy * side); ai.dodge = 0.3;
+    if (t.power === 'shield') pressFire(seat);
+    return { x: Math.cos(ai.da), y: Math.sin(ai.da), mag: 1 };
+  }
+  if (ai.wander > 0) { ai.wander -= dt; return { x: Math.cos(ai.wa), y: Math.sin(ai.wa), mag: 1 }; }
+
+  const cx = COLS / 2, cy = ROWS / 2;
+  const los = hasFoe && lineClear(t.x, t.y, foe.x, foe.y, C.BULLET_R + 0.02);
+  const dFoe = hasFoe ? Math.hypot(foe.x - t.x, foe.y - t.y) : 99;
+  let goal = hasFoe ? foe : null, fight = hasFoe;
+  if (settings.game === 'hill') {
+    if (Math.hypot(t.x - cx, t.y - cy) > C.HILL_R * 0.45) { if (!(los && dFoe < 3)) { goal = { x: cx, y: cy }; fight = false; } }
+    else if (!los) return hasFoe ? unitTo(foe.x - t.x, foe.y - t.y, 0.04) : IDLE;          // on the hill: stay and watch
+  }
+  if (settings.powerups && !t.power && !(los && dFoe < 3.5)) {
+    let bd = 4.5, bk = null;
+    for (const k of pickups) { const d = Math.hypot(k.x - t.x, k.y - t.y); if (d < bd) { bd = d; bk = k; } }
+    if (bk) { goal = bk; fight = false; }
+  }
+  if (!goal) return IDLE;
+
+  if (hasFoe && los) {
+    const off = Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle));
+    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0) { pressFire(seat); ai.react = 0.3 + Math.random() * 0.55; }
+  } else if (hasFoe && ai.react <= 0 && (t.power === 'homing' || t.power === 'guided' || t.power === 'mine')) {
+    pressFire(seat); ai.react = 0.6;                         // missiles and mines do not need a clear line
+  }
+  if (fight && los) return unitTo(foe.x - t.x, foe.y - t.y, dFoe > 3 ? 1 : 0.04);
+
+  ai.replan -= dt;
+  if (ai.replan <= 0 || !ai.wp) { ai.replan = 0.2; ai.wp = planWaypoint(t, goal, C.TANK_R + 0.04); }
+  ai.chk -= dt;
+  if (ai.chk <= 0) {                                         // not getting anywhere: try another way for a moment
+    if (Math.hypot(t.x - ai.px, t.y - ai.py) < 0.1) { ai.wander = 0.45; ai.wa = Math.random() * Math.PI * 2; ai.wp = null; }
+    ai.chk = 0.6; ai.px = t.x; ai.py = t.y;
+    if (!ai.wp) return IDLE;
+  }
+  return unitTo(ai.wp.x - t.x, ai.wp.y - t.y, 1);
 }
 
 /* ---------- physics (always called with the fixed step) ---------- */
 function stepPhysics(dt, lethal, control) {
   LETHAL = lethal;
   for (const t of tanks) {
-    if (!t.alive) continue;
+    if (!t.alive) {
+      if (lethal && respawnMode() && !t.gone && t.respawn > 0 && (t.respawn -= dt) <= 0) respawnTank(t);
+      continue;
+    }
     t.cool = Math.max(0, t.cool - dt);
     t.recoil = Math.max(0, t.recoil - dt * 8);
     t.shield = Math.max(0, t.shield - dt);
@@ -851,9 +1195,9 @@ function stepPhysics(dt, lethal, control) {
     } else {
       // move on each axis separately: hitting a wall while moving in x flips vx, in y flips vy
       b.x += b.vx * dt;
-      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { b.x -= b.vx * dt; b.vx = -b.vx; b.bounces++; bounceFx(b); }
+      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { if (crack(b)) { bullets.splice(i, 1); continue; } b.x -= b.vx * dt; b.vx = -b.vx; b.bounces++; bounceFx(b); }
       b.y += b.vy * dt;
-      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { b.y -= b.vy * dt; b.vy = -b.vy; b.bounces++; bounceFx(b); }
+      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { if (crack(b)) { bullets.splice(i, 1); continue; } b.y -= b.vy * dt; b.vy = -b.vy; b.bounces++; bounceFx(b); }
     }
     if (++b.tick % 2 === 0) { b.trail.push(b.x, b.y); if (b.trail.length > 22) b.trail.splice(0, 2); }
     if (b.age > (b.life || C.BULLET_LIFE) || b.bounces > (b.maxB ?? C.MAX_BOUNCES)) { bullets.splice(i, 1); continue; }
@@ -866,15 +1210,19 @@ function stepPhysics(dt, lethal, control) {
       const m = missiles[j];
       if (m.owner === b.owner) continue;
       if (Math.hypot(b.x - m.x, b.y - m.y) < C.MISSILE_R + C.BULLET_R + 0.03) {
-        puff(m.x, m.y, COL.pens[m.owner]); removeMissile(j); bullets.splice(i, 1); continue bulletLoop;
+        puff(m.x, m.y, m.owner); removeMissile(j); bullets.splice(i, 1); continue bulletLoop;
       }
     }
     if (!lethal) continue;
     for (const t of tanks) {
       if (!t.alive) continue;
       if (b.owner === t.id && b.age < C.SELF_SAFE_TIME) continue;
+      if (!canHurt(b.owner, t)) continue;                  // shots pass through team-mates
       const dx = b.x - t.x, dy = b.y - t.y;
-      if (dx * dx + dy * dy < hitR * hitR) { hit(t); bullets.splice(i, 1); break; }
+      if (dx * dx + dy * dy < hitR * hitR) {
+        if (b.owner !== t.id && !b.extra && stats[b.owner]) stats[b.owner].h++;
+        hit(t, b.owner); bullets.splice(i, 1); break;
+      }
     }
   }
 
@@ -909,19 +1257,20 @@ function stepPhysics(dt, lethal, control) {
     if (++m.tick % 4 === 0) particles.push({ x: m.x - Math.cos(m.angle) * 0.18, y: m.y - Math.sin(m.angle) * 0.18, vx: (Math.random() - 0.5) * 0.5, vy: (Math.random() - 0.5) * 0.5, life: 0.35, max: 0.35, col: COL.graphite, size: 0.035 });
 
     if (m.type === 'guided' && (m.detonate || m.age > C.GUIDED_LIFE)) { removeMissile(i); blast(m); continue; }
-    if (m.type === 'homing' && m.age > C.HOMING_LIFE) { puff(m.x, m.y, COL.pens[m.owner]); removeMissile(i); continue; }
+    if (m.type === 'homing' && m.age > C.HOMING_LIFE) { puff(m.x, m.y, m.owner); removeMissile(i); continue; }
     let onMine = false;
     for (const mn of mines) if (!mn.boom && Math.hypot(m.x - mn.x, m.y - mn.y) < C.MINE_R + C.MISSILE_R) { mn.boom = true; onMine = true; }
-    if (onMine) { removeMissile(i); if (m.type === 'guided') blast(m); else puff(m.x, m.y, COL.pens[m.owner]); continue; }
+    if (onMine) { removeMissile(i); if (m.type === 'guided') blast(m); else puff(m.x, m.y, m.owner); continue; }
     for (const t of tanks) {
       if (!t.alive) continue;
       // a homing missile never turns on its own tank; a guided one can, once it is armed
       if (t.id === m.owner && (m.type === 'homing' || m.age < C.MISSILE_ARM)) continue;
+      if (!canHurt(m.owner, t)) continue;
       if (Math.hypot(t.x - m.x, t.y - m.y) >= mHit) continue;
       removeMissile(i);
       if (m.type === 'guided') blast(m);
-      else if (lethal) hit(t);
-      else puff(m.x, m.y, COL.pens[m.owner]);
+      else if (lethal) hit(t, m.owner);
+      else puff(m.x, m.y, m.owner);
       break;
     }
   }
@@ -932,7 +1281,7 @@ function stepPhysics(dt, lethal, control) {
     mn.age += dt;
     // a mine arms once its time is up and the tank that laid it has moved off it; after that it spares nobody
     if (!mn.armed && mn.age >= C.MINE_ARM && (!owner.alive || Math.hypot(owner.x - mn.x, owner.y - mn.y) > C.MINE_TRIGGER + 0.08)) { mn.armed = true; sfx.armed(); netEv('sfx', 'armed'); }
-    if (mn.armed && lethal && !mn.boom) for (const t of tanks) if (t.alive && Math.hypot(t.x - mn.x, t.y - mn.y) < C.MINE_TRIGGER) mn.boom = true;
+    if (mn.armed && lethal && !mn.boom) for (const t of tanks) if (t.alive && canHurt(mn.owner, t) && Math.hypot(t.x - mn.x, t.y - mn.y) < C.MINE_TRIGGER) mn.boom = true;
     if (mn.boom) { mines.splice(i, 1); blast(mn); }
   }
 }
@@ -964,6 +1313,7 @@ function update(dt) {
       stepPhysics(dt, true, true);
       if (state !== 'play') break;
       roundT += dt;
+      if (settings.game === 'hill') { hillStep(dt); if (state !== 'play') break; }
       if (sdOn()) {
         if (!sdStarted) { sdStarted = true; sfx.alarm(); }
         const due = Math.min(ringCount(), Math.floor((roundT - C.SUDDEN_DEATH_TIME) / C.SHRINK_INTERVAL));
@@ -977,7 +1327,10 @@ function update(dt) {
       // "5 only" without power-ups: when nobody has a shot left and the field is clear, the round is a draw
       if (settings.ammo === 'limited' && !settings.powerups && tanks.filter(t => t.alive).every(t => t.ammo <= 0) && bullets.length === 0) {
         emptyT += dt;
-        if (emptyT > 0.6) { winner = -1; drawReason = 'ammo'; state = 'result'; stateT = 0; }
+        if (emptyT > 0.6) {
+          if (respawnMode()) { tanks.forEach(t => { t.ammo = clipSize(); }); emptyT = 0; }      // nobody can shoot: everyone is topped up
+          else { winner = -1; drawReason = 'ammo'; state = 'result'; stateT = 0; }
+        }
       } else emptyT = 0;
       break;
     case 'ending':
@@ -986,8 +1339,8 @@ function update(dt) {
       break;
     case 'result':
       stepPhysics(dt, false, true);
-      if (stateT >= 1.6) {
-        if (scores.some(n => n >= settings.winScore)) { state = 'matchEnd'; stateT = 0; sfx.win(); }
+      if (stateT >= (respawnMode() ? 0.4 : 1.6)) {
+        if (respawnMode() || scores.some(n => n >= target())) { state = 'matchEnd'; stateT = 0; sfx.win(); }
         else { mapIdx++; startRound(); }
       }
       break;
@@ -1036,7 +1389,25 @@ let myId = '';
 let netAcc = 0;
 let savedSettings = null;      // a guest plays by the host's settings; its own come back when it leaves
 // host
-let seats = [];                // peer id per tank; seat 0 is the host itself
+let seats = [];                // who drives each tank: 'host', a guest's id, or 'bot1'.. for computer tanks
+let lobbyBots = 0;             // computer tanks asked for in the waiting room
+const teamPick = new Map();    // waiting room: team chosen for each seat id
+const isBotId = id => typeof id === 'string' && id.startsWith('bot');
+const seatLabel = id => id === 'host' ? myName : isBotId(id) ? 'CPU ' + id.slice(3) : ((guests.get(id) || {}).name || '');
+// rebuild the seat list: this tablet (if it plays), everyone connected, then computer tanks while there is room
+function reseat() {
+  const humans = seats.filter(id => id !== 'host' && !isBotId(id) && guests.has(id));
+  for (const id of guests.keys()) if (!humans.includes(id)) humans.push(id);
+  const list = [...hostSeats(), ...humans].slice(0, MAX_PLAYERS);
+  for (let i = 1; i <= lobbyBots && list.length < MAX_PLAYERS; i++) list.push('bot' + i);
+  seats = list;
+  for (const id of seats) {
+    if (teamPick.has(id)) continue;                         // a newcomer joins the smaller team
+    const n = [0, 0]; for (const x of seats) if (teamPick.has(x)) n[teamPick.get(x)]++;
+    teamPick.set(id, n[0] <= n[1] ? 0 : 1);
+  }
+}
+function toggleTeam(i) { const id = seats[i]; if (id != null) teamPick.set(id, teamPick.get(id) ? 0 : 1); }
 const guests = new Map();      // peer id -> { conn, inp, fire, lastFire }
 // guest
 let hostConn = null, connTimer = 0, lastArrival = 0;
@@ -1106,7 +1477,7 @@ class RelayPeer extends Emitter {
     ws.onclose = () => {
       const wasOpen = this.opened;
       this.dead = true;
-      for (const c of [...this.conns.values()]) c._close();
+      for (const c of [...this.conns.values()]) { c.lost = true; c._close(); }     // lost: our own line dropped; the other side did not leave
       this.conns.clear();
       if (!wasOpen) this.emit('error', { type: 'network' });
     };
@@ -1164,6 +1535,7 @@ function netLeave() {
   try { if (hostConn) hostConn.close(); } catch (e) {}
   try { if (peer) peer.destroy(); } catch (e) {}
   peer = null; hostConn = null; guests.clear(); seats = []; snaps = []; hostOpenAt = 0;
+  lobbyBots = 0; teamPick.clear(); bots = new Set(); teamOf = []; names = []; stats = []; soloMatch = false;
   if (savedSettings) { settings = savedSettings; savedSettings = null; }
   mode = 'local'; mySeat = 0; viewFlip = false; netMsg = ''; netCode = '';
 }
@@ -1177,7 +1549,7 @@ function netLost(msg) {
 /* ---------- host ---------- */
 async function hostGame() {
   netLeave();
-  mode = 'host'; mySeat = HEADLESS ? -1 : 0; seats = hostSeats(); state = 'hostWait'; stateT = 0;
+  mode = 'host'; mySeat = HEADLESS ? -1 : 0; seats = []; reseat(); state = 'hostWait'; stateT = 0;
   netMsg = 'Opening the game…';
   if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'host') return;
@@ -1202,19 +1574,27 @@ function acceptGuest(conn) {
   conn.on('open', () => {
     const g = { conn, inp: [0, 0, 0], fire: 0, lastFire: null, lastAt: performance.now() };
     guests.set(conn.peer, g);
-    if (state === 'hostWait' && seats.length < MAX_PLAYERS && !seats.includes(conn.peer)) seats.push(conn.peer);
+    if (state === 'hostWait') reseat();
     hostDirect(conn.peer, g);
     sfx.pickup();
   });
   conn.on('data', d => hostData(conn.peer, d));
-  conn.on('close', () => guestGone(conn.peer));
-  conn.on('error', () => guestGone(conn.peer));
+  // a guest with a direct Wi-Fi link stays in the game if only its line to the server drops
+  const gone = () => { const g = guests.get(conn.peer); if (conn.lost && g && linkOpen(g.u)) return; guestGone(conn.peer); };
+  conn.on('close', gone);
+  conn.on('error', gone);
 }
 const num = (v, lo, hi) => typeof v === 'number' && isFinite(v) ? clamp(v, lo, hi) : 0;
 function hostData(id, d) {
   const g = guests.get(id);
   if (!g || !d || typeof d !== 'object') return;
   if (d.sig && typeof d.sig === 'object') { hostSignal(g, d.sig); return; }
+  if (typeof d.n === 'string') { g.name = cleanName(d.n); g.lastAt = performance.now(); return; }
+  if (d.c === 'side') {                                    // any guest may swap its own team
+    g.lastAt = performance.now();
+    if (state === 'hostWait') { const k = seats.indexOf(id); if (k >= 0) toggleTeam(k); }
+    return;
+  }
   if (typeof d.c === 'string') {
     // room commands are only taken from the player who leads a server-run room
     if (!HEADLESS || leaderId() !== id) return;
@@ -1223,6 +1603,8 @@ function hostData(id, d) {
     else if (d.c === 'start' && state === 'hostWait') hostStart();
     else if (d.c === 'rematch' && state === 'matchEnd') hostStart();
     else if (d.c === 'lobby' && state === 'matchEnd') hostLobby();
+    else if (d.c === 'bots' && state === 'hostWait') { lobbyBots = clamp(d.v | 0, 0, MAX_PLAYERS - 1); reseat(); }
+    else if (d.c === 'team' && state === 'hostWait') toggleTeam(d.v | 0);
     return;
   }
   if (!Array.isArray(d.i)) return;
@@ -1243,25 +1625,26 @@ function guestGone(id) {
   if (!guests.has(id)) return;
   try { const pc = guests.get(id).pc; if (pc) pc.close(); } catch (e) {}
   guests.delete(id);
+  if (state === 'hostWait') { reseat(); return; }
   const s = seats.indexOf(id);
   if (s < 0) return;
-  if (state === 'hostWait') { seats.splice(s, 1); return; }
   // mid-match: the tank stays out until the next match
   const t = tanks[s];
   if (t) { t.gone = true; if (t.alive && (state === 'play' || state === 'ending')) kill(t); else t.alive = false; }
 }
 function hostStart() {
-  const hs = hostSeats();
-  seats = [...hs, ...seats.slice(hs.length).filter(id => guests.has(id))];
+  reseat();
   if (seats.length < 2) { hostLobby(); return; }
   setTankCount(seats.length);
+  bots = new Set(seats.map((id, i) => isBotId(id) ? i : -1).filter(i => i >= 0));
+  teamOf = seats.map(id => teamPick.get(id) ? 1 : 0);
+  names = seats.map(seatLabel);
   startMatch();
 }
 // back to the waiting room with whoever is still connected
 function hostLobby() {
-  const hs = hostSeats();
-  seats = [...hs, ...seats.slice(hs.length).filter(id => guests.has(id))];
-  for (const id of guests.keys()) if (seats.length < MAX_PLAYERS && !seats.includes(id)) seats.push(id);
+  reseat();
+  bots = new Set(); teamOf = []; names = []; stats = [];
   setTankCount(2); scores = [0, 0]; loadMap(0); resetEntities(); layout();
   state = 'hostWait'; stateT = 0;
 }
@@ -1292,9 +1675,11 @@ function buildSnap() {
   return {
     ts: r1(now), dd: HEADLESS ? 1 : 0, ld: HEADLESS ? leaderId() : null, st: state, t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
     seats, sc: scores, w: winner, dr: drawReason,
-    set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps],
+    set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0],
+    tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel),
+    hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h]) : null,
     T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0),
-      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge)]) : [],
+      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, m.type === 'homing' ? 0 : 1, m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
@@ -1321,9 +1706,10 @@ async function joinGame(code) {
     if (peer !== p) return;
     myId = id;
     const c = hostConn = p.connect(PEER_PREFIX + code, { serialization: 'json' });
-    c.on('open', () => { if (hostConn === c) { netMsg = ''; connTimer = 0; } });
+    c.on('open', () => { if (hostConn === c) { netMsg = ''; connTimer = 0; try { c.send({ n: myName }); } catch (e) {} } });
     c.on('data', d => { if (hostConn === c) onHostData(d); });
-    c.on('close', () => { if (hostConn === c) netLost('The host left the game.'); });
+    // with a direct Wi-Fi link the game carries on if only the line to the server drops
+    c.on('close', () => { if (hostConn === c && !(c.lost && linkOpen(gU) && linkOpen(gR))) netLost('The host left the game.'); });
   });
   p.on('error', e => {
     if (peer !== p) return;
@@ -1377,7 +1763,7 @@ function hostDirect(id, g) {
   const u = pc.createDataChannel('u', { ordered: false, maxRetransmits: 0 });   // snapshots: newest wins, never wait
   const r = pc.createDataChannel('r');                                           // the guest's input and requests
   u.onopen = () => { g.u = u; };
-  u.onclose = () => { if (g.u === u) g.u = null; };
+  u.onclose = () => { if (g.u === u) g.u = null; if (!g.conn.open && guests.get(id) === g) guestGone(id); };
   r.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } hostData(id, m); };
   pc.onicecandidate = e => { if (e.candidate) try { g.conn.send({ sig: { c: e.candidate.toJSON() } }); } catch (x) {} };
   pc.createOffer().then(o => pc.setLocalDescription(o))
@@ -1403,7 +1789,11 @@ function guestSignal(sig) {
       if (ch.label === 'u') {
         ch.onopen = () => { gU = ch; jitter = 5; clockInit = false; };   // a new, faster path: measure afresh
         ch.onmessage = m => { let d; try { d = JSON.parse(m.data); } catch (e) { return; } onHostData(d); };
-        ch.onclose = () => { if (gU === ch) gU = null; };
+        ch.onclose = () => {
+          if (gU !== ch) return;
+          gU = null;
+          if (mode === 'guest' && !(hostConn && hostConn.open)) netLost('The host left the game.');
+        };
         if (ch.readyState === 'open') ch.onopen();
       } else if (ch.label === 'r') {
         gR = ch;
@@ -1428,7 +1818,7 @@ function toHost(msg) {
   if (hostConn && hostConn.open) try { hostConn.send(msg); } catch (e) {}
 }
 function sendCmd(c, v) {
-  if (!hostConn || !hostConn.open) return;
+  if (!(hostConn && hostConn.open) && !linkOpen(gR)) return;
   toHost(v === undefined ? { c } : { c, v });
 }
 // a server-run room: ask the server for a new room, then join it like everyone else
@@ -1464,7 +1854,7 @@ function guestFire() {
   sfx.shoot(mySeat);
 }
 function sendInput(force) {
-  if (!hostConn || !hostConn.open) return;
+  if (!(hostConn && hostConn.open) && !linkOpen(gR)) return;
   const v = myInput(), now = performance.now();
   const msg = [r2(v.x), r2(v.y), r2(v.mag), myFire], key = msg.join(',');
   if (!force && key === lastSent && now - lastSentAt < 250) return;   // repeat now and then, in case one was lost
@@ -1548,11 +1938,17 @@ function applyDiscrete(g, dt) {
   // the room's creator brings their own saved settings to the server's waiting room once
   if (isLeader && !sentPrefs && g.st === 'hostWait' && savedSettings) { sentPrefs = true; sendCmd('set', savedSettings); }
   if (Array.isArray(g.set)) {
-    const s = validSettings({ ammo: g.set[0], powerups: !!g.set[1], winScore: g.set[2], maps: g.set[3] });
+    const s = validSettings({ ammo: g.set[0], powerups: !!g.set[1], winScore: g.set[2], maps: g.set[3], game: g.set[4], soft: !!g.set[5] });
     if (s) settings = s;
   }
   const n = clamp(g.n | 0, 1, MAX_PLAYERS);
   if (n !== NP) setTankCount(n);
+  teamOf = Array.isArray(g.tm) ? g.tm.map(v => v ? 1 : 0) : [];
+  names = Array.isArray(g.nm) ? g.nm.map(cleanName) : [];
+  // in the waiting room, make sure the host has this player's name (the first message can arrive before the host is listening)
+  if (g.st === 'hostWait' && mySeat >= 0 && (names[mySeat] || '') !== myName && performance.now() - nameSentAt > 1000) { nameSentAt = performance.now(); toHost({ n: myName }); }
+  hillHolder = typeof g.hz === 'number' ? g.hz : -1;
+  if (Array.isArray(g.S)) stats = g.S.map(a => Array.isArray(a) ? { k: a[0] | 0, d: a[1] | 0, s: a[2] | 0, h: a[3] | 0 } : { k: 0, d: 0, s: 0, h: 0 });
   if (Array.isArray(g.sc)) scores = g.sc.map(v => v | 0);
   winner = typeof g.w === 'number' ? g.w : -1; drawReason = g.dr || '';
   const st = g.st === 'hostWait' ? 'guestWait' : g.st;
@@ -1588,6 +1984,16 @@ function applyDiscrete(g, dt) {
     sdClosed = localSd;
     buildStatic(); shake = Math.max(shake, 0.2); sfx.slam();
   }
+  // breakable walls the host has seen broken since the round began
+  const X = Array.isArray(g.X) ? g.X : [];
+  if (X.length > broken.length && st !== 'guestWait') {
+    for (let i = broken.length; i < X.length; i++) {
+      const idx = X[i] | 0, r = (idx / COLS) | 0, c = idx % COLS;
+      if (walls[r] && walls[r][c] && soft[idx]) { walls[r][c] = false; soft[idx] = 0; crackFx(c + 0.5, r + 0.5); }
+      broken.push(idx);
+    }
+    buildStatic();
+  }
 }
 
 function applySnapEvents(g) {
@@ -1605,7 +2011,7 @@ function burst(x, y, n, col, sp, life, size) {
   }
 }
 function playEvent(e) {
-  const kind = e[1], pen = i => COL.pens[i] || COL.graphite;
+  const kind = e[1], pen = penOf;
   if (kind === 'shot') {
     const [, , id, x, y, a] = e;
     if (id === mySeat && localShots > 0) { localShots--; return; }   // already shown when the button was pressed
@@ -1632,6 +2038,8 @@ function playEvent(e) {
   } else if (kind === 'kill') {
     marks.push({ x: e[3], y: e[4], col: pen(e[2]), seed: e[5] | 0 });
     burst(e[3], e[4], 30, pen(e[2]), 3.2, 0.6, 0.07); shake = 0.35; sfx.boom();
+  } else if (kind === 'spawn') {
+    rings.push({ x: e[3], y: e[4], r: 0.8, life: 0.4, max: 0.4, col: pen(e[2]) }); sfx.spawn();
   } else if (kind === 'bounce') {
     burst(e[2], e[3], 3, COL.graphite, 1, 0.2, 0.03);
     const now = performance.now(); if (now - lastBounceSound > 45) { lastBounceSound = now; sfx.bounce(); }
@@ -1650,7 +2058,7 @@ function applyEntities(a, b, k, dt) {
     t.x = lerp(p[0], q[0]); t.y = lerp(p[1], q[1]); t.angle = lerpA(p[2], q[2]);
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
-    t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0;
+    t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0;
     t.laserPath = t.charge > 0 ? tracePath(t.x, t.y, t.angle) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -1734,7 +2142,8 @@ const sfx = {
   armed: () => { tone(980, 0.05, 'square', 0.04); tone(980, 0.05, 'square', 0.04, 0, 0.1); },
   pierce: () => tone(300, 0.3, 'sine', 0.08, 700),
   alarm: () => { tone(660, 0.16, 'square', 0.06); tone(440, 0.24, 'square', 0.06, 0, 0.18); },
-  slam: () => { noise(0.22, 0.2); tone(90, 0.18, 'sawtooth', 0.08, 50); }
+  slam: () => { noise(0.22, 0.2); tone(90, 0.18, 'sawtooth', 0.08, 50); },
+  crack: () => { noise(0.1, 0.13); tone(170, 0.09, 'triangle', 0.06, 80); }
 };
 
 /* ---------- layout ---------- */
@@ -1747,7 +2156,8 @@ let JR = 50, FR = 50, JX0 = 0, FX0 = 0, CY0 = 0;
 // Online, one person holds each device, so a wide screen stays wide: stick on the left, arena in
 // the middle, fire on the right. On one screen two players sit at the short ends instead.
 let land = false, layoutKey = '';
-const onlineLayout = () => mode !== 'local' || NET_SCREENS.includes(state);
+const onlineLayout = () => mode !== 'local' || NET_SCREENS.includes(state) || (soloMatch && state !== 'title');
+const twoSided = () => !onlineLayout();          // two people at the two ends of one tablet
 const wantKey = () => `${window.innerWidth}x${window.innerHeight}|${onlineLayout()}`;
 function resize() {
   sw = window.innerWidth; sh = window.innerHeight;
@@ -1792,23 +2202,71 @@ function toPlayerFrame(p, x, y) { return p === 0 ? { x, y } : { x: LW - x, y: LH
 function forPlayer(p, fn) { ctx.save(); if (p === 1) { ctx.translate(LW, LH); ctx.rotate(Math.PI); } fn(); ctx.restore(); }
 
 /* ---------- menus (positions in the near player's frame; each player gets a copy) ---------- */
-function menuItems(top = AY + AH / 2, buttons = [['start', resumeMatch ? 'CONTINUE' : 'START'], ['online', 'ONLINE']]) {
-  const cx = LW / 2, h = U * 0.66, g = U * 0.17, items = [];
-  const row = (kind, y, w, opts) => opts.forEach(([v, text], i) =>
-    items.push({ kind, v, text, x: cx + (i - (opts.length - 1) / 2) * (w + g) - w / 2, y: top + y - h / 2, w, h }));
-  row('ammo', U * 1.52, U * 2.45, [['unlimited', 'Unlimited'], ['reload', '5 + reload'], ['limited', '5 only'], ['single', `1 per ${C.SINGLE_COOLDOWN} s`]]);
-  row('pu', U * 2.62, U * 3.6, [[false, 'Power-ups off'], [true, 'Power-ups on']]);
-  row('maps', U * 3.38, U * 2.9, [['all', 'All maps'], ['classic', 'Classic maps'], ['complex', 'Complex maps']]);
-  row('win', U * 4.14, U * 2.9, WIN_SCORES.map(n => [n, 'First to ' + n]));
-  // two big buttons side by side: START and ONLINE on the title, START and Leave when hosting
-  const bw = U * 2.9, bg = U * 0.3;
-  buttons.forEach(([kind, text], i) => items.push({ kind, text, x: cx - bw - bg / 2 + i * (bw + bg), y: top + U * 4.96 - U * 0.37, w: bw, h: U * 0.74 }));
+let menuFocus = '';            // the option touched last; the line under the title explains it
+// Menus are drawn in a frame: a centre line, a top edge and a unit. Normally that is the arena;
+// the wide waiting room uses two frames side by side, sized to the screen instead.
+let FRM = null;
+const mcx = () => FRM ? FRM.cx : LW / 2;
+function withFrame(f, fn) {
+  if (!f) return fn();
+  const u = U, ay = AY, o = FRM;
+  U = f.u; AY = f.y; FRM = f;
+  try { return fn(); } finally { U = u; AY = ay; FRM = o; }
+}
+const MAP_TEXT = { all: 'All maps', classic: 'Classic maps', complex: 'Complex maps' };
+const nextOf = (arr, v) => arr[(arr.indexOf(v) + 1) % arr.length];
+const goalChip = () => settings.game === 'dm' ? `First to ${target()} kills` : settings.game === 'hill' ? `Hold for ${target()} s` : `First to ${target()}`;
+// Rows of chips: game mode, who plays (one screen only), ammo, and four switches. `on` = drawn filled.
+// The last two chips step through their choices when tapped. `lobby` = the online waiting room.
+function menuItems(top = AY + AH / 2, buttons = [['start', resumeMatch ? 'CONTINUE' : 'START'], ['online', 'ONLINE']], lobby = false, per = 4) {
+  const cx = mcx(), h = U * 0.54, g = U * 0.15, w = U * (per === 2 ? 2.9 : 2.5), items = [];
+  let y = top + (lobby ? 0 : U * 1.5);
+  const row = all => {
+    for (let k = 0; k < all.length; k += per) {
+      const opts = all.slice(k, k + per);
+      opts.forEach(([kind, v, text, on, cyc], i) => items.push({ kind, v, text, on, cyc, x: cx + (i - (opts.length - 1) / 2) * (w + g) - w / 2, y: y - h / 2, w, h }));
+      y += U * 0.66;
+    }
+  };
+  row(GAME_MODES.map(m => ['game', m, GAME_NAME[m], settings.game === m]));
+  if (!lobby) row([0, 1, 2, 3].map(n => ['cpu', n, n ? `1 + ${n} CPU` : '2 players', settings.cpu === n]));
+  row([['unlimited', 'Unlimited'], ['reload', '5 + reload'], ['limited', '5 only'], ['single', `1 per ${C.SINGLE_COOLDOWN} s`]].map(([v, t]) => ['ammo', v, t, settings.ammo === v]));
+  row([['pu', !settings.powerups, settings.powerups ? 'Power-ups on' : 'Power-ups off', settings.powerups],
+    ['soft', !settings.soft, settings.soft ? 'Breakable walls' : 'Solid walls', settings.soft],
+    ['maps', nextOf(MAP_POOLS, settings.maps), MAP_TEXT[settings.maps], false, true],
+    ['win', nextOf(WIN_SCORES, settings.winScore), goalChip(), false, true]]);
+  // two big buttons side by side: START and ONLINE on the title, START and Leave in the waiting room
+  const bw = U * 2.9, bg = U * 0.3, by = lobby ? y + U * 0.75 : top + U * 4.72;
+  buttons.forEach(([kind, text], i) => items.push({ kind, text, x: cx - bw - bg / 2 + i * (bw + bg), y: by - U * 0.37, w: bw, h: U * 0.74 }));
   return items;
 }
-const menuValue = kind => kind === 'ammo' ? settings.ammo : kind === 'pu' ? settings.powerups : kind === 'maps' ? settings.maps : settings.winScore;
+const SETTING_KINDS = ['game', 'cpu', 'ammo', 'pu', 'soft', 'maps', 'win'];
+function menuHintText(lobby) {
+  const k = menuFocus;
+  if (k === 'game') return GAME_TEXT[settings.game];
+  if (k === 'cpu') return settings.cpu ? `You against ${settings.cpu} computer tank${settings.cpu > 1 ? 's' : ''}, on this screen.` : 'Two players, one at each end of this screen.';
+  if (k === 'ammo') return ammoText();
+  if (k === 'pu') return settings.powerups ? 'Pickups appear: laser, missiles, shield, mines and more.' : 'No pickups. Just tanks and shots.';
+  if (k === 'soft') return settings.soft ? 'Lightly drawn walls break when a shot hits them.' : 'Every wall stops every shot.';
+  if (k === 'maps') return settings.maps === 'all' ? 'Small and large maps, shuffled.' : settings.maps === 'classic' ? 'Small 11 by 11 maps. (3+ tanks always get large ones.)' : 'Large 13 by 13 maps with more cover.';
+  if (k === 'win') return settings.game === 'dm' ? `The match ends at ${target()} kills.` : settings.game === 'hill' ? `The match ends when a tank has held the hill for ${target()} seconds.` : `The match ends at ${target()} rounds won.`;
+  return lobby ? GAME_TEXT[settings.game] : '';
+}
+// draw the rows of chips of a menu (not its big buttons)
+function drawMenuChips(items, col) {
+  for (const it of items) {
+    if (!SETTING_KINDS.includes(it.kind)) continue;
+    drawChip(it, it.on, col);
+    if (it.cyc) {                                          // a small arrow: tap to step to the next choice
+      const x = it.x + it.w - it.h * 0.34, y = it.y + it.h / 2, a = it.h * 0.13;
+      ctx.strokeStyle = COL.graphite; ctx.globalAlpha = 0.6; ctx.lineWidth = Math.max(1.2, U * 0.035); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(x - a * 0.6, y - a); ctx.lineTo(x + a * 0.6, y); ctx.lineTo(x - a * 0.6, y + a); ctx.stroke(); ctx.globalAlpha = 1;
+    }
+  }
+}
 function endItems() {
   const cx = LW / 2, h = U * 0.85, w = U * 3.4, g = U * 0.3;
-  const y = mode === 'local' ? AY + AH / 2 + AH / 2 * 0.8 : AY + AH * 0.72;
+  const y = twoSided() ? AY + AH / 2 + AH / 2 * 0.84 : AY + AH * 0.76;
   if (mode === 'guest' && isLeader) return [
     { kind: 'rematch', text: 'Rematch', x: cx - w - g / 2, y: y - h / 2, w, h },
     { kind: 'lobby', text: 'Lobby', x: cx + g / 2, y: y - h / 2, w, h }
@@ -1823,17 +2281,26 @@ function hitItem(items, f) {
   for (const it of items) if (f.x >= it.x - 3 && f.x <= it.x + it.w + 3 && f.y >= it.y - 3 && f.y <= it.y + it.h + 3) return it;
   return null;
 }
-const SETTING_KEY = { ammo: 'ammo', pu: 'powerups', maps: 'maps', win: 'winScore' };
+const SETTING_KEY = { ammo: 'ammo', pu: 'powerups', maps: 'maps', win: 'winScore', game: 'game', soft: 'soft' };
 function applyMenu(it) {
+  if (SETTING_KINDS.includes(it.kind)) menuFocus = it.kind;
+  if (it.kind === 'name') { sfx.tick(); openName(); return; }
   if (mode === 'guest') {
     // a guest can only steer a server-run room it leads; everything goes to the server as a request
     if (SETTING_KEY[it.kind]) { if (isLeader) { sendCmd('set', Object.assign({}, settings, { [SETTING_KEY[it.kind]]: it.v })); sfx.tick(); } return; }
     if (it.kind === 'start' || it.kind === 'rematch' || it.kind === 'lobby') { if (isLeader) { sendCmd(it.kind); sfx.tick(); } return; }
+    if (it.kind === 'bots') { if (isLeader) { sendCmd('bots', clamp(lobbySeats().filter(isBotId).length + it.v, 0, MAX_PLAYERS - 1)); sfx.tick(); } return; }
+    if (it.kind === 'team') { if (isLeader) sendCmd('team', it.v); else if (it.v === mySeat) sendCmd('side'); sfx.tick(); return; }
   }
   if (it.kind === 'ammo') { setAmmoMode(it.v); sfx.tick(); }
   else if (it.kind === 'pu') { settings.powerups = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'maps') { settings.maps = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'win') { settings.winScore = it.v; saveSettings(); sfx.tick(); }
+  else if (it.kind === 'game') { settings.game = it.v; saveSettings(); sfx.tick(); }
+  else if (it.kind === 'soft') { settings.soft = it.v; saveSettings(); sfx.tick(); }
+  else if (it.kind === 'cpu') { settings.cpu = it.v; saveSettings(); sfx.tick(); }
+  else if (it.kind === 'bots') { lobbyBots = clamp(seats.filter(isBotId).length + it.v, 0, MAX_PLAYERS - 1); reseat(); sfx.tick(); }
+  else if (it.kind === 'team') { toggleTeam(it.v); sfx.tick(); }
   else if (it.kind === 'start') { if (mode === 'host') hostStart(); else beginFromMenu(); }
   else if (it.kind === 'online') { sfx.tick(); goOnline(); }
   else if (it.kind === 'rematch') { if (mode === 'host') hostStart(); else startMatch(); }
@@ -1889,20 +2356,23 @@ function buildStatic() {
     // online, the arena may be drawn turned 180 degrees (see viewFlip)
     const x = AX + (viewFlip ? COLS - 1 - c : c) * P, y = AY + (viewFlip ? ROWS - 1 - r : r) * P;
     const rnd = mulberry32(11 + mapId * 977 + r * 31 + c), shut = crushed[r * COLS + c] === 1;
+    const sf = !shut && soft[r * COLS + c] === 1;         // breakable: fewer, fainter strokes and a dashed edge
     g.save();
     g.beginPath(); g.rect(x + 1, y + 1, P - 2, P - 2); g.clip();
     g.globalAlpha = 1; g.fillStyle = COL.paper; g.fillRect(x, y, P, P);
-    g.globalAlpha = shut ? 0.3 : 0.16; g.fillStyle = COL.graphite; g.fillRect(x, y, P, P);
-    g.globalAlpha = 0.72; g.strokeStyle = COL.graphite; g.lineWidth = Math.max(1, P * 0.035); g.beginPath();
-    for (let k = -P; k < P; k += P / 4.5) {
+    g.globalAlpha = shut ? 0.3 : sf ? 0.04 : 0.16; g.fillStyle = COL.graphite; g.fillRect(x, y, P, P);
+    g.globalAlpha = sf ? 0.38 : 0.72; g.strokeStyle = COL.graphite; g.lineWidth = Math.max(1, P * 0.035); g.beginPath();
+    for (let k = -P; k < P; k += P / (sf ? 2.4 : 4.5)) {
       const j1 = (rnd() - 0.5) * P * 0.07, j2 = (rnd() - 0.5) * P * 0.07;
       g.moveTo(x + k + j1, y + P); g.lineTo(x + k + P + j2, y);
     }
     if (shut) for (let k = -P; k < P; k += P / 4.5) { g.moveTo(x + k, y); g.lineTo(x + k + P, y + P); }
     g.stroke();
     g.restore();
-    g.globalAlpha = 0.95; g.strokeStyle = COL.graphite; g.lineWidth = Math.max(1.5, P * 0.05);
+    g.globalAlpha = sf ? 0.6 : 0.95; g.strokeStyle = COL.graphite; g.lineWidth = Math.max(1.5, P * (sf ? 0.04 : 0.05));
+    if (sf) g.setLineDash([P * 0.17, P * 0.11]);
     g.strokeRect(x + 1, y + 1, P - 2, P - 2);
+    g.setLineDash([]);
   }
 
   // arena border
@@ -1986,7 +2456,7 @@ function drawMine(mn) {
   ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
   // a light in the colour of the tank that laid it; it blinks once the mine is armed
   const lit = !mn.armed || REDUCED || Math.floor(mn.age * 3) % 2 === 0;
-  ctx.fillStyle = lit ? COL.pens[mn.owner] : COL.paper; ctx.beginPath(); ctx.arc(0, 0, r * 0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = lit ? penOf(mn.owner) : COL.paper; ctx.beginPath(); ctx.arc(0, 0, r * 0.5, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
 
@@ -2004,7 +2474,7 @@ function drawPickup(k) {
 }
 
 function drawTank(t) {
-  const col = COL.pens[t.id];
+  const col = penOf(t.id);
   ctx.save();
   ctx.translate(t.x * P, t.y * P);
   if (t.power) {                                         // a dashed ring shows the other player that this tank is carrying a power-up
@@ -2033,11 +2503,12 @@ function drawTank(t) {
   rrect(P * 0.04 - kick, -P * 0.055, P * 0.38, P * 0.11, P * 0.02); ctx.fill(); ctx.stroke();
   // turret
   ctx.fillStyle = t.power ? COL.graphite : col; ctx.beginPath(); ctx.arc(0, 0, P * 0.14, 0, Math.PI * 2); ctx.fill();
+  if (teamsOn() && !twoSided() && t.id === mySeat) { ctx.fillStyle = COL.paper; ctx.beginPath(); ctx.arc(0, 0, P * 0.065, 0, Math.PI * 2); ctx.fill(); }
   ctx.restore();
 }
 
 function drawMissile(m) {
-  const col = COL.pens[m.owner];
+  const col = penOf(m.owner);
   ctx.save(); ctx.translate(m.x * P, m.y * P); ctx.rotate(m.angle);
   const L = 0.4 * P, W = 0.16 * P;
   ctx.lineWidth = Math.max(1.2, P * 0.035); ctx.strokeStyle = COL.graphite; ctx.fillStyle = col; ctx.lineJoin = 'round'; ctx.globalAlpha = 1;
@@ -2081,12 +2552,12 @@ function switchSpots() {
 
 function drawStrip(p, seat) {
   const pl = players[p];
-  const online = mode !== 'local';
+  const online = mode !== 'local', single = !twoSided();
   // switches at the edge: sound, and back to the menu (two taps, so a slip does not end the match)
   const edgeSwitches = () => {
     const sp = switchSpots();
     label(muted ? 'sound off' : 'sound on', sp.sound.x, sp.sound.y, sp.size, COL.graphite, FONT_B, 0.65);
-    if (sp.quit) label(performance.now() - quitArm < 2500 ? (online ? 'leave? tap again' : 'quit? tap again') : (online ? 'leave' : 'menu'), sp.quit.x, sp.quit.y, sp.size, COL.graphite, FONT_B, 0.65);
+    if (sp.quit) label(quitArm > 0 && performance.now() - quitArm < 2500 ? (online ? 'leave? tap again' : 'quit? tap again') : (online ? 'leave' : 'menu'), sp.quit.x, sp.quit.y, sp.size, COL.graphite, FONT_B, 0.65);
   };
   const t = tanks[seat];
   if (!t || NET_SCREENS.includes(state)) {
@@ -2096,7 +2567,7 @@ function drawStrip(p, seat) {
     edgeSwitches();
     return;
   }
-  const col = COL.pens[seat];
+  const col = penOf(seat);
   // colour band along this player's edge of the tablet
   ctx.fillStyle = col; ctx.globalAlpha = 0.9; ctx.fillRect(0, LH - 5, LW, 5); ctx.globalAlpha = 1;
 
@@ -2150,68 +2621,145 @@ function drawStrip(p, seat) {
   }
 
   const fs = Math.min(S * 0.42, LW * 0.12), gap = fs * 0.32;
-  if (!online) {
+  if (!single) {
     // score: mine first, in my colour
-    const other = COL.pens[1 - p];
+    const other = penOf(1 - p);
     label(String(scores[p]), LW / 2 - gap, CY0, fs, col, FONT_D, 1, 'right');
     label(':', LW / 2, CY0 - fs * 0.04, fs * 0.8, COL.graphite, FONT_D, 0.7);
     label(String(scores[1 - p]), LW / 2 + gap, CY0, fs * 0.72, other, FONT_D, 0.85, 'left');
   } else if (land) {
     // landscape: my score at the top of the fire side, everyone's on the stick side
     const f2 = Math.min(S * 0.32, LH * 0.14, 56);
-    label(String(scores[seat] | 0), FX0, LH * 0.13, f2, col, FONT_D);
-    label('of ' + settings.winScore, FX0, LH * 0.13 + f2 * 0.62, f2 * 0.34, COL.graphite, FONT_B, 0.7);
+    label(String(scores[sideOf(seat)] | 0), FX0, LH * 0.13, f2, col, FONT_D);
+    label('of ' + target(), FX0, LH * 0.13 + f2 * 0.62, f2 * 0.34, COL.graphite, FONT_B, 0.7);
   } else {
     // online the whole table is along the top; here just my own score and the target
-    label(String(scores[seat] | 0), LW / 2, CY0 - fs * 0.12, fs, col, FONT_D);
-    label('of ' + settings.winScore, LW / 2, CY0 + fs * 0.55, fs * 0.32, COL.graphite, FONT_B, 0.7);
+    label(String(scores[sideOf(seat)] | 0), LW / 2, CY0 - fs * 0.12, fs, col, FONT_D);
+    label('of ' + target(), LW / 2, CY0 + fs * 0.55, fs * 0.32, COL.graphite, FONT_B, 0.7);
   }
   edgeSwitches();
 }
 
-// online: the strip at the top of the tablet shows every tank's score and the game code
-function drawTopBoard() {
-  // portrait: a band along the top; landscape: the top of the stick-side panel
-  const cx = land ? JX0 : LW / 2, panelW = land ? S : LW;
-  const infoY = land ? 18 : Math.min(S * 0.22, 26), rowY = land ? Math.min(LH * 0.16, 64) : S / 2 + S * 0.06;
-  ctx.fillStyle = COL.graphite; ctx.globalAlpha = 0.5; ctx.fillRect(0, 0, land ? S : LW, 4); ctx.globalAlpha = 1;
+const short = (str, n) => str.length > n ? str.slice(0, n - 1) + '…' : str;
+// online: the game code, this device's part in it, and how long its messages take
+function netInfo() {
   const nDirect = mode === 'host' ? [...guests.values()].filter(x => linkOpen(x.u)).length : 0;
-  const role = mode === 'host' ? 'hosting' + (usingRelay && guests.size ? ` \u00b7 Wi-Fi direct ${nDirect}/${guests.size}` : '')
-    : mode === 'guest' ? 'joined' + (linkOpen(gU) ? ' \u00b7 Wi-Fi direct' : '') : '';
-  const ping = mode === 'guest' && rttMs ? ` \u00b7 ${Math.round(rttMs)} ms` + (netRttMs ? ` (net ${netRttMs})` : '') : '';
-  const info = netCode ? `game ${netCode} \u00b7 ${role}${ping}` : 'online';
-  label(info, cx, infoY, Math.min(17, (land ? LH : S) * 0.12), COL.graphite, FONT_B, 0.7);
-  const n = NET_SCREENS.includes(state) ? 0 : NP;
-  if (!n) return;
-  const w = Math.min(panelW / n, 130), x0 = cx - w * (n - 1) / 2, r = Math.min((land ? LH : S) * 0.17, w * 0.2, 22);
-  for (let i = 0; i < n; i++) {
-    const t = tanks[i], x = x0 + i * w, y = rowY, col = COL.pens[i];
-    const out = t && (t.gone || (!t.alive && (state === 'play' || state === 'ending')));
-    ctx.globalAlpha = out ? 0.3 : 1; ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(x - r * 1.2, y, r * 0.75, 0, Math.PI * 2); ctx.fill();
+  const role = mode === 'host' ? 'hosting' + (usingRelay && guests.size ? ` · Wi-Fi direct ${nDirect}/${guests.size}` : '')
+    : mode === 'guest' ? 'joined' + (linkOpen(gU) ? ' · Wi-Fi direct' : '') : '';
+  const ping = mode === 'guest' && rttMs ? `${Math.round(rttMs)} ms` + (netRttMs ? ` (net ${netRttMs})` : '') : '';
+  return [netCode ? `game ${netCode}` : '', role, ping];
+}
+const TEAM_NAME = ['Red', 'Blue'];
+// one person per screen: every tank's score, the game mode and (online) the game code.
+// Upright: a band along the top. Wide: a list at the top of the stick-side panel.
+function drawTopBoard() {
+  const net = mode !== 'local';
+  const cx = land ? JX0 : LW / 2, panelW = land ? S : LW;
+  ctx.fillStyle = COL.graphite; ctx.globalAlpha = 0.5; ctx.fillRect(0, 0, panelW, 4); ctx.globalAlpha = 1;
+  const inMatch = !NET_SCREENS.includes(state) && state !== 'title';
+  const lines = [];
+  if (net) {
+    const [code, role, ping] = netInfo();
+    if (!code) lines.push('online');
+    else if (land) { lines.push(code, role); if (ping) lines.push(ping); }
+    else lines.push([code, role, ping].filter(Boolean).join(' · '));
+  }
+  if (inMatch) lines.push(`${GAME_NAME[settings.game === 'teams' && !teamsOn() ? 'classic' : settings.game]} · ${goalText()}`);
+  const fs = land ? Math.min(15, S * 0.078) : Math.min(16, S * 0.115);
+  let yy = land ? 16 : Math.min(S * 0.17, 20);
+  for (const t of lines) { label(t, cx, yy, fs, COL.graphite, FONT_B, 0.7); yy += fs * 1.3; }
+  if (!inMatch) return;
+  const out = t => t && (t.gone || (!t.alive && (state === 'play' || state === 'ending')));
+  const dot = (i, x, y, r) => {
+    const t = tanks[i], col = penOf(i);
+    ctx.globalAlpha = out(t) ? 0.3 : 1; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    if (settings.game === 'hill' && hillHolder === i) { ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.5, r * 0.3); ctx.beginPath(); ctx.arc(x, y, r * 1.6, 0, Math.PI * 2); ctx.stroke(); }
     ctx.globalAlpha = 1;
-    label(String(scores[i] | 0), x + r * 0.5, y, r * 1.9, out ? COL.graphite : col, FONT_D, out ? 0.45 : 1);
-    if (i === mySeat) label('you', x, y + r * 1.7, r * 0.85, col, FONT_B, 0.85);
-    else if (t && t.gone) label('left', x, y + r * 1.7, r * 0.85, COL.graphite, FONT_B, 0.6);
+  };
+  const who = i => i === mySeat ? (names[i] || 'you') : (t => t && t.gone ? 'left' : nameOf(i))(tanks[i]);
+  if (land) {
+    // wide: one row per tank under the info lines
+    const step = Math.min(LH * 0.062, 30), r = step * 0.26, x0 = Math.max(10, S * 0.09), x1 = S - x0;
+    let y = yy + step * 0.5;
+    if (teamsOn()) {
+      const f = step * 1.25;
+      label(String(scores[0] | 0), cx - f * 0.35, y + f * 0.2, f, COL.pens[0], FONT_D, 1, 'right');
+      label(':', cx, y + f * 0.16, f * 0.8, COL.graphite, FONT_D, 0.7);
+      label(String(scores[1] | 0), cx + f * 0.35, y + f * 0.2, f, COL.pens[1], FONT_D, 1, 'left');
+      y += f * 1.25;
+    }
+    for (let i = 0; i < NP; i++, y += step) {
+      const t = tanks[i], col = penOf(i), dim = out(t);
+      dot(i, x0 + r, y, r);
+      label(short(who(i), 10), x0 + r * 3.2, y, step * 0.52, dim ? COL.graphite : col, i === mySeat ? FONT_D : FONT_B, dim ? 0.45 : 1, 'left');
+      if (!teamsOn()) label(String(scores[i] | 0), x1, y, step * 0.66, dim ? COL.graphite : col, FONT_D, dim ? 0.45 : 1, 'right');
+    }
+    return;
+  }
+  // upright: side by side along the top
+  const rowY = Math.max(yy + S * 0.14, S * 0.56);
+  if (teamsOn()) {
+    const f = Math.min(S * 0.34, 44), mine = mySeat >= 0 ? teamOf[mySeat] : -1;
+    label(String(scores[0] | 0), cx - f * 0.4, rowY, f, COL.pens[0], FONT_D, 1, 'right');
+    label(':', cx, rowY - f * 0.04, f * 0.8, COL.graphite, FONT_D, 0.7);
+    label(String(scores[1] | 0), cx + f * 0.4, rowY, f, COL.pens[1], FONT_D, 1, 'left');
+    [0, 1].forEach(k => label(TEAM_NAME[k] + (mine === k ? ' (you)' : ''), cx + (k ? 1 : -1) * f * 2.6, rowY, f * 0.36, COL.pens[k], FONT_B, 0.9));
+    return;
+  }
+  const w = Math.min(panelW / NP, 130), x0 = cx - w * (NP - 1) / 2, r = Math.min(S * 0.16, w * 0.2, 22);
+  for (let i = 0; i < NP; i++) {
+    const t = tanks[i], x = x0 + i * w, col = penOf(i), dim = out(t);
+    dot(i, x - r * 1.2, rowY, r * 0.75);
+    label(String(scores[i] | 0), x + r * 0.5, rowY, r * 1.9, dim ? COL.graphite : col, FONT_D, dim ? 0.45 : 1);
+    label(short(who(i), 9), x, rowY + r * 1.6, r * 0.8, i === mySeat ? col : COL.graphite, FONT_B, i === mySeat ? 0.9 : 0.6);
   }
 }
 
-// one person per device: the online screens use the whole arena, the right way up
-function seatRows(y0, gap, list) {
-  const cx = LW / 2;
+// the waiting room: who is in it, as the host knows it or as a guest was last told
+const lobbySnap = () => (snaps.length ? snaps[snaps.length - 1].g : null) || {};
+const lobbySeats = () => mode === 'guest' ? (lobbySnap().seats || []) : seats;
+const lobbyTeams = () => mode === 'guest' ? (lobbySnap().tm || []) : seats.map(id => teamPick.get(id) ? 1 : 0);
+const lobbyNames = () => mode === 'guest' ? (lobbySnap().nm || []) : seats.map(seatLabel);
+const lobbyCtl = () => mode === 'host' || (mode === 'guest' && isLeader);     // may this device change the room?
+const inLobby = () => state === 'hostWait' || (state === 'guestWait' && !netMsg);
+const seatGeo = () => lobbyCtl() ? { y0: 2.0, gap: 0.52 } : { y0: 2.5, gap: 0.55 };
+const teamChip = i => { const g = seatGeo(), w = U * 1.3, h = U * 0.42; return { kind: 'team', v: i, x: mcx() + U * 2.55, y: AY + U * (g.y0 + i * g.gap) - h / 2, w, h }; };
+const nameChip = yy => { const w = U * 3.9, h = U * 0.54; return { kind: 'name', text: myName ? 'Name: ' + myName : 'Set your name', x: mcx() - w / 2, y: AY + U * yy - h / 2, w, h }; };
+// Held wide, the waiting room is two columns (who is in it; how the game is set), each as large as
+// the screen allows. Returns null when the screen is upright or the single column is just as large.
+function lobbyFrames() {
+  if (!land || !inLobby()) return null;
+  const ctl = lobbyCtl(), l = ctl ? [0.3, 5.85] : [0.5, 5.05], r = ctl ? [5.3, 11.0] : [5.4, 9.6];
+  const top = 24, hh = LH - top - 28;
+  const v = Math.min(hh / Math.max(l[1] - l[0], r[1] - r[0]), LW / 14.6);
+  if (v <= U * 1.05) return null;
+  const cy = top + hh / 2;
+  return { L: { u: v, cx: LW / 2 - v * 3.15, y: cy - v * (l[0] + l[1]) / 2 }, R: { u: v, cx: LW / 2 + v * 4.0, y: cy - v * (r[0] + r[1]) / 2 } };
+}
+function seatRows() {
+  const cx = mcx(), { y0, gap } = seatGeo(), list = lobbySeats(), tm = lobbyTeams(), nm = lobbyNames(), teams = settings.game === 'teams';
   for (let i = 0; i < MAX_PLAYERS; i++) {
-    const y = y0 + i * gap, col = COL.pens[i], has = i < list.length;
+    const y = AY + U * (y0 + i * gap), has = i < list.length, id = list[i];
+    const col = !has ? COL.graphite : teams ? COL.pens[tm[i] ? 1 : 0] : COL.pens[i];
     ctx.globalAlpha = has ? 1 : 0.18; ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(cx - U * 2.1, y, U * 0.17, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
-    const lead = dedicatedGame && has && i === 0 ? ' (leader)' : '';
-    const who = (!has ? 'open seat' : list[i] === 'host' ? (mode === 'host' ? 'You (host)' : 'Host') : list[i] === myId ? 'You' : 'Player ' + (i + 1)) + lead;
-    label(`${PEN_NAMES[i]}`, cx - U * 1.75, y, U * 0.34, has ? col : COL.graphite, FONT_D, has ? 1 : 0.35, 'left');
-    label(who, cx - U * 0.2, y, U * 0.3, COL.graphite, FONT_B, has ? 0.9 : 0.35, 'left');
+    ctx.beginPath(); ctx.arc(cx - U * 3.7, y, U * 0.15, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    if (!has) { label('open seat', cx - U * 3.35, y, U * 0.28, COL.graphite, FONT_B, 0.35, 'left'); continue; }
+    const me = mode === 'host' ? id === 'host' : id === myId;
+    const name = cleanName(nm[i]) || (me ? 'You' : id === 'host' ? 'Host' : 'Player ' + (i + 1));
+    const tag = isBotId(id) ? 'computer' : [me && name !== 'You' ? 'you' : '', id === 'host' ? 'host' : '', dedicatedGame && i === 0 ? 'leader' : ''].filter(Boolean).join(', ');
+    label(name, cx - U * 3.35, y, U * 0.33, col, FONT_D, 1, 'left');
+    if (tag) label(tag, cx - U * 0.3, y, U * 0.26, COL.graphite, FONT_B, 0.7, 'left');
+    if (teams) {
+      const it = teamChip(i), mine = lobbyCtl() || me;
+      rrect(it.x, it.y, it.w, it.h, it.h * 0.3);
+      ctx.fillStyle = mine ? col : COL.paper; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.5, U * 0.04); ctx.stroke();
+      plain(TEAM_NAME[tm[i] ? 1 : 0], it.x + it.w / 2, it.y + it.h * 0.54, it.h * 0.6, mine ? COL.paper : col, FONT_B);
+    }
   }
 }
 function netItems() {
   const cx = LW / 2, y = v => AY + U * v, items = [];
-  const btn = (kind, text, yy, w, v) => items.push({ kind, text, v, x: cx - U * w / 2, y: y(yy) - U * 0.37, w: U * w, h: U * 0.74 });
+  const btn = (kind, text, yy, w, v) => items.push({ kind, text, v, x: mcx() - U * w / 2, y: y(yy) - U * 0.37, w: U * w, h: U * 0.74 });
   if (state === 'online') {
     if (usingRelay) {
       btn('host', 'Create a game', 4.2, 6);
@@ -2221,15 +2769,29 @@ function netItems() {
       btn('host', 'Host a game', 4.4, 5);
       btn('join', 'Join a game', 5.5, 5);
     }
-    btn('back', 'Back', 9.6, 3);
+    items.push(nameChip(8.0));
+    btn('back', 'Back', 9.75, 3);
   } else if (state === 'joinCode') {
     const kw = U * 1.35, kh = U * 0.95, gx = U * 0.18, x0 = cx - (kw * 3 + gx * 2) / 2;
     const keysTxt = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'join'];
     keysTxt.forEach((k, i) => items.push({ kind: 'key', v: k, text: k === 'del' ? '←' : k === 'join' ? 'Join' : k,
       x: x0 + (i % 3) * (kw + gx), y: y(4.0) + Math.floor(i / 3) * (kh + gx), w: kw, h: kh }));
     btn('back', 'Back', 9.9, 3);
-  } else if (state === 'hostWait' || (state === 'guestWait' && isLeader && !netMsg)) {
-    menuItems(y(4.8), [['start', 'START'], ['leave', 'Leave']]).forEach(it => items.push(it));
+  } else if (inLobby()) {
+    const ctl = lobbyCtl(), n = lobbySeats().length, fr = lobbyFrames();
+    withFrame(fr && fr.L, () => {
+      if (settings.game === 'teams') for (let i = 0; i < n; i++) if (ctl || i === mySeat) items.push(teamChip(i));
+      if (!ctl) return;
+      // one row: fewer / more computer tanks, and this player's name
+      const h = U * 0.54, yy = y(4.85) - h / 2, bw = U * 1.75, g = U * 0.15, nw = U * 3.9, x0 = mcx() - (bw * 2 + nw + g * 2) / 2;
+      items.push({ kind: 'bots', v: -1, text: '− CPU', x: x0, y: yy, w: bw, h });
+      items.push({ kind: 'bots', v: 1, text: '+ CPU', x: x0 + bw + g, y: yy, w: bw, h });
+      items.push(Object.assign(nameChip(4.85), { x: x0 + (bw + g) * 2 }));
+    });
+    withFrame(fr && fr.R, () => {
+      if (ctl) menuItems(y(5.6), [['start', 'START'], ['leave', 'Leave']], true, fr ? 2 : 4).forEach(it => items.push(it));
+      else { items.push(nameChip(8.1)); btn('leave', 'Leave', 9.1, 3); }
+    });
   } else if (state === 'guestWait') {
     btn('leave', 'Leave', 9.6, 3);
   } else if (state === 'netLost') {
@@ -2237,19 +2799,19 @@ function netItems() {
   }
   return items;
 }
-// who is in the waiting room: the host's own list, or the latest one a guest was sent
-const lobbySeats = () => mode === 'guest' ? (snaps.length ? (snaps[snaps.length - 1].g.seats || []) : []) : seats;
 function drawNetScreen() {
-  const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite, accent = COL.pens[mode === 'guest' && mySeat >= 0 ? mySeat : 0];
-  const line = (t, v, size, col, font, alpha) => label(t, cx, y(v), U * size, col || ink, font || FONT_B, alpha == null ? 1 : alpha);
+  const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite, accent = COL.pens[mode === 'guest' && mySeat >= 0 && settings.game !== 'teams' ? mySeat : 0] || COL.pens[0];
+  const line = (t, v, size, col, font, alpha) => label(t, mcx(), y(v), U * size, col || ink, font || FONT_B, alpha == null ? 1 : alpha);
+  const lobby = inLobby(), fr = lobbyFrames();
+  if (fr) label(netInfo().filter(Boolean).join(' · '), cx, 13, Math.min(15, LH * 0.04), ink, FONT_B, 0.7);
   if (state === 'online') {
     line('Play online', 1.3, 0.8, accent, FONT_D);
-    line('Each player uses their own tablet.', 2.3, 0.3);
+    line('Each player uses their own tablet or phone.', 2.3, 0.3);
     line(usingRelay ? 'Players can be anywhere with internet.' : 'All tablets on the same Wi-Fi.', 2.75, 0.3);
     line(usingRelay ? 'One creates a game; the others join with its code.' : 'One hosts; the others join with its code.', 3.2, 0.3);
-    line(usingRelay ? 'Same Wi-Fi game: everyone in one place; this tablet runs it.' : '2 to 5 players', usingRelay ? 7.1 : 6.5, usingRelay ? 0.24 : 0.3, ink, FONT_B, 0.7);
-    if (IS_TOUCH && LH > LW) line('Tip: turn the device sideways for the best controls.', 8.3, 0.27, accent, FONT_B);
-    if (netMsg) line(netMsg, 7.7, 0.26, ink, FONT_B, 0.85);
+    line(usingRelay ? 'Same Wi-Fi game: everyone in one place; this tablet runs it.' : '2 to 5 players', usingRelay ? 6.95 : 6.3, usingRelay ? 0.24 : 0.3, ink, FONT_B, 0.7);
+    if (netMsg) line(netMsg, 7.35, 0.26, ink, FONT_B, 0.85);
+    if (IS_TOUCH && LH > LW) line('Tip: turn the device sideways for the best controls.', 8.8, 0.27, accent, FONT_B);
   } else if (state === 'joinCode') {
     line('Enter the game code', 1.1, 0.6, accent, FONT_D);
     line('It is shown on the host tablet.', 1.75, 0.28, ink, FONT_B, 0.75);
@@ -2261,33 +2823,52 @@ function drawNetScreen() {
       if (typedCode[i]) label(typedCode[i], it.x + bw / 2, it.y + it.h / 2, U * 0.8, accent, FONT_D);
     }
     if (netMsg) line(netMsg, 9.0, 0.26, COL.pens[0], FONT_B);
-  } else if (state === 'hostWait' || (state === 'guestWait' && isLeader && !netMsg)) {
-    line('Game code', 0.7, 0.4, ink, FONT_B, 0.8);
-    line(netCode || '…', 1.65, 1.2, accent, FONT_D);
-    line(netMsg || 'Others: Play online → Join a game → type this code.', 2.55, 0.26, ink, FONT_B, 0.8);
-    seatRows(y(3.1), U * 0.55, lobbySeats());
-    label(ammoText(), cx, y(4.8) + U * 2.08, U * 0.27, ink, FONT_B);
+  } else if (lobby && lobbyCtl()) {
+    withFrame(fr && fr.L, () => {
+      line('Game ' + (netCode || '…'), 0.75, 0.8, accent, FONT_D);
+      line(netMsg || 'Others: Play online → Join a game → type this code.', 1.42, 0.25, ink, FONT_B, 0.8);
+      seatRows();
+      line(menuHintText(true), fr ? 5.55 : 7.55, 0.25, ink, FONT_B, 0.85);
+    });
+  } else if (lobby) {
+    withFrame(fr && fr.L, () => {
+      line('Joined game ' + netCode, 0.9, 0.6, accent, FONT_D);
+      line(dedicatedGame ? 'Waiting for the player who made the game to start.' : 'Waiting for the host to start.', 1.75, 0.3, ink, FONT_B, 0.85);
+      seatRows();
+    });
+    withFrame(fr && fr.R, () => {
+      line(`${GAME_NAME[settings.game]} · ${goalText()}`, 5.75, 0.4, accent, FONT_D);
+      line(GAME_TEXT[settings.game], 6.3, 0.26, ink, FONT_B, 0.85);
+      line(ammoText(), 6.75, 0.26, ink, FONT_B, 0.85);
+      line(`${settings.powerups ? 'Power-ups on' : 'Power-ups off'} · ${settings.soft ? 'breakable walls' : 'solid walls'} · ${MAP_TEXT[settings.maps].toLowerCase()}`, 7.2, 0.26, ink, FONT_B, 0.85);
+    });
   } else if (state === 'guestWait') {
-    line(netMsg ? 'Joining…' : 'Joined game ' + netCode, 0.9, 0.6, accent, FONT_D);
-    line(netMsg || (dedicatedGame ? 'Waiting for the player who made the game to start.' : 'Waiting for the host to start.'), 1.75, 0.3, ink, FONT_B, 0.85);
-    if (!netMsg) {
-      seatRows(y(2.6), U * 0.6, snaps.length ? (snaps[snaps.length - 1].g.seats || []) : []);
-      line(ammoText(), 6.0, 0.28, ink, FONT_B, 0.85);
-      line(`${settings.powerups ? 'Power-ups on' : 'Power-ups off'} · first to ${settings.winScore}`, 6.55, 0.28, ink, FONT_B, 0.85);
-    }
+    line('Joining…', 0.9, 0.6, accent, FONT_D);
+    line(netMsg, 1.75, 0.3, ink, FONT_B, 0.85);
   } else if (state === 'netLost') {
     line('Online game ended', 2.6, 0.6, accent, FONT_D);
     wrapLines(netMsg, U * 8.5, U * 0.3).forEach((t, i) => line(t, 3.6 + i * 0.5, 0.3));
   }
-  for (const it of netItems()) {
+  const items = netItems();
+  withFrame(fr && fr.R, () => drawNetItems(items, accent));
+}
+function drawNetItems(items, accent) {
+  const ink = COL.graphite;
+  drawMenuChips(items, accent);
+  for (const it of items) {
+    if (SETTING_KINDS.includes(it.kind) || it.kind === 'team') continue;
     if (it.kind === 'key') {
       const off = it.v === 'join' && typedCode.length < 4;
       drawChip(it, it.v === 'join' && !off, accent, it.v === 'join');
       if (off) { ctx.globalAlpha = 0.5; ctx.fillStyle = COL.paper; ctx.fillRect(it.x, it.y, it.w, it.h); ctx.globalAlpha = 1; }
     } else if (it.kind === 'start') {
       drawChip(it, lobbySeats().length >= 2, accent, true);
-      if (lobbySeats().length < 2) label('needs 2+ players', it.x + it.w / 2, it.y + it.h + U * 0.25, U * 0.22, ink, FONT_B, 0.7);
-    } else if (['ammo', 'pu', 'maps', 'win'].includes(it.kind)) drawChip(it, menuValue(it.kind) === it.v, accent);
+      if (lobbySeats().length < 2) label('needs 2 or more: wait for a player or add a CPU', it.x + it.w + U * 0.15, it.y + it.h + U * 0.28, U * 0.22, ink, FONT_B, 0.7);
+    } else if (it.kind === 'bots') {
+      const nb = lobbySeats().filter(isBotId).length, can = it.v < 0 ? nb > 0 : lobbySeats().length < MAX_PLAYERS;
+      drawChip(it, false, accent);
+      if (!can) { ctx.globalAlpha = 0.55; ctx.fillStyle = COL.paper; ctx.fillRect(it.x - 2, it.y - 2, it.w + 4, it.h + 4); ctx.globalAlpha = 1; }
+    } else if (it.kind === 'name') drawChip(it, false, accent);
     else { const big = ['host', 'join', 'lan'].includes(it.kind); drawChip(it, big, accent, big); }
   }
 }
@@ -2302,54 +2883,92 @@ function wrapLines(str, maxW, size) {
   return out;
 }
 
+const hitRate = v => v && v.s ? Math.min(100, Math.round(100 * v.h / v.s)) + '%' : '–';
+// the end of a match: who won, and what every tank did
+function drawMatchEnd(p, seat) {
+  const cx = LW / 2, ink = COL.graphite;
+  const ch = champion(), won = seat >= 0 && ch === sideOf(seat);
+  const chCol = teamsOn() ? COL.pens[ch ? 1 : 0] : penOf(ch);
+  const chName = teamsOn() ? TEAM_NAME[ch ? 1 : 0] + ' team' : nameOf(ch);
+  if (twoSided()) {
+    const top = AY + AH / 2, h = AH / 2, v = stats[seat];
+    label(won ? 'YOU WIN!' : 'YOU LOSE', cx, top + h * 0.26, U * (won ? 1.6 : 1.3), won ? penOf(seat) : ink, FONT_D);
+    label(`${scores[p]} : ${scores[1 - p]}`, cx, top + h * 0.48, U * 0.75, ink, FONT_D, 0.8);
+    if (v) label(`${v.k} hit${v.k === 1 ? '' : 's'} on them · ${v.d} taken · ${hitRate(v)} of shots landed`, cx, top + h * 0.64, U * 0.27, ink, FONT_B, 0.85);
+    return;
+  }
+  const y = v => AY + U * v;
+  label(won ? 'YOU WIN!' : `${chName} wins`, cx, y(1.2), U * (won ? 1.3 : 1.0), chCol, FONT_D);
+  let ty = 2.35;
+  if (teamsOn()) {
+    label(String(scores[0] | 0), cx - U * 0.4, y(2.2), U * 0.7, COL.pens[0], FONT_D, 1, 'right');
+    label(':', cx, y(2.17), U * 0.55, ink, FONT_D, 0.7);
+    label(String(scores[1] | 0), cx + U * 0.4, y(2.2), U * 0.7, COL.pens[1], FONT_D, 1, 'left');
+    ty = 3.0;
+  }
+  // table: one row per tank, best first
+  const scoreHead = teamsOn() ? '' : settings.game === 'dm' ? 'Points' : settings.game === 'hill' ? 'Seconds' : 'Rounds';
+  const cols = [[scoreHead, 1.0], ['Kills', 2.2], ['Lost', 3.3], ['Hit %', 4.4]];
+  for (const [t, dx] of cols) if (t) label(t, cx + U * dx, y(ty), U * 0.24, ink, FONT_B, 0.65);
+  const order = tanks.map(t => t.id).sort((a, b) => teamsOn() ? (teamOf[a] - teamOf[b]) || ((stats[b] || {}).k | 0) - ((stats[a] || {}).k | 0) : (scores[b] | 0) - (scores[a] | 0));
+  order.forEach((i, k) => {
+    const yy = y(ty + 0.58 * (k + 1)), col = penOf(i), v = stats[i] || { k: 0, d: 0, s: 0, h: 0 };
+    if (i === seat) { ctx.globalAlpha = 0.1; ctx.fillStyle = col; rrect(cx - U * 5, yy - U * 0.26, U * 10, U * 0.52, U * 0.12); ctx.fill(); ctx.globalAlpha = 1; }
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(cx - U * 4.6, yy, U * 0.14, 0, Math.PI * 2); ctx.fill();
+    label(nameOf(i) + (i === seat && names[i] && names[i] !== 'You' ? ' (you)' : ''), cx - U * 4.25, yy, U * 0.33, col, FONT_D, 1, 'left');
+    const cell = (t, dx) => label(String(t), cx + U * dx, yy, U * 0.34, ink, FONT_D, 0.9);
+    if (!teamsOn()) cell(scores[i] | 0, 1.0);
+    cell(v.k, 2.2); cell(v.d, 3.3); cell(hitRate(v), 4.4);
+  });
+  if (mode === 'guest' && !isLeader) label(dedicatedGame ? 'Waiting for the player who made the game…' : 'Waiting for the host…', cx, y(ty + 0.58 * (NP + 1) + 0.25), U * 0.28, ink, FONT_B, 0.8);
+}
+
 function drawOverlay(p, seat) {
-  const online = mode !== 'local';
-  const col = COL.pens[seat] || COL.graphite, cx = LW / 2, top = AY + AH / 2, h = AH / 2;
-  // online the overlay sits in the middle of the whole arena rather than in one player's half
-  const mid = online ? AY + AH * 0.3 : top + h * 0.45;
+  const single = !twoSided();
+  const col = (seat >= 0 && penOf(seat)) || COL.graphite, cx = LW / 2, top = AY + AH / 2, h = AH / 2;
+  // one person per screen: the overlay sits in the middle of the whole arena rather than in one player's half
+  const mid = single ? AY + AH * 0.3 : top + h * 0.45;
+  const me = tanks[seat];
   if (state === 'title') {
     label('Tank Duel', cx, top + U * 0.42, U * 0.72, col, FONT_D);
     const hint = IS_TOUCH ? 'Left thumb drives, right thumb fires.'
       : p === 0 ? 'Keyboard: arrow keys to drive, Enter to fire.' : 'Keyboard: W A S D to drive, Space to fire.';
-    label(hint, cx, top + U * 0.95, U * 0.27, COL.graphite, FONT_B);
-    for (const it of menuItems()) {
+    label(menuHintText(false) || hint, cx, top + U * 0.95, U * 0.27, COL.graphite, FONT_B);
+    const items = menuItems();
+    drawMenuChips(items, col);
+    for (const it of items) {
       if (it.kind === 'start') drawChip(it, true, col, true);
       else if (it.kind === 'online') drawChip(it, false, col, true);
-      else drawChip(it, menuValue(it.kind) === it.v, col);
     }
-    label(ammoText(), cx, top + U * 2.08, U * 0.27, COL.graphite, FONT_B);
   } else if (state === 'countdown') {
     const n = Math.max(1, 3 - Math.floor(stateT / 0.65)), f = (stateT % 0.65) / 0.65;
     const pop = REDUCED ? 1 : 1 + 0.35 * Math.max(0, 1 - f * 3);
     label(String(n), cx, mid, U * 2.6 * pop, col, FONT_D, 0.92);
-    if (online && seat >= 0) label(`You are ${PEN_NAMES[seat]}`, cx, mid + U * 1.6, U * 0.45, col, FONT_D, 0.9);
+    if (single && seat >= 0) label(teamsOn() ? `You are on the ${TEAM_NAME[teamOf[seat] ? 1 : 0]} team` : `You are ${PEN_NAMES[seat]}`, cx, mid + U * 1.6, U * 0.45, col, FONT_D, 0.9);
+    if (settings.game !== 'classic' && (single || mapIdx === 0))
+      label(`${GAME_NAME[settings.game === 'teams' && !teamsOn() ? 'classic' : settings.game]} · ${goalText()}`, cx, mid + U * (single ? 2.2 : 1.5), U * 0.32, COL.graphite, FONT_B, 0.85);
   } else if (state === 'play' && stateT < 0.5) {
     label('GO!', cx, mid, U * 2, col, FONT_D, 1 - stateT / 0.5);
+  } else if (state === 'play' && me && !me.alive && !me.gone && respawnMode()) {
+    label('Back in ' + Math.max(1, Math.ceil(me.respawn || 0)), cx, mid, U * 0.9, col, FONT_D, 0.85);
   } else if (state === 'play' && sdOn() && roundT - C.SUDDEN_DEATH_TIME < 1.8) {
     const a = Math.min(1, (1.8 - (roundT - C.SUDDEN_DEATH_TIME)) / 0.4);
-    label('SUDDEN DEATH', cx, online ? mid : top + h * 0.4, U * 1.05, COL.graphite, FONT_D, a);
-    label('The walls close in. Get to the middle.', cx, online ? mid + U * 0.9 : top + h * 0.6, U * 0.36, COL.graphite, FONT_B, a);
-  } else if (state === 'result') {
+    label('SUDDEN DEATH', cx, single ? mid : top + h * 0.4, U * 1.05, COL.graphite, FONT_D, a);
+    label('The walls close in. Get to the middle.', cx, single ? mid + U * 0.9 : top + h * 0.6, U * 0.36, COL.graphite, FONT_B, a);
+  } else if (state === 'result' && !respawnMode()) {
     const a = Math.min(1, stateT / 0.15);
     if (winner < 0) {
       label('DRAW', cx, mid, U * 1.6, COL.graphite, FONT_D, a);
       if (drawReason === 'ammo') label('Out of ammo', cx, mid + h * 0.23, U * 0.5, COL.graphite, FONT_B, a);
     }
-    else if (winner === seat) label('POINT!', cx, mid, U * 1.8, col, FONT_D, a);
-    else if (online) label(`${PEN_NAMES[winner].toUpperCase()} +1`, cx, mid, U * 1.3, COL.pens[winner], FONT_D, a);
+    else if (seat >= 0 && winner === sideOf(seat)) label('POINT!', cx, mid, U * 1.8, col, FONT_D, a);
+    else if (single) {
+      const who = teamsOn() ? TEAM_NAME[winner ? 1 : 0] : nameOf(winner);
+      label(`${who.toUpperCase()} +1`, cx, mid, U * 1.3, teamsOn() ? COL.pens[winner ? 1 : 0] : penOf(winner), FONT_D, a);
+    }
     else label('HIT!', cx, mid, U * 1.6, COL.graphite, FONT_D, a);
   } else if (state === 'matchEnd') {
-    if (!online) {
-      const won = scores[p] >= settings.winScore;
-      label(won ? 'YOU WIN!' : 'YOU LOSE', cx, top + h * 0.3, U * (won ? 1.7 : 1.4), won ? col : COL.graphite, FONT_D);
-      label(`${scores[p]} : ${scores[1 - p]}`, cx, top + h * 0.52, U * 0.8, COL.graphite, FONT_D, 0.8);
-    } else {
-      let champ = 0; scores.forEach((v, i) => { if (v > scores[champ]) champ = i; });
-      const won = champ === seat;
-      label(won ? 'YOU WIN!' : `${PEN_NAMES[champ]} wins`, cx, mid, U * (won ? 1.7 : 1.2), COL.pens[champ], FONT_D);
-      label(scores.join(' : '), cx, mid + U * 1.4, U * 0.7, COL.graphite, FONT_D, 0.8);
-      if (mode === 'guest' && !isLeader) label(dedicatedGame ? 'Waiting for the player who made the game…' : 'Waiting for the host…', cx, mid + U * 2.3, U * 0.32, COL.graphite, FONT_B, 0.8);
-    }
+    drawMatchEnd(p, seat);
     if (stateT > 1.2) for (const it of endItems()) drawChip(it, it.kind === 'rematch', col);
   }
 }
@@ -2373,6 +2992,17 @@ function render() {
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (ringOf(c, r) === sdClosed && !walls[r][c]) ctx.fillRect(c * P, r * P, P, P);
     ctx.globalAlpha = 1;
   }
+  const matchOn = state !== 'title' && !NET_SCREENS.includes(state);
+  if (settings.game === 'hill' && matchOn) {
+    // the hill: tinted in the colour of the tank holding it; grey and blinking while it is fought over
+    const hx = COLS / 2 * P, hy = ROWS / 2 * P, hr = C.HILL_R * P, held = hillHolder >= 0;
+    const hc = held ? penOf(hillHolder) : COL.graphite;
+    const blink = hillHolder === -2 && !REDUCED && Math.floor(performance.now() / 180) % 2 === 0;
+    ctx.beginPath(); ctx.arc(hx, hy, hr, 0, Math.PI * 2);
+    ctx.fillStyle = hc; ctx.globalAlpha = held ? 0.16 : blink ? 0.12 : 0.05; ctx.fill();
+    ctx.strokeStyle = hc; ctx.globalAlpha = held ? 0.9 : 0.5; ctx.lineWidth = Math.max(2, P * 0.06);
+    ctx.setLineDash([P * 0.26, P * 0.18]); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
   for (const m of marks) drawMark(m);
   for (const k of pickups) drawPickup(k);
   for (const mn of mines) drawMine(mn);
@@ -2382,7 +3012,7 @@ function render() {
   for (const t of tanks) {
     if (!t.alive || t.charge <= 0 || !t.laserPath) continue;
     const k = 1 - t.charge / C.LASER_CHARGE;
-    ctx.strokeStyle = COL.pens[t.id]; ctx.lineWidth = P * (0.025 + 0.05 * k);
+    ctx.strokeStyle = penOf(t.id); ctx.lineWidth = P * (0.025 + 0.05 * k);
     ctx.globalAlpha = 0.3 + 0.5 * k; ctx.setLineDash([P * 0.16, P * 0.12]);
     drawPath(t.laserPath); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
@@ -2392,7 +3022,7 @@ function render() {
     const life = b.life || C.BULLET_LIFE, fw = Math.min(0.6, life * 0.3);
     const fade = b.age > life - fw ? Math.max(0.15, (life - b.age) / fw) : 1;
     const tr = b.trail, n = tr.length / 2;
-    ctx.strokeStyle = COL.pens[b.owner]; ctx.lineWidth = C.BULLET_R * P * 1.1;
+    ctx.strokeStyle = penOf(b.owner); ctx.lineWidth = C.BULLET_R * P * 1.1;
     for (let i = 1; i < n; i++) {
       ctx.globalAlpha = 0.55 * (i / n) * fade;
       ctx.beginPath(); ctx.moveTo(tr[i * 2 - 2] * P, tr[i * 2 - 1] * P); ctx.lineTo(tr[i * 2] * P, tr[i * 2 + 1] * P); ctx.stroke();
@@ -2400,7 +3030,7 @@ function render() {
     ctx.globalAlpha = fade; ctx.fillStyle = COL.graphite;
     ctx.beginPath(); ctx.arc(b.x * P, b.y * P, Math.max(2.5, C.BULLET_R * P), 0, Math.PI * 2); ctx.fill();
     if (b.pierce) {                                      // a piercing shot wears a ring, so it reads as different from a bullet
-      ctx.strokeStyle = COL.pens[b.owner]; ctx.lineWidth = Math.max(1.5, P * 0.04);
+      ctx.strokeStyle = penOf(b.owner); ctx.lineWidth = Math.max(1.5, P * 0.04);
       ctx.beginPath(); ctx.arc(b.x * P, b.y * P, C.BULLET_R * P * 2.2, 0, Math.PI * 2); ctx.stroke();
     }
   }
@@ -2411,16 +3041,22 @@ function render() {
     const tg = tanks[m.target];
     if (m.type !== 'homing' || !tg || !tg.alive || tg.id === m.owner) continue;
     const pulse = REDUCED ? 0 : 0.05 * Math.sin(m.age * 10);
-    ctx.strokeStyle = COL.pens[m.owner]; ctx.lineWidth = Math.max(1.5, P * 0.04); ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = penOf(m.owner); ctx.lineWidth = Math.max(1.5, P * 0.04); ctx.globalAlpha = 0.8;
     ctx.setLineDash([P * 0.14, P * 0.1]); ctx.beginPath(); ctx.arc(tg.x * P, tg.y * P, P * (0.5 + pulse), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     ctx.globalAlpha = 1;
   }
-  for (const t of tanks) if (t.alive) drawTank(t);
+  if (!NET_SCREENS.includes(state)) for (const t of tanks) if (t.alive) drawTank(t);
+  if (state === 'countdown' && !twoSided() && tanks[mySeat]) {
+    // which tank is mine: a ring closes in on it while the round counts down
+    const t = tanks[mySeat], k = REDUCED ? 0.5 : (stateT % 0.65) / 0.65;
+    ctx.strokeStyle = penOf(mySeat); ctx.lineWidth = Math.max(2, P * 0.06); ctx.globalAlpha = 0.85 - 0.5 * k;
+    ctx.beginPath(); ctx.arc(t.x * P, t.y * P, P * (1.25 - 0.6 * k), 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+  }
   for (const m of missiles) drawMissile(m);
 
   for (const b of beams) {
     const k = b.life / b.max;
-    ctx.globalAlpha = k; ctx.strokeStyle = COL.pens[b.owner]; ctx.lineWidth = P * 0.18 * (0.5 + 0.5 * k); drawPath(b.path);
+    ctx.globalAlpha = k; ctx.strokeStyle = penOf(b.owner); ctx.lineWidth = P * 0.18 * (0.5 + 0.5 * k); drawPath(b.path);
     ctx.strokeStyle = COL.paper; ctx.lineWidth = P * 0.05; drawPath(b.path);
   }
   for (const r of rings) {
@@ -2436,17 +3072,18 @@ function render() {
   ctx.globalAlpha = 1;
   ctx.restore();
 
-  const menuish = state === 'title' || NET_SCREENS.includes(state);
-  if (menuish || state === 'matchEnd') {
+  const menuish = state === 'title' || NET_SCREENS.includes(state), wide = !!lobbyFrames();
+  if (wide) { ctx.globalAlpha = 0.93; ctx.fillStyle = COL.paper; ctx.fillRect(0, 0, LW, LH); ctx.globalAlpha = 1; }
+  else if (menuish || state === 'matchEnd') {
     ctx.globalAlpha = menuish ? 0.9 : 0.72; ctx.fillStyle = COL.paper;
     ctx.fillRect(AX + 2, AY + 2, AW - 4, AH - 4); ctx.globalAlpha = 1;
   }
-  if (mode === 'local' && !NET_SCREENS.includes(state)) {
+  if (twoSided()) {
     for (let p = 0; p < 2; p++) forPlayer(p, () => { drawStrip(p, p); drawOverlay(p, p); });
   } else {
     // one person per device: their controls along the bottom, everyone's scores along the top
     drawStrip(0, mySeat);
-    drawTopBoard();
+    if (!wide) drawTopBoard();
     if (NET_SCREENS.includes(state)) drawNetScreen(); else drawOverlay(0, mySeat);
   }
 }
@@ -2478,7 +3115,8 @@ canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
   audioInit();
   const q = toLogical(e);
-  const oneScreen = mode === 'local' && !NET_SCREENS.includes(state);
+  if (nameOpen) { closeName(true); return; }
+  const oneScreen = twoSided();
   const p = !oneScreen || q.y > LH / 2 ? 0 : 1;   // which half of the screen = which player (online: one person per screen)
   const f = toPlayerFrame(p, q.x, q.y);
   const inMatch = state !== 'title';
@@ -2491,7 +3129,7 @@ canvas.addEventListener('pointerdown', e => {
   // the small switches at the edge
   if (near(sp.sound, 46)) { setMuted(!muted); return; }
   if (near(sp.quit, 60)) {
-    if (performance.now() - quitArm < 2500) goMenu(); else quitArm = performance.now();
+    if (quitArm > 0 && performance.now() - quitArm < 2500) goMenu(); else quitArm = performance.now();
     return;
   }
   if (state === 'title') { const it = hitItem(menuItems(), f); if (it) applyMenu(it); return; }
@@ -2528,17 +3166,22 @@ canvas.addEventListener('lostpointercapture', release);
 
 // stop the browser from scrolling, zooming or selecting while four thumbs are on the glass
 for (const type of ['touchstart', 'touchmove', 'touchend']) {
-  document.addEventListener(type, e => { if (type === 'touchend') audioInit(); if (e.cancelable) e.preventDefault(); }, { passive: false });
+  document.addEventListener(type, e => {
+    if (type === 'touchend') audioInit();
+    if (e.target && e.target.closest && e.target.closest('#namebox')) return;      // the name box takes ordinary taps
+    if (e.cancelable) e.preventDefault();
+  }, { passive: false });
 }
 for (const type of ['gesturestart', 'gesturechange', 'contextmenu', 'dblclick', 'selectstart']) {
-  document.addEventListener(type, e => e.preventDefault());
+  document.addEventListener(type, e => { if (!(e.target && e.target.closest && e.target.closest('#namebox'))) e.preventDefault(); });
 }
 
-// keyboard, for trying it on a computer: arrows + Enter, and W A S D + Space. In the menu: 1 2 3 4 = ammo, P = power-ups, M = maps, N = first to.
+// keyboard, for trying it on a computer: arrows + Enter, and W A S D + Space.
+// In the menu: G = game mode, C = computer tanks, 1 2 3 4 = ammo, P = power-ups, B = breakable walls, M = maps, N = match length.
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'enter'].includes(k)) e.preventDefault();
-  if (e.repeat) return;
+  if (e.repeat || nameOpen) return;
   audioInit();
   keys.add(k);
   if (state === 'title') {
@@ -2547,7 +3190,10 @@ addEventListener('keydown', e => {
     else if (['1', '2', '3', '4'].includes(k)) setAmmoMode(AMMO_MODES[+k - 1]);
     else if (k === 'p') { settings.powerups = !settings.powerups; saveSettings(); }
     else if (k === 'm') { settings.maps = MAP_POOLS[(MAP_POOLS.indexOf(settings.maps) + 1) % MAP_POOLS.length]; saveSettings(); }
-    else if (k === 'n') { settings.winScore = WIN_SCORES[(WIN_SCORES.indexOf(settings.winScore) + 1) % WIN_SCORES.length]; saveSettings(); }
+    else if (k === 'n') { settings.winScore = WIN_SCORES[(WIN_SCORES.indexOf(settings.winScore) + 1) % WIN_SCORES.length]; saveSettings(); menuFocus = 'win'; }
+    else if (k === 'g') { settings.game = nextOf(GAME_MODES, settings.game); saveSettings(); menuFocus = 'game'; }
+    else if (k === 'b') { settings.soft = !settings.soft; saveSettings(); menuFocus = 'soft'; }
+    else if (k === 'c') { settings.cpu = (settings.cpu + 1) % 4; saveSettings(); menuFocus = 'cpu'; }
     return;
   }
   if (k === 'escape') { if (state === 'joinCode') { state = 'online'; netMsg = ''; } else goMenu(); return; }
@@ -2563,7 +3209,7 @@ addEventListener('keydown', e => {
     if (stateT > 1.2 && (k === ' ' || k === 'enter')) { if (mode === 'host') hostStart(); else if (mode === 'guest') { if (isLeader) sendCmd('rematch'); } else startMatch(); }
     return;
   }
-  if (mode !== 'local') { if ([' ', 'enter', 'f', 'm', '/'].includes(k)) pressFireFrom(0); return; }
+  if (mode !== 'local' || soloMatch) { if ([' ', 'enter', 'f', 'm', '/'].includes(k)) pressFireFrom(0); return; }
   if (k === 'enter' || k === '/' || k === 'm') pressFire(0);
   if (k === ' ' || k === 'f') pressFire(1);
 });
@@ -2581,7 +3227,7 @@ if (document.fonts && document.fonts.load) {
 function start(data) {
   if (data && validSettings(data.settings)) settings = validSettings(data.settings);
   mapOrder = mapPool();
-  if (data && Array.isArray(data.scores) && data.scores.length === 2 && data.inMatch &&
+  if (data && Array.isArray(data.scores) && data.scores.length === 2 && data.inMatch && settings.game === 'classic' &&
       data.scores.every(n => Number.isInteger(n) && n >= 0 && n < settings.winScore)) {
     scores = data.scores.slice(); mapIdx = (data.mapIdx | 0) || 0; resumeMatch = true;
   }
@@ -2592,7 +3238,7 @@ function start(data) {
 }
 const hot = window.claude && window.claude.hot;
 if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores : [0, 0], mapIdx, settings: savedSettings || settings,
-  inMatch: mode === 'local' && state !== 'title' && state !== 'matchEnd' && !NET_SCREENS.includes(state) }));
+  inMatch: mode === 'local' && !soloMatch && settings.game === 'classic' && state !== 'title' && state !== 'matchEnd' && !NET_SCREENS.includes(state) }));
 
 // hooks for testing from the console
 window.__tank = {
@@ -2610,7 +3256,13 @@ window.__tank = {
   net: { hostGame, joinGame, createGame, startHosting, sendCmd, get isLeader() { return isLeader; }, get dedicated() { return dedicatedGame; }, hostStart, hostLobby, goOnline, netItems, buildSnap, typeKey,
     get mode() { return mode; }, get seats() { return seats; }, get code() { return netCode; }, get msg() { return netMsg; },
     get mySeat() { return mySeat; }, get rtt() { return rttMs; }, get direct() { return mode === 'host' ? [...guests.values()].filter(x => linkOpen(x.u)).length : linkOpen(gU) ? 1 : 0; }, get netRtt() { return netRttMs; }, get interp() { return interpMs; }, get viewFlip() { return viewFlip; }, get guests() { return guests; }, get snaps() { return snaps; }, get NP() { return NP; } },
-  get tanksNow() { return tanks; }
+  get tanksNow() { return tanks; },
+  get bots() { return bots; }, get teamOf() { return teamOf; }, get names() { return names; }, get stats() { return stats; },
+  get soft() { return soft; }, get broken() { return broken; }, get hillHolder() { return hillHolder; }, get solo() { return soloMatch; },
+  get NP() { return NP; }, get mode() { return mode; }, get land() { return land; }, get myName() { return myName; },
+  setupLocal, beginFromMenu, applyMenu, breakWall, respawnTank, botInput, target, goalText, distField, mapPool, ROT4,
+  lobbyFrames,
+  lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };
 
 if (hot && hot.ready) hot.ready(start); else start((hot && hot.data) || {});

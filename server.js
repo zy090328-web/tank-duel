@@ -12,6 +12,7 @@ const PORT = process.env.PORT || 8080;
 const MAX_FRAME = 64 * 1024;          // nothing in this game is anywhere near this
 const MAX_GUESTS = 4;                 // 5 tanks in all
 const TEST_LAG = +process.env.TEST_LAG_MS || 0;   // tests only: delay every message this many ms
+const TEST_SPIKE = +process.env.TEST_SPIKE || 0;  // tests only: chance of an extra 150 ms stall
 const page = () => fs.readFileSync(path.join(__dirname, 'index.html'));
 
 /* ---------- http: the page, and a marker that tells the page a relay is here ---------- */
@@ -44,7 +45,13 @@ server.on('upgrade', (req, socket) => {
 function wrap(socket) {
   const c = { socket, buf: Buffer.alloc(0), alive: true, onmsg: null, onclose: null, closed: false };
   c.send = obj => {
-    if (TEST_LAG) { setTimeout(() => sendNow(obj), TEST_LAG * (0.8 + Math.random() * 0.4)); return; }
+    if (TEST_LAG) {
+      // tests only: delay with jitter and occasional stalls, but keep order like a real TCP connection
+      let t = Date.now() + TEST_LAG * (0.7 + Math.random() * 0.6) + (Math.random() < TEST_SPIKE ? 150 : 0);
+      t = Math.max(t, c.lastOut || 0); c.lastOut = t;
+      setTimeout(() => sendNow(obj), t - Date.now());
+      return;
+    }
     sendNow(obj);
   };
   const sendNow = obj => {

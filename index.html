@@ -1009,6 +1009,9 @@ const SEND_RATE = 1 / 30;     // seconds between snapshots
 // Guests draw other tanks this far in the past, so there is always a snapshot on either side.
 // It grows with the jitter actually measured on the link, so a bumpy connection stays smooth.
 let interpMs = 100, jitter = 15, lastSnapAt = 0;
+// Snapshots carry the host's clock. clockOff = (guest clock - host clock) + the fastest trip seen,
+// so 'now - clockOff' is the newest host moment that could have arrived by now.
+let clockOff = 0, clockInit = false;
 // round trip from a guest's press to the host's answer, measured by echo (ms; 0 = not measured yet)
 let rttMs = 0, lastEcho = -1;
 // the guest's own tank is moved on the guest at once and gently pulled toward what the host says
@@ -1244,8 +1247,9 @@ function hostStep(dt) {
   for (const [id, g] of guests) if (now - g.lastAt > 8000) { try { g.conn.close(); } catch (e) {} guestGone(id); }
   netAcc += dt;
   const rate = state === 'hostWait' ? 0.25 : SEND_RATE;
-  if (netAcc < rate) return;
-  netAcc = 0;
+  if (netAcc < rate - 1e-6) return;
+  netAcc -= rate;                    // keep an even rhythm: carry the remainder instead of dropping it
+  if (netAcc > rate) netAcc = 0;
   if (!guests.size) return;
   const g = buildSnap();
   if (peer && peer.broadcast) { peer.broadcast({ s: g }); return; }
@@ -1257,7 +1261,7 @@ function buildSnap() {
   while (netEvents.length && now - netEvents[0].at > 700) netEvents.shift();
   const play = state !== 'hostWait';
   return {
-    st: state, t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
+    ts: r1(now), st: state, t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
     seats, sc: scores, w: winner, dr: drawReason,
     set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps],
     T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0),
@@ -1278,7 +1282,7 @@ async function joinGame(code) {
   mode = 'guest'; mySeat = -1; netCode = code; state = 'guestWait'; stateT = 0;
   netMsg = 'Connecting to game ' + code + '…';
   snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1;
-  interpMs = 100; jitter = 15; lastSnapAt = 0; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; prevNetState = '';
+  interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; prevNetState = '';
   trails.clear(); seen.clear();
   if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'guest') return;
@@ -1292,13 +1296,14 @@ async function joinGame(code) {
     c.on('data', d => {
       if (hostConn !== c || !d || !d.s || typeof d.s !== 'object') return;
       lastArrival = performance.now();
-      if (lastSnapAt) {
-        const gap = lastArrival - lastSnapAt;
-        if (gap < 1000) {
-          jitter += (Math.abs(gap - SEND_RATE * 1000) - jitter) * 0.1;
-          interpMs = clamp(60 + jitter * 2.5, 70, 260);
-        }
-      }
+      const ts = typeof d.s.ts === 'number' && isFinite(d.s.ts) ? d.s.ts : lastArrival;
+      // place each snapshot on the host's own timeline, so bunched or late arrivals don't jerk the picture
+      const trip = lastArrival - ts;
+      if (!clockInit || trip < clockOff) { clockOff = trip; clockInit = true; }
+      else clockOff += (trip - clockOff) * 0.002;          // follow slow clock drift and route changes
+      const late = trip - clockOff;                         // how much later than the fastest delivery
+      jitter += (late - jitter) * (late > jitter ? 0.2 : 0.02);  // rise fast, fall slowly
+      interpMs = clamp(SEND_RATE * 1000 + 25 + jitter * 1.5, 60, 320);
       lastSnapAt = lastArrival;
       const echo = Array.isArray(d.s.PE) && mySeat >= 0 ? d.s.PE[mySeat] : -1;
       if (typeof echo === 'number' && echo > lastEcho && echo <= lastArrival) {
@@ -1306,7 +1311,10 @@ async function joinGame(code) {
         const sample = Math.max(1, lastArrival - echo - SEND_RATE * 500);   // minus half a snapshot interval of waiting
         rttMs = rttMs ? rttMs + (sample - rttMs) * 0.2 : sample;
       }
-      snaps.push({ at: lastArrival, g: d.s }); if (snaps.length > 40) snaps.shift();
+      const snap = { at: lastArrival, ts, g: d.s };
+      let i = snaps.length;
+      while (i > 0 && snaps[i - 1].ts > ts) i--;            // keep them in host-time order
+      snaps.splice(i, 0, snap); if (snaps.length > 40) snaps.shift();
       reconcile(d.s);
     });
     c.on('close', () => { if (hostConn === c) netLost('The host left the game.'); });
@@ -1355,14 +1363,14 @@ function guestStep(dt) {
   // a host whose tablet went to sleep or left without saying so
   if (lastArrival && performance.now() - lastArrival > 8000) { netLost('Lost contact with the host tablet.'); return; }
   if (!snaps.length) return;
-  const rt = performance.now() - interpMs;
+  const rt = performance.now() - clockOff - interpMs;    // the host moment to draw, on the host's clock
   // drop snapshots that are older than the pair we need
-  while (snaps.length > 2 && snaps[1].at <= rt) applySnapEvents(snaps.shift().g);
+  while (snaps.length > 2 && snaps[1].ts <= rt) applySnapEvents(snaps.shift().g);
   let a = snaps[0], b = snaps.length > 1 ? snaps[1] : snaps[0];
-  if (b.at > rt && a.at > rt) b = a;                                  // only future data: hold the oldest
-  const k = b === a ? 1 : clamp((rt - a.at) / Math.max(1, b.at - a.at), 0, 1);
+  if (b.ts > rt && a.ts > rt) b = a;                                  // only future data: hold the oldest
+  const k = b === a ? 1 : clamp((rt - a.ts) / Math.max(1, b.ts - a.ts), 0, 1);
   applyDiscrete(b.g, dt);
-  if (b.at <= rt) applySnapEvents(b.g);
+  if (b.ts <= rt) applySnapEvents(b.g);
   applyEntities(a.g, b.g, k, dt);
   predictStep(dt);
 }

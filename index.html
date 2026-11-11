@@ -1527,11 +1527,17 @@ let P = 40, AX = 0, AY = 0, AW = 0, AH = 0, S = 120;   // cell size (px), arena 
 let U = 40;                         // menu and banner unit: 1/11 of the arena width, the same on every map size
 let JR = 50, FR = 50, JX0 = 0, FX0 = 0, CY0 = 0;
 
+// Online, one person holds each device, so a wide screen stays wide: stick on the left, arena in
+// the middle, fire on the right. On one screen two players sit at the short ends instead.
+let land = false, layoutKey = '';
+const onlineLayout = () => mode !== 'local' || NET_SCREENS.includes(state);
+const wantKey = () => `${window.innerWidth}x${window.innerHeight}|${onlineLayout()}`;
 function resize() {
   sw = window.innerWidth; sh = window.innerHeight;
   dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  layoutKey = wantKey();
   // Players sit at the two short ends. If a touch screen is held wide, turn the whole game 90 degrees.
-  rotated = sw > sh && IS_TOUCH;
+  rotated = sw > sh && IS_TOUCH && !onlineLayout();
   LW = rotated ? sh : sw; LH = rotated ? sw : sh;
   canvas.width = Math.max(1, Math.round(sw * dpr)); canvas.height = Math.max(1, Math.round(sh * dpr));
   layout();
@@ -1539,6 +1545,18 @@ function resize() {
 // Fit the current map into the screen. The arena takes the same space whatever the grid size; only the cells change.
 function layout() {
   if (!LW) return;
+  land = onlineLayout() && LW > LH;
+  if (land) {
+    // side panels for the two thumbs; the square arena takes the full height between them
+    const side = Math.max(LW * 0.18, 140);
+    P = Math.max(6, Math.min((LH - 16) / ROWS, (LW - 2 * side) / COLS));
+    AW = P * COLS; AH = P * ROWS; AX = (LW - AW) / 2; AY = (LH - AH) / 2; S = AX;
+    U = AW / 11;
+    JR = FR = Math.min(S * 0.36, LH * 0.2, 72);
+    JX0 = S / 2; FX0 = LW - S / 2; CY0 = LH * 0.64;
+    buildStatic();
+    return;
+  }
   const sMin = Math.max(LH * 0.17, 118);
   P = Math.max(6, Math.min((LW - 12) / COLS, (LH - 2 * sMin) / ROWS));
   AW = P * COLS; AH = P * ROWS; AX = (LW - AW) / 2; AY = (LH - AH) / 2; S = AY;
@@ -1817,21 +1835,31 @@ function drawMark(m) {
   ctx.restore();
 }
 
+// where the small sound and quit/leave switches sit (shared by drawing and touch)
+function switchSpots() {
+  const inMatch = state !== 'title' && !NET_SCREENS.includes(state);
+  if (land) {
+    const size = Math.min(16, S * 0.09), y = LH - 16;
+    return { size, sound: { x: JX0, y }, quit: inMatch ? { x: FX0, y } : null };
+  }
+  const size = Math.min(17, S * 0.12), y = LH - 19;
+  return { size, sound: { x: inMatch ? LW / 2 - 50 : LW / 2, y }, quit: inMatch ? { x: LW / 2 + 50, y } : null };
+}
+
 function drawStrip(p, seat) {
   const pl = players[p];
   const online = mode !== 'local';
   // switches at the edge: sound, and back to the menu (two taps, so a slip does not end the match)
   const edgeSwitches = () => {
-    const ms = Math.min(17, S * 0.12), ly = LH - 19, inMatch = state !== 'title' && !NET_SCREENS.includes(state);
-    const sx = inMatch ? LW / 2 - 50 : LW / 2;
-    label(muted ? 'sound off' : 'sound on', sx, ly, ms, COL.graphite, FONT_B, 0.65);
-    if (inMatch) label(performance.now() - quitArm < 2500 ? (online ? 'leave? tap again' : 'quit? tap again') : (online ? 'leave' : 'menu'), LW / 2 + 50, ly, ms, COL.graphite, FONT_B, 0.65);
+    const sp = switchSpots();
+    label(muted ? 'sound off' : 'sound on', sp.sound.x, sp.sound.y, sp.size, COL.graphite, FONT_B, 0.65);
+    if (sp.quit) label(performance.now() - quitArm < 2500 ? (online ? 'leave? tap again' : 'quit? tap again') : (online ? 'leave' : 'menu'), sp.quit.x, sp.quit.y, sp.size, COL.graphite, FONT_B, 0.65);
   };
   const t = tanks[seat];
   if (!t || NET_SCREENS.includes(state)) {
     // online and not driving a tank (waiting, or watching a match that started without us)
     ctx.fillStyle = COL.graphite; ctx.globalAlpha = 0.5; ctx.fillRect(0, LH - 5, LW, 5); ctx.globalAlpha = 1;
-    if (!NET_SCREENS.includes(state)) label('watching', LW / 2, CY0, Math.min(S * 0.3, LW * 0.08), COL.graphite, FONT_D, 0.7);
+    if (!NET_SCREENS.includes(state)) label('watching', land ? FX0 : LW / 2, CY0, Math.min(S * 0.3, LW * 0.08, 40), COL.graphite, FONT_D, 0.7);
     edgeSwitches();
     return;
   }
@@ -1895,6 +1923,11 @@ function drawStrip(p, seat) {
     label(String(scores[p]), LW / 2 - gap, CY0, fs, col, FONT_D, 1, 'right');
     label(':', LW / 2, CY0 - fs * 0.04, fs * 0.8, COL.graphite, FONT_D, 0.7);
     label(String(scores[1 - p]), LW / 2 + gap, CY0, fs * 0.72, other, FONT_D, 0.85, 'left');
+  } else if (land) {
+    // landscape: my score at the top of the fire side, everyone's on the stick side
+    const f2 = Math.min(S * 0.32, LH * 0.14, 56);
+    label(String(scores[seat] | 0), FX0, LH * 0.13, f2, col, FONT_D);
+    label('of ' + settings.winScore, FX0, LH * 0.13 + f2 * 0.62, f2 * 0.34, COL.graphite, FONT_B, 0.7);
   } else {
     // online the whole table is along the top; here just my own score and the target
     label(String(scores[seat] | 0), LW / 2, CY0 - fs * 0.12, fs, col, FONT_D);
@@ -1905,16 +1938,18 @@ function drawStrip(p, seat) {
 
 // online: the strip at the top of the tablet shows every tank's score and the game code
 function drawTopBoard() {
-  const midY = S / 2;
-  ctx.fillStyle = COL.graphite; ctx.globalAlpha = 0.5; ctx.fillRect(0, 0, LW, 4); ctx.globalAlpha = 1;
+  // portrait: a band along the top; landscape: the top of the stick-side panel
+  const cx = land ? JX0 : LW / 2, panelW = land ? S : LW;
+  const infoY = land ? 18 : Math.min(S * 0.22, 26), rowY = land ? Math.min(LH * 0.16, 64) : S / 2 + S * 0.06;
+  ctx.fillStyle = COL.graphite; ctx.globalAlpha = 0.5; ctx.fillRect(0, 0, land ? S : LW, 4); ctx.globalAlpha = 1;
   const role = mode === 'host' ? 'hosting' : mode === 'guest' ? 'joined' : '';
-  const info = netCode ? `game ${netCode} · ${role}` : 'online';
-  label(info, LW / 2, Math.min(S * 0.22, 26), Math.min(17, S * 0.12), COL.graphite, FONT_B, 0.7);
+  const info = netCode ? `game ${netCode} \u00b7 ${role}` : 'online';
+  label(info, cx, infoY, Math.min(17, (land ? LH : S) * 0.12), COL.graphite, FONT_B, 0.7);
   const n = NET_SCREENS.includes(state) ? 0 : NP;
   if (!n) return;
-  const w = Math.min(LW / n, 130), x0 = LW / 2 - w * (n - 1) / 2, r = Math.min(S * 0.17, w * 0.2, 22);
+  const w = Math.min(panelW / n, 130), x0 = cx - w * (n - 1) / 2, r = Math.min((land ? LH : S) * 0.17, w * 0.2, 22);
   for (let i = 0; i < n; i++) {
-    const t = tanks[i], x = x0 + i * w, y = midY + S * 0.06, col = COL.pens[i];
+    const t = tanks[i], x = x0 + i * w, y = rowY, col = COL.pens[i];
     const out = t && (t.gone || (!t.alive && (state === 'play' || state === 'ending')));
     ctx.globalAlpha = out ? 0.3 : 1; ctx.fillStyle = col;
     ctx.beginPath(); ctx.arc(x - r * 1.2, y, r * 0.75, 0, Math.PI * 2); ctx.fill();
@@ -1968,6 +2003,7 @@ function drawNetScreen() {
     line(usingRelay ? 'Players can be anywhere with internet.' : 'All tablets on the same Wi-Fi.', 2.75, 0.3);
     line('One hosts; the others join with its code.', 3.2, 0.3);
     line('2 to 5 players', 6.5, 0.3, ink, FONT_B, 0.7);
+    if (IS_TOUCH && LH > LW) line('Tip: turn the device sideways for the best controls.', 8.3, 0.27, accent, FONT_B);
     if (netMsg) line(netMsg, 7.4, 0.26, ink, FONT_B, 0.85);
   } else if (state === 'joinCode') {
     line('Enter the game code', 1.1, 0.6, accent, FONT_D);
@@ -2173,6 +2209,7 @@ function render() {
 /* ---------- main loop: fixed time step ---------- */
 let last = 0, acc = 0;
 function frame(now) {
+  if (wantKey() !== layoutKey) resize();
   if (!last) last = now;
   acc += Math.min(0.1, (now - last) / 1000); last = now;
   while (acc >= C.STEP) { update(C.STEP); acc -= C.STEP; }
@@ -2200,18 +2237,17 @@ canvas.addEventListener('pointerdown', e => {
   const p = !oneScreen || q.y > LH / 2 ? 0 : 1;   // which half of the screen = which player (online: one person per screen)
   const f = toPlayerFrame(p, q.x, q.y);
   const inMatch = state !== 'title';
+  const sp = switchSpots(), near = (o, w) => o && Math.abs(f.x - o.x) < w && Math.abs(f.y - o.y) < 20;
   if (NET_SCREENS.includes(state)) {
-    if (f.y > LH - 38 && Math.abs(f.x - LW / 2) < 46) { setMuted(!muted); return; }
+    if (near(sp.sound, 46)) { setMuted(!muted); return; }
     const it = hitItem(netItems(), f); if (it) applyMenu(it);
     return;
   }
-  if (f.y > LH - 38) {                       // the small switches at the edge
-    const sx = inMatch ? LW / 2 - 50 : LW / 2;
-    if (Math.abs(f.x - sx) < 46) { setMuted(!muted); return; }
-    if (inMatch && f.x > LW / 2 + 4 && f.x < LW / 2 + 118) {
-      if (performance.now() - quitArm < 2500) goMenu(); else quitArm = performance.now();
-      return;
-    }
+  // the small switches at the edge
+  if (near(sp.sound, 46)) { setMuted(!muted); return; }
+  if (near(sp.quit, 60)) {
+    if (performance.now() - quitArm < 2500) goMenu(); else quitArm = performance.now();
+    return;
   }
   if (state === 'title') { const it = hitItem(menuItems(), f); if (it) applyMenu(it); return; }
   if (state === 'matchEnd') { if (stateT > 1.2) { const it = hitItem(endItems(), f); if (it) applyMenu(it); } return; }
@@ -2220,7 +2256,7 @@ canvas.addEventListener('pointerdown', e => {
     if (pl.stickId !== null) return;
     pl.stickId = e.pointerId;
     pl.ox = clamp(f.x, JR * 0.6, LW / 2 - JR * 0.3);
-    pl.oy = clamp(f.y, LH - S + JR * 0.5, LH - JR * 0.5);
+    pl.oy = land ? clamp(f.y, JR * 0.6, LH - JR * 0.6) : clamp(f.y, LH - S + JR * 0.5, LH - JR * 0.5);
     setStick(pl, f);
   } else {
     pl.fireId = e.pointerId;

@@ -1,18 +1,24 @@
-// Graph Paper Tank Duel - relay server.
-// Serves the game page and passes messages between one host tablet and its guests.
-// The host tablet still runs the game; this server only forwards. No dependencies:
-// a small WebSocket implementation (RFC 6455, text frames) sits on Node's http module.
+// Graph Paper Tank Duel - game server.
+// Serves the game page and runs online rooms. For each room created with POST /create, the server
+// starts its own copy of the game script (the same code a host tablet runs, with drawing switched
+// off) in a sandbox. That copy is the room's host; every player is a guest, so nobody's tablet or
+// connection holds the others up. Messages travel over WebSocket; the relay below also still lets
+// a tablet host a room itself. No dependencies: a small WebSocket implementation (RFC 6455, text
+// frames) sits on Node's http module.
 'use strict';
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const vm = require('vm');
 
 const PORT = process.env.PORT || 8080;
 const MAX_FRAME = 64 * 1024;          // nothing in this game is anywhere near this
 const MAX_GUESTS = 4;                 // 5 tanks in all
 const TEST_LAG = +process.env.TEST_LAG_MS || 0;   // tests only: delay every message this many ms
 const TEST_SPIKE = +process.env.TEST_SPIKE || 0;  // tests only: chance of an extra 150 ms stall
+const MAX_ROOMS = 30;                 // server-run rooms at once
+const TICK_MS = 1000 / 60;            // how often each room's game loop is driven
 const page = () => fs.readFileSync(path.join(__dirname, 'index.html'));
 
 /* ---------- http: the page, and a marker that tells the page a relay is here ---------- */
@@ -26,7 +32,20 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     return res.end(JSON.stringify({ relay: true, rooms: rooms.size }));
   }
+  if (url === '/create' && req.method === 'POST') {
+    const reply = (status, obj) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(obj)); };
+    createRoom().then(code => reply(200, { code }), e => reply(503, { error: String(e.message || e) }));
+    return;
+  }
   if (url === '/healthz') { res.writeHead(200); return res.end('ok'); }
+  if (process.env.TEST_HOOKS && url === '/test/endround' && req.method === 'POST') {
+    // tests only: in every server-run room, knock out all tanks but the first one still alive
+    for (const room of hosted) {
+      const t = room.env.__tank, alive = t.tanksNow.filter(k => k.alive);
+      if (t.state === 'play') alive.slice(1).forEach(k => t.kill(k));
+    }
+    res.writeHead(200); return res.end('ok');
+  }
   res.writeHead(404); res.end('not found');
 });
 
@@ -102,6 +121,7 @@ function wrap(socket) {
 const clients = new Set();
 setInterval(() => {
   for (const c of clients) {
+    if (c.virtual) continue;                      // server-run hosts live in this process
     if (!c.alive) { c.close(); clients.delete(c); continue; }
     c.alive = false;
     try { c.socket.write(Buffer.from([0x89, 0])); } catch (e) {}
@@ -124,6 +144,7 @@ function onClient(c) {
       rooms.set(code, { host: c, guests: new Map() });
       c.room = code; c.role = 'host';
       c.send({ t: 'hosting', code });
+      if (c.onHosting) c.onHosting(code);
     } else if (m.t === 'join' && !c.room) {
       const r = rooms.get(String(m.code));
       if (!r) { c.send({ t: 'nogame' }); return; }
@@ -159,4 +180,97 @@ function onClient(c) {
   };
 }
 
-server.listen(PORT, () => console.log(`tank duel relay on :${PORT}`));
+/* ---------- server-run rooms ---------- */
+// The game's inline script, compiled once and run in a fresh sandbox per room.
+const gameScript = (() => {
+  const m = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8').match(/<script>([\s\S]*)<\/script>/);
+  if (!m) throw new Error('game script not found in index.html');
+  return new vm.Script(m[1], { filename: 'game-host.js' });
+})();
+const hosted = new Set();
+
+// Just enough of a browser for the game to run without a screen: drawing calls go nowhere,
+// and the game loop is driven by the room's timer instead of requestAnimationFrame.
+function makeSandbox() {
+  const noop = () => {};
+  const ctx2d = new Proxy({}, { get: (t, k) => k === 'measureText' ? () => ({ width: 0 }) : noop, set: () => true });
+  const canvas = () => ({ width: 0, height: 0, style: {}, getContext: () => ctx2d, addEventListener: noop,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 700 }), setPointerCapture: noop, releasePointerCapture: noop });
+  const store = new Map();
+  let rafCb = null;
+  const env = {
+    __headless: true, console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask, AbortController,
+    performance: { now: () => performance.now() },
+    innerWidth: 1000, innerHeight: 700, devicePixelRatio: 1,
+    navigator: { maxTouchPoints: 0 },
+    matchMedia: () => ({ matches: false, addEventListener: noop, addListener: noop }),
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    document: { getElementById: () => canvas(), createElement: t => t === 'canvas' ? canvas() : { remove: noop },
+      head: { appendChild: noop }, documentElement: {}, addEventListener: noop },
+    localStorage: { getItem: k => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) },
+    addEventListener: noop, removeEventListener: noop,
+    requestAnimationFrame: cb => { rafCb = cb; return 1; },
+    location: { protocol: 'http:', host: 'server' },
+    fetch: async () => ({ ok: true, json: async () => ({ relay: true }) })
+  };
+  env.window = env;
+  env.__tick = () => { const cb = rafCb; rafCb = null; if (cb) cb(performance.now()); };
+  return env;
+}
+
+function createRoom() {
+  return new Promise((resolve, reject) => {
+    if (hosted.size >= MAX_ROOMS) { reject(new Error('The server is full. Try again in a few minutes.')); return; }
+    const env = makeSandbox();
+    const room = { env, client: null, code: null, timer: null, emptySince: Date.now(), everJoined: false, done: false };
+    const fail = setTimeout(() => { destroy(room); reject(new Error('room did not start')); }, 5000);
+    // The game opens a WebSocket to its relay; here that socket is a pipe into this process.
+    env.WebSocket = class {
+      constructor() {
+        this.readyState = 1;
+        const ws = this;
+        const c = this._c = {
+          virtual: true, closed: false, alive: true,
+          send: obj => { const data = JSON.stringify(obj); setImmediate(() => { if (!c.closed && ws.onmessage) ws.onmessage({ data }); }); },
+          close: () => { if (c.closed) return; c.closed = true; if (c.onclose) c.onclose(); setImmediate(() => { if (ws.onclose) ws.onclose(); }); },
+          onHosting: code => { room.code = code; clearTimeout(fail); resolve(code); }
+        };
+        room.client = c;
+        onClient(c);
+      }
+      send(str) {
+        const c = this._c;
+        if (c.closed) return;
+        let m; try { m = JSON.parse(str); } catch (e) { return; }
+        setImmediate(() => { if (!c.closed && c.onmsg) c.onmsg(m); });
+      }
+      close() { this._c.close(); }
+    };
+    vm.createContext(env);
+    try { gameScript.runInContext(env); env.__tank.net.hostGame(); }
+    catch (e) { clearTimeout(fail); destroy(room); reject(e); return; }
+    hosted.add(room);
+    room.timer = setInterval(() => {
+      try { env.__tick(); } catch (e) { console.error('room', room.code, e); destroy(room); return; }
+      if (room.code) watch(room);
+    }, TICK_MS);
+  });
+}
+
+// Close a room once nobody is in it (sooner if someone had joined), or if its game gave up.
+function watch(room) {
+  if (room.env.__tank.net.mode !== 'host') { destroy(room); return; }
+  const r = rooms.get(room.code), n = r ? r.guests.size : 0;
+  if (n > 0) { room.everJoined = true; room.emptySince = 0; return; }
+  if (!room.emptySince) room.emptySince = Date.now();
+  if (Date.now() - room.emptySince > (room.everJoined ? 15000 : 60000)) destroy(room);
+}
+function destroy(room) {
+  if (room.done) return;
+  room.done = true;
+  clearInterval(room.timer);
+  hosted.delete(room);
+  if (room.client) room.client.close();      // tells anyone left that the game has ended
+}
+
+server.listen(PORT, () => console.log(`tank duel server on :${PORT}`));

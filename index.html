@@ -1004,6 +1004,13 @@ function update(dt) {
    only introduces them, using the 4-digit game code.
    ============================================================ */
 const NET_SCREENS = ['online', 'joinCode', 'hostWait', 'guestWait', 'netLost'];
+// On the game's server each room runs this same script with no screen ('headless'). That copy is the
+// host but drives no tank: every player is a guest, and the first player still connected leads the room
+// (picks settings, presses START, Rematch and Lobby).
+const HEADLESS = !!window.__headless;
+const hostSeats = () => HEADLESS ? [] : ['host'];
+const leaderId = () => seats.find(id => guests.has(id)) || guests.keys().next().value || null;
+let dedicatedGame = false, isLeader = false, sentPrefs = false;   // guest's view of a server-run room
 const PEER_PREFIX = 'graph-paper-tank-duel-v1-';
 const SEND_RATE = 1 / 30;     // seconds between snapshots
 // Guests draw other tanks this far in the past, so there is always a snapshot on either side.
@@ -1168,7 +1175,7 @@ function netLost(msg) {
 /* ---------- host ---------- */
 async function hostGame() {
   netLeave();
-  mode = 'host'; mySeat = 0; seats = ['host']; state = 'hostWait'; stateT = 0;
+  mode = 'host'; mySeat = HEADLESS ? -1 : 0; seats = hostSeats(); state = 'hostWait'; stateT = 0;
   netMsg = 'Opening the game…';
   if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'host') return;
@@ -1203,13 +1210,24 @@ function acceptGuest(conn) {
 const num = (v, lo, hi) => typeof v === 'number' && isFinite(v) ? clamp(v, lo, hi) : 0;
 function hostData(id, d) {
   const g = guests.get(id);
-  if (!g || !d || typeof d !== 'object' || !Array.isArray(d.i)) return;
+  if (!g || !d || typeof d !== 'object') return;
+  if (typeof d.c === 'string') {
+    // room commands are only taken from the player who leads a server-run room
+    if (!HEADLESS || leaderId() !== id) return;
+    g.lastAt = performance.now();
+    if (d.c === 'set' && state === 'hostWait') { const v = validSettings(d.v); if (v) { settings = v; mapOrder = mapPool(); } }
+    else if (d.c === 'start' && state === 'hostWait') hostStart();
+    else if (d.c === 'rematch' && state === 'matchEnd') hostStart();
+    else if (d.c === 'lobby' && state === 'matchEnd') hostLobby();
+    return;
+  }
+  if (!Array.isArray(d.i)) return;
   g.lastAt = performance.now();
   if (typeof d.p === 'number' && isFinite(d.p)) g.echo = Math.round(d.p * 10) / 10;
   g.inp = [num(d.i[0], -1, 1), num(d.i[1], -1, 1), num(d.i[2], 0, 1)];
   const f = Math.floor(num(d.i[3], 0, 1e9));
   if (g.lastFire === null) g.lastFire = f;
-  if (f > g.lastFire) { g.lastFire = f; const s = seats.indexOf(id); if (s > 0) pressFire(s); }
+  if (f > g.lastFire) { g.lastFire = f; const s = seats.indexOf(id); if (s >= hostSeats().length) pressFire(s); }
 }
 function remoteInput(seat) {
   const g = guests.get(seats[seat]);
@@ -1228,14 +1246,16 @@ function guestGone(id) {
   if (t) { t.gone = true; if (t.alive && (state === 'play' || state === 'ending')) kill(t); else t.alive = false; }
 }
 function hostStart() {
-  seats = ['host', ...seats.slice(1).filter(id => guests.has(id))];
+  const hs = hostSeats();
+  seats = [...hs, ...seats.slice(hs.length).filter(id => guests.has(id))];
   if (seats.length < 2) { hostLobby(); return; }
   setTankCount(seats.length);
   startMatch();
 }
 // back to the waiting room with whoever is still connected
 function hostLobby() {
-  seats = ['host', ...seats.slice(1).filter(id => guests.has(id))];
+  const hs = hostSeats();
+  seats = [...hs, ...seats.slice(hs.length).filter(id => guests.has(id))];
   for (const id of guests.keys()) if (seats.length < MAX_PLAYERS && !seats.includes(id)) seats.push(id);
   setTankCount(2); scores = [0, 0]; loadMap(0); resetEntities(); layout();
   state = 'hostWait'; stateT = 0;
@@ -1246,7 +1266,7 @@ function hostStep(dt) {
   const now = performance.now();
   for (const [id, g] of guests) if (now - g.lastAt > 8000) { try { g.conn.close(); } catch (e) {} guestGone(id); }
   netAcc += dt;
-  const rate = state === 'hostWait' ? 0.25 : SEND_RATE;
+  const rate = state === 'hostWait' ? (HEADLESS ? 0.1 : 0.25) : SEND_RATE;
   if (netAcc < rate - 1e-6) return;
   netAcc -= rate;                    // keep an even rhythm: carry the remainder instead of dropping it
   if (netAcc > rate) netAcc = 0;
@@ -1261,7 +1281,7 @@ function buildSnap() {
   while (netEvents.length && now - netEvents[0].at > 700) netEvents.shift();
   const play = state !== 'hostWait';
   return {
-    ts: r1(now), st: state, t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
+    ts: r1(now), dd: HEADLESS ? 1 : 0, ld: HEADLESS ? leaderId() : null, st: state, t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
     seats, sc: scores, w: winner, dr: drawReason,
     set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps],
     T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0),
@@ -1281,7 +1301,7 @@ async function joinGame(code) {
   savedSettings = settings; settings = Object.assign({}, settings);
   mode = 'guest'; mySeat = -1; netCode = code; state = 'guestWait'; stateT = 0;
   netMsg = 'Connecting to game ' + code + '…';
-  snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1;
+  snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1; dedicatedGame = false; isLeader = false; sentPrefs = false;
   interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; prevNetState = '';
   trails.clear(); seen.clear();
   if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
@@ -1326,6 +1346,24 @@ async function joinGame(code) {
     if (e && e.type === 'peer-unavailable') { netLeave(); state = 'joinCode'; netMsg = m; typedCode = ''; }
     else netLost(m);
   });
+}
+function sendCmd(c, v) {
+  if (!hostConn || !hostConn.open) return;
+  try { hostConn.send(v === undefined ? { c } : { c, v }); } catch (e) {}
+}
+// a server-run room: ask the server for a new room, then join it like everyone else
+async function createGame() {
+  netLeave();
+  state = 'guestWait'; stateT = 0; netMsg = 'Creating a game\u2026';
+  try {
+    const r = await fetch('create', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok || !/^[0-9]{4}$/.test(j.code || '')) throw new Error(j.error || 'no code');
+    if (state !== 'guestWait') return;
+    joinGame(j.code);
+  } catch (e) {
+    netLost('Could not create a game right now. Check the internet connection and try again.');
+  }
 }
 function guestFire() {
   myFire++;
@@ -1426,6 +1464,9 @@ function reconcile(g) {
 function applyDiscrete(g, dt) {
   if (!g || !Array.isArray(g.seats)) return;
   mySeat = g.seats.indexOf(myId);
+  dedicatedGame = !!g.dd; isLeader = dedicatedGame && g.ld === myId;
+  // the room's creator brings their own saved settings to the server's waiting room once
+  if (isLeader && !sentPrefs && g.st === 'hostWait' && savedSettings) { sentPrefs = true; sendCmd('set', savedSettings); }
   if (Array.isArray(g.set)) {
     const s = validSettings({ ammo: g.set[0], powerups: !!g.set[1], winScore: g.set[2], maps: g.set[3] });
     if (s) settings = s;
@@ -1688,6 +1729,10 @@ const menuValue = kind => kind === 'ammo' ? settings.ammo : kind === 'pu' ? sett
 function endItems() {
   const cx = LW / 2, h = U * 0.85, w = U * 3.4, g = U * 0.3;
   const y = mode === 'local' ? AY + AH / 2 + AH / 2 * 0.8 : AY + AH * 0.72;
+  if (mode === 'guest' && isLeader) return [
+    { kind: 'rematch', text: 'Rematch', x: cx - w - g / 2, y: y - h / 2, w, h },
+    { kind: 'lobby', text: 'Lobby', x: cx + g / 2, y: y - h / 2, w, h }
+  ];
   if (mode === 'guest') return [{ kind: 'leave', text: 'Leave', x: cx - w / 2, y: y - h / 2, w, h }];
   return [
     { kind: 'rematch', text: 'Rematch', x: cx - w - g / 2, y: y - h / 2, w, h },
@@ -1698,7 +1743,13 @@ function hitItem(items, f) {
   for (const it of items) if (f.x >= it.x - 3 && f.x <= it.x + it.w + 3 && f.y >= it.y - 3 && f.y <= it.y + it.h + 3) return it;
   return null;
 }
+const SETTING_KEY = { ammo: 'ammo', pu: 'powerups', maps: 'maps', win: 'winScore' };
 function applyMenu(it) {
+  if (mode === 'guest') {
+    // a guest can only steer a server-run room it leads; everything goes to the server as a request
+    if (SETTING_KEY[it.kind]) { if (isLeader) { sendCmd('set', Object.assign({}, settings, { [SETTING_KEY[it.kind]]: it.v })); sfx.tick(); } return; }
+    if (it.kind === 'start' || it.kind === 'rematch' || it.kind === 'lobby') { if (isLeader) { sendCmd(it.kind); sfx.tick(); } return; }
+  }
   if (it.kind === 'ammo') { setAmmoMode(it.v); sfx.tick(); }
   else if (it.kind === 'pu') { settings.powerups = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'maps') { settings.maps = it.v; saveSettings(); sfx.tick(); }
@@ -1709,9 +1760,13 @@ function applyMenu(it) {
   else if (it.kind === 'menu' || it.kind === 'back') goMenu();
   else if (it.kind === 'leave') goMenu();
   else if (it.kind === 'lobby') hostLobby();
-  else if (it.kind === 'host') { sfx.tick(); hostGame(); }
+  else if (it.kind === 'host') { sfx.tick(); startHosting(); }
   else if (it.kind === 'join') { sfx.tick(); state = 'joinCode'; typedCode = ''; netMsg = ''; loadTransport(); }
   else if (it.kind === 'key') typeKey(it.v);
+}
+// on the game's own server a new room runs on the server; elsewhere this device hosts
+async function startHosting() {
+  if ((await loadTransport()) && usingRelay) createGame(); else hostGame();
 }
 function typeKey(k) {
   if (k === 'del') { typedCode = typedCode.slice(0, -1); sfx.tick(); }
@@ -1730,6 +1785,7 @@ function ammoText() {
 }
 
 function buildStatic() {
+  if (HEADLESS) return;                 // the server draws nothing
   if (!LW) return;
   st.width = Math.max(1, Math.round(LW * dpr)); st.height = Math.max(1, Math.round(LH * dpr));
   const g = st.getContext('2d');
@@ -2064,7 +2120,8 @@ function seatRows(y0, gap, list) {
     const y = y0 + i * gap, col = COL.pens[i], has = i < list.length;
     ctx.globalAlpha = has ? 1 : 0.18; ctx.fillStyle = col;
     ctx.beginPath(); ctx.arc(cx - U * 2.1, y, U * 0.17, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
-    const who = !has ? 'open seat' : list[i] === 'host' ? (mode === 'host' ? 'You (host)' : 'Host') : list[i] === myId ? 'You' : 'Player ' + (i + 1);
+    const lead = dedicatedGame && has && i === 0 ? ' (leader)' : '';
+    const who = (!has ? 'open seat' : list[i] === 'host' ? (mode === 'host' ? 'You (host)' : 'Host') : list[i] === myId ? 'You' : 'Player ' + (i + 1)) + lead;
     label(`${PEN_NAMES[i]}`, cx - U * 1.75, y, U * 0.34, has ? col : COL.graphite, FONT_D, has ? 1 : 0.35, 'left');
     label(who, cx - U * 0.2, y, U * 0.3, COL.graphite, FONT_B, has ? 0.9 : 0.35, 'left');
   }
@@ -2073,7 +2130,7 @@ function netItems() {
   const cx = LW / 2, y = v => AY + U * v, items = [];
   const btn = (kind, text, yy, w, v) => items.push({ kind, text, v, x: cx - U * w / 2, y: y(yy) - U * 0.37, w: U * w, h: U * 0.74 });
   if (state === 'online') {
-    btn('host', 'Host a game', 4.4, 5);
+    btn('host', usingRelay ? 'Create a game' : 'Host a game', 4.4, 5);
     btn('join', 'Join a game', 5.5, 5);
     btn('back', 'Back', 9.6, 3);
   } else if (state === 'joinCode') {
@@ -2082,7 +2139,7 @@ function netItems() {
     keysTxt.forEach((k, i) => items.push({ kind: 'key', v: k, text: k === 'del' ? '←' : k === 'join' ? 'Join' : k,
       x: x0 + (i % 3) * (kw + gx), y: y(4.0) + Math.floor(i / 3) * (kh + gx), w: kw, h: kh }));
     btn('back', 'Back', 9.9, 3);
-  } else if (state === 'hostWait') {
+  } else if (state === 'hostWait' || (state === 'guestWait' && isLeader && !netMsg)) {
     menuItems(y(4.8), [['start', 'START'], ['leave', 'Leave']]).forEach(it => items.push(it));
   } else if (state === 'guestWait') {
     btn('leave', 'Leave', 9.6, 3);
@@ -2091,6 +2148,8 @@ function netItems() {
   }
   return items;
 }
+// who is in the waiting room: the host's own list, or the latest one a guest was sent
+const lobbySeats = () => mode === 'guest' ? (snaps.length ? (snaps[snaps.length - 1].g.seats || []) : []) : seats;
 function drawNetScreen() {
   const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite, accent = COL.pens[mode === 'guest' && mySeat >= 0 ? mySeat : 0];
   const line = (t, v, size, col, font, alpha) => label(t, cx, y(v), U * size, col || ink, font || FONT_B, alpha == null ? 1 : alpha);
@@ -2098,7 +2157,7 @@ function drawNetScreen() {
     line('Play online', 1.3, 0.8, accent, FONT_D);
     line('Each player uses their own tablet.', 2.3, 0.3);
     line(usingRelay ? 'Players can be anywhere with internet.' : 'All tablets on the same Wi-Fi.', 2.75, 0.3);
-    line('One hosts; the others join with its code.', 3.2, 0.3);
+    line(usingRelay ? 'One creates a game; the others join with its code.' : 'One hosts; the others join with its code.', 3.2, 0.3);
     line('2 to 5 players', 6.5, 0.3, ink, FONT_B, 0.7);
     if (IS_TOUCH && LH > LW) line('Tip: turn the device sideways for the best controls.', 8.3, 0.27, accent, FONT_B);
     if (netMsg) line(netMsg, 7.4, 0.26, ink, FONT_B, 0.85);
@@ -2113,15 +2172,15 @@ function drawNetScreen() {
       if (typedCode[i]) label(typedCode[i], it.x + bw / 2, it.y + it.h / 2, U * 0.8, accent, FONT_D);
     }
     if (netMsg) line(netMsg, 9.0, 0.26, COL.pens[0], FONT_B);
-  } else if (state === 'hostWait') {
+  } else if (state === 'hostWait' || (state === 'guestWait' && isLeader && !netMsg)) {
     line('Game code', 0.7, 0.4, ink, FONT_B, 0.8);
     line(netCode || '…', 1.65, 1.2, accent, FONT_D);
-    line(netMsg || 'Other tablets: Play online → Join a game → type this code.', 2.55, 0.26, ink, FONT_B, 0.8);
-    seatRows(y(3.1), U * 0.55, seats);
+    line(netMsg || 'Others: Play online → Join a game → type this code.', 2.55, 0.26, ink, FONT_B, 0.8);
+    seatRows(y(3.1), U * 0.55, lobbySeats());
     label(ammoText(), cx, y(4.8) + U * 2.08, U * 0.27, ink, FONT_B);
   } else if (state === 'guestWait') {
     line(netMsg ? 'Joining…' : 'Joined game ' + netCode, 0.9, 0.6, accent, FONT_D);
-    line(netMsg || 'Waiting for the host to start.', 1.75, 0.3, ink, FONT_B, 0.85);
+    line(netMsg || (dedicatedGame ? 'Waiting for the player who made the game to start.' : 'Waiting for the host to start.'), 1.75, 0.3, ink, FONT_B, 0.85);
     if (!netMsg) {
       seatRows(y(2.6), U * 0.6, snaps.length ? (snaps[snaps.length - 1].g.seats || []) : []);
       line(ammoText(), 6.0, 0.28, ink, FONT_B, 0.85);
@@ -2137,8 +2196,8 @@ function drawNetScreen() {
       drawChip(it, it.v === 'join' && !off, accent, it.v === 'join');
       if (off) { ctx.globalAlpha = 0.5; ctx.fillStyle = COL.paper; ctx.fillRect(it.x, it.y, it.w, it.h); ctx.globalAlpha = 1; }
     } else if (it.kind === 'start') {
-      drawChip(it, seats.length >= 2, accent, true);
-      if (seats.length < 2) label('needs 2+ players', it.x + it.w / 2, it.y + it.h + U * 0.25, U * 0.22, ink, FONT_B, 0.7);
+      drawChip(it, lobbySeats().length >= 2, accent, true);
+      if (lobbySeats().length < 2) label('needs 2+ players', it.x + it.w / 2, it.y + it.h + U * 0.25, U * 0.22, ink, FONT_B, 0.7);
     } else if (['ammo', 'pu', 'maps', 'win'].includes(it.kind)) drawChip(it, menuValue(it.kind) === it.v, accent);
     else drawChip(it, it.kind === 'host' || it.kind === 'join', accent, it.kind === 'host' || it.kind === 'join');
   }
@@ -2200,7 +2259,7 @@ function drawOverlay(p, seat) {
       const won = champ === seat;
       label(won ? 'YOU WIN!' : `${PEN_NAMES[champ]} wins`, cx, mid, U * (won ? 1.7 : 1.2), COL.pens[champ], FONT_D);
       label(scores.join(' : '), cx, mid + U * 1.4, U * 0.7, COL.graphite, FONT_D, 0.8);
-      if (mode === 'guest') label('Waiting for the host…', cx, mid + U * 2.3, U * 0.32, COL.graphite, FONT_B, 0.8);
+      if (mode === 'guest' && !isLeader) label(dedicatedGame ? 'Waiting for the player who made the game…' : 'Waiting for the host…', cx, mid + U * 2.3, U * 0.32, COL.graphite, FONT_B, 0.8);
     }
     if (stateT > 1.2) for (const it of endItems()) drawChip(it, it.kind === 'rematch', col);
   }
@@ -2310,7 +2369,7 @@ function frame(now) {
   if (!last) last = now;
   acc += Math.min(0.1, (now - last) / 1000); last = now;
   while (acc >= C.STEP) { update(C.STEP); acc -= C.STEP; }
-  render();
+  if (!HEADLESS) render();
   requestAnimationFrame(frame);
 }
 
@@ -2407,11 +2466,12 @@ addEventListener('keydown', e => {
     if (k === 'backspace') typeKey('del'); else if (k === 'enter') typeKey('join'); else typeKey(k);
     return;
   }
-  if (state === 'online') { if (k === 'h') hostGame(); else if (k === 'j') { state = 'joinCode'; typedCode = ''; } return; }
+  if (state === 'online') { if (k === 'h') startHosting(); else if (k === 'j') { state = 'joinCode'; typedCode = ''; } return; }
   if (state === 'hostWait') { if (k === 'enter' || k === ' ') hostStart(); return; }
+  if (state === 'guestWait' && isLeader) { if (k === 'enter' || k === ' ') sendCmd('start'); return; }
   if (NET_SCREENS.includes(state)) return;
   if (state === 'matchEnd') {
-    if (stateT > 1.2 && (k === ' ' || k === 'enter') && mode !== 'guest') { if (mode === 'host') hostStart(); else startMatch(); }
+    if (stateT > 1.2 && (k === ' ' || k === 'enter')) { if (mode === 'host') hostStart(); else if (mode === 'guest') { if (isLeader) sendCmd('rematch'); } else startMatch(); }
     return;
   }
   if (mode !== 'local') { if ([' ', 'enter', 'f', 'm', '/'].includes(k)) pressFireFrom(0); return; }
@@ -2458,7 +2518,7 @@ window.__tank = {
   get scores() { return scores; }, get bullets() { return bullets; }, get missiles() { return missiles; }, get pickups() { return pickups; },
   get beams() { return beams; }, get mines() { return mines; }, hit, bulletCount, POWER_TYPES, get walls() { return walls; }, get spawn() { return spawn; }, get winner() { return winner; },
   get layout() { return { LW, LH, P, AX, AY, AW, AH, S, JR, FR, JX0, FX0, CY0, rotated }; },
-  net: { hostGame, joinGame, hostStart, hostLobby, goOnline, netItems, buildSnap, typeKey,
+  net: { hostGame, joinGame, createGame, startHosting, sendCmd, get isLeader() { return isLeader; }, get dedicated() { return dedicatedGame; }, hostStart, hostLobby, goOnline, netItems, buildSnap, typeKey,
     get mode() { return mode; }, get seats() { return seats; }, get code() { return netCode; }, get msg() { return netMsg; },
     get mySeat() { return mySeat; }, get rtt() { return rttMs; }, get interp() { return interpMs; }, get viewFlip() { return viewFlip; }, get guests() { return guests; }, get snaps() { return snaps; }, get NP() { return NP; } },
   get tanksNow() { return tanks; }

@@ -1,7 +1,8 @@
 import asyncio, json, sys, time
 from playwright.async_api import async_playwright
 
-URL = 'http://127.0.0.1:8765/index.html'
+URL = sys.argv[1] if len(sys.argv) > 1 else 'http://127.0.0.1:8765/index.html'
+USE_MOCK = not (len(sys.argv) > 2 and sys.argv[2] == 'relay')
 MOCK = open('/home/claude/tests/mockpeer.js').read()
 errors = []
 
@@ -26,7 +27,7 @@ async def main():
     async with async_playwright() as pw:
         br = await pw.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--autoplay-policy=no-user-gesture-required','--disable-renderer-backgrounding','--disable-background-timer-throttling','--disable-backgrounding-occluded-windows'])
         ctx = await br.new_context(viewport={'width': 820, 'height': 1180})
-        await ctx.add_init_script(MOCK)
+        if USE_MOCK: await ctx.add_init_script(MOCK)
 
         # ---- one screen, two players: unchanged behaviour
         L = await new_page(ctx, 'local')

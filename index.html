@@ -1027,23 +1027,106 @@ let snaps = [];                // { at, g } newest last
 let lastSeq = 0, lastRound = -1, lastMap = -1, localSd = 0, myFire = 0, lastSent = '', lastSentAt = 0, prevNetState = '';
 const trails = new Map(), seen = new Map();
 
-function loadPeerJS() {
-  if (window.Peer) return Promise.resolve(true);
-  if (loadPeerJS.p) return loadPeerJS.p;
-  loadPeerJS.p = (async () => {
+// Which way devices reach each other. When this page is served by the game's own relay server
+// (it answers relay.json), everything goes through that server. Otherwise PeerJS links the tablets directly.
+let PeerImpl = null, usingRelay = false;
+function loadTransport() {
+  if (PeerImpl) return Promise.resolve(true);
+  if (loadTransport.p) return loadTransport.p;
+  loadTransport.p = (async () => {
+    try {
+      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 3000);
+      const r = await fetch('relay.json', { cache: 'no-store', signal: ctl.signal });
+      clearTimeout(timer);
+      if (r.ok && (await r.json()).relay === true) { PeerImpl = RelayPeer; usingRelay = true; return true; }
+    } catch (e) {}
     for (const src of PEERJS_URLS) {
-      const ok = await new Promise(res => {
+      if (window.Peer) break;
+      await new Promise(res => {
         const s = document.createElement('script');
         s.src = src; s.async = true;
-        s.onload = () => res(!!window.Peer); s.onerror = () => { s.remove(); res(false); };
+        s.onload = () => res(); s.onerror = () => { s.remove(); res(); };
         document.head.appendChild(s);
       });
-      if (ok) return true;
     }
-    loadPeerJS.p = null;
+    if (window.Peer) { PeerImpl = window.Peer; return true; }
+    loadTransport.p = null;
     return false;
   })();
-  return loadPeerJS.p;
+  return loadTransport.p;
+}
+
+// The relay speaks to the game through the same small surface PeerJS offers (open, connection,
+// connect, send, data, close, error), so the rest of the online code is the same either way.
+class Emitter {
+  constructor() { this.h = {}; }
+  on(e, f) { (this.h[e] = this.h[e] || []).push(f); return this; }
+  emit(e, ...a) { (this.h[e] || []).slice().forEach(f => { try { f(...a); } catch (err) { console.error(err); } }); }
+}
+class RelayConn extends Emitter {
+  constructor(owner, id) { super(); this.owner = owner; this.peer = id; this.open = false; this.closed = false; }
+  _open() { if (this.open || this.closed) return; this.open = true; this.emit('open'); }
+  _close() { if (this.closed) return; this.closed = true; this.open = false; this.emit('close'); }
+  send(d) {
+    if (!this.open) return;
+    if (this.peer === 'host') this.owner._send({ t: 'd', d });
+    else this.owner._send({ t: 'to', id: this.peer, d });
+  }
+  close() {
+    if (this.peer === 'host') { this.owner.destroy(); this._close(); return; }
+    this.owner._send({ t: 'kick', id: this.peer });
+    this.owner.conns.delete(this.peer);
+    this._close();
+  }
+}
+class RelayPeer extends Emitter {
+  constructor(id) {
+    super();
+    this.want = typeof id === 'string' ? id.slice(PEER_PREFIX.length) : null;   // a host asks for its code
+    this.conns = new Map(); this.opened = false; this.dead = false;
+    const ws = this.ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws');
+    ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } this._msg(m); };
+    ws.onclose = () => {
+      const wasOpen = this.opened;
+      this.dead = true;
+      for (const c of [...this.conns.values()]) c._close();
+      this.conns.clear();
+      if (!wasOpen) this.emit('error', { type: 'network' });
+    };
+  }
+  _send(o) { if (this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); }
+  _msg(m) {
+    const host = this.conns.get('host');
+    switch (m.t) {
+      case 'hello':
+        if (this.want) this._send({ t: 'host', code: this.want });
+        else { this.opened = true; this.emit('open', m.id); }
+        break;
+      case 'hosting': this.opened = true; this.emit('open', PEER_PREFIX + m.code); break;
+      case 'taken': this.emit('error', { type: 'unavailable-id' }); break;
+      case 'guest': {
+        const c = new RelayConn(this, m.id);
+        this.conns.set(m.id, c);
+        this.emit('connection', c);
+        setTimeout(() => c._open(), 0);
+        break;
+      }
+      case 'from': { const c = this.conns.get(m.id); if (c && c.open) c.emit('data', m.d); break; }
+      case 'left': { const c = this.conns.get(m.id); if (c) { this.conns.delete(m.id); c._close(); } break; }
+      case 'joined': if (host) host._open(); break;
+      case 'nogame': case 'full': this.emit('error', { type: 'peer-unavailable' }); break;
+      case 'd': if (host && host.open) host.emit('data', m.d); break;
+      case 'hostleft': if (host) { this.conns.delete('host'); host._close(); } break;
+    }
+  }
+  connect(id) {
+    const c = new RelayConn(this, 'host');
+    this.conns.set('host', c);
+    this._send({ t: 'join', code: String(id).slice(PEER_PREFIX.length) });
+    return c;
+  }
+  broadcast(d) { this._send({ t: 'to', d }); }      // one copy to the server, which hands it to every guest
+  destroy() { this.dead = true; try { this.ws.close(); } catch (e) {} }
 }
 
 const PEER_TROUBLE = 'Could not reach the online service. Check this tablet is on the internet. ' +
@@ -1055,7 +1138,7 @@ function peerError(e) {
   return PEER_TROUBLE;
 }
 
-function goOnline() { state = 'online'; stateT = 0; netMsg = ''; loadPeerJS(); }
+function goOnline() { state = 'online'; stateT = 0; netMsg = ''; loadTransport(); }
 
 function netLeave() {
   try { for (const g of guests.values()) g.conn.close(); } catch (e) {}
@@ -1077,7 +1160,7 @@ async function hostGame() {
   netLeave();
   mode = 'host'; mySeat = 0; seats = ['host']; state = 'hostWait'; stateT = 0;
   netMsg = 'Opening the game…';
-  if (!(await loadPeerJS())) { netLost(PEER_TROUBLE); return; }
+  if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'host') return;
   openHostPeer(0);
 }
@@ -1085,7 +1168,7 @@ let hostOpenAt = 0;              // when the host asked for its code; 0 once the
 function openHostPeer(tries) {
   netCode = String(1000 + Math.floor(Math.random() * 9000));
   hostOpenAt = performance.now();
-  const p = peer = new window.Peer(PEER_PREFIX + netCode, { debug: 0 });
+  const p = peer = new PeerImpl(PEER_PREFIX + netCode, { debug: 0 });
   p.on('open', () => { if (peer === p) { netMsg = ''; hostOpenAt = 0; } });
   p.on('connection', conn => { if (peer === p) acceptGuest(conn); });
   p.on('error', e => {
@@ -1157,6 +1240,7 @@ function hostStep(dt) {
   netAcc = 0;
   if (!guests.size) return;
   const g = buildSnap();
+  if (peer && peer.broadcast) { peer.broadcast({ s: g }); return; }
   for (const x of guests.values()) { try { if (x.conn.open) x.conn.send({ s: g }); } catch (e) {} }
 }
 const r1 = v => Math.round(v * 10) / 10;
@@ -1186,9 +1270,9 @@ async function joinGame(code) {
   netMsg = 'Connecting to game ' + code + '…';
   snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1; lastMap = -1; localSd = 0; myFire = 0; prevNetState = '';
   trails.clear(); seen.clear();
-  if (!(await loadPeerJS())) { netLost(PEER_TROUBLE); return; }
+  if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'guest') return;
-  const p = peer = new window.Peer({ debug: 0 });
+  const p = peer = new PeerImpl({ debug: 0 });
   connTimer = performance.now();
   p.on('open', id => {
     if (peer !== p) return;
@@ -1228,7 +1312,7 @@ function sendInput(force) {
 
 function guestStep(dt) {
   for (const t of tanks) t.recoil = Math.max(0, t.recoil - dt * 8);
-  if (connTimer && performance.now() - connTimer > 15000) { netLost('Could not connect to game ' + netCode + '. Both tablets need to be on the same Wi-Fi.'); return; }
+  if (connTimer && performance.now() - connTimer > 15000) { netLost('Could not connect to game ' + netCode + '.' + (usingRelay ? ' Check the internet connection and try again.' : ' Both tablets need to be on the same Wi-Fi.')); return; }
   sendInput(false);
   // a host whose tablet went to sleep or left without saying so
   if (lastArrival && performance.now() - lastArrival > 8000) { netLost('Lost contact with the host tablet.'); return; }
@@ -1512,7 +1596,7 @@ function applyMenu(it) {
   else if (it.kind === 'leave') goMenu();
   else if (it.kind === 'lobby') hostLobby();
   else if (it.kind === 'host') { sfx.tick(); hostGame(); }
-  else if (it.kind === 'join') { sfx.tick(); state = 'joinCode'; typedCode = ''; netMsg = ''; loadPeerJS(); }
+  else if (it.kind === 'join') { sfx.tick(); state = 'joinCode'; typedCode = ''; netMsg = ''; loadTransport(); }
   else if (it.kind === 'key') typeKey(it.v);
 }
 function typeKey(k) {
@@ -1881,7 +1965,7 @@ function drawNetScreen() {
   if (state === 'online') {
     line('Play online', 1.3, 0.8, accent, FONT_D);
     line('Each player uses their own tablet.', 2.3, 0.3);
-    line('All tablets on the same Wi-Fi.', 2.75, 0.3);
+    line(usingRelay ? 'Players can be anywhere with internet.' : 'All tablets on the same Wi-Fi.', 2.75, 0.3);
     line('One hosts; the others join with its code.', 3.2, 0.3);
     line('2 to 5 players', 6.5, 0.3, ink, FONT_B, 0.7);
     if (netMsg) line(netMsg, 7.4, 0.26, ink, FONT_B, 0.85);

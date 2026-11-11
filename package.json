@@ -1,0 +1,14 @@
+{
+  "name": "graph-paper-tank-duel",
+  "version": "1.0.0",
+  "description": "Tank duel on graph paper, with a small relay server for online play",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}

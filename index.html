@@ -1159,7 +1159,8 @@ function peerError(e) {
 function goOnline() { state = 'online'; stateT = 0; netMsg = ''; loadTransport(); }
 
 function netLeave() {
-  try { for (const g of guests.values()) g.conn.close(); } catch (e) {}
+  try { for (const g of guests.values()) { g.conn.close(); if (g.pc) g.pc.close(); } } catch (e) {}
+  closeGuestLink();
   try { if (hostConn) hostConn.close(); } catch (e) {}
   try { if (peer) peer.destroy(); } catch (e) {}
   peer = null; hostConn = null; guests.clear(); seats = []; snaps = []; hostOpenAt = 0;
@@ -1202,6 +1203,7 @@ function acceptGuest(conn) {
     const g = { conn, inp: [0, 0, 0], fire: 0, lastFire: null, lastAt: performance.now() };
     guests.set(conn.peer, g);
     if (state === 'hostWait' && seats.length < MAX_PLAYERS && !seats.includes(conn.peer)) seats.push(conn.peer);
+    hostDirect(conn.peer, g);
     sfx.pickup();
   });
   conn.on('data', d => hostData(conn.peer, d));
@@ -1212,6 +1214,7 @@ const num = (v, lo, hi) => typeof v === 'number' && isFinite(v) ? clamp(v, lo, h
 function hostData(id, d) {
   const g = guests.get(id);
   if (!g || !d || typeof d !== 'object') return;
+  if (d.sig && typeof d.sig === 'object') { hostSignal(g, d.sig); return; }
   if (typeof d.c === 'string') {
     // room commands are only taken from the player who leads a server-run room
     if (!HEADLESS || leaderId() !== id) return;
@@ -1238,6 +1241,7 @@ function remoteInput(seat) {
 }
 function guestGone(id) {
   if (!guests.has(id)) return;
+  try { const pc = guests.get(id).pc; if (pc) pc.close(); } catch (e) {}
   guests.delete(id);
   const s = seats.indexOf(id);
   if (s < 0) return;
@@ -1273,8 +1277,12 @@ function hostStep(dt) {
   if (netAcc > rate) netAcc = 0;
   if (!guests.size) return;
   const g = buildSnap();
-  if (peer && peer.broadcast) { peer.broadcast({ s: g }); return; }
-  for (const x of guests.values()) { try { if (x.conn.open) x.conn.send({ s: g }); } catch (e) {} }
+  const direct = [...guests.values()].filter(x => linkOpen(x.u));
+  if (peer && peer.broadcast && !direct.length) { peer.broadcast({ s: g }); return; }
+  const str = direct.length ? JSON.stringify({ s: g }) : null;
+  for (const x of guests.values()) {
+    try { if (linkOpen(x.u)) x.u.send(str); else if (x.conn.open) x.conn.send({ s: g }); } catch (e) {}
+  }
 }
 const r1 = v => Math.round(v * 10) / 10;
 function buildSnap() {
@@ -1314,8 +1322,22 @@ async function joinGame(code) {
     myId = id;
     const c = hostConn = p.connect(PEER_PREFIX + code, { serialization: 'json' });
     c.on('open', () => { if (hostConn === c) { netMsg = ''; connTimer = 0; } });
-    c.on('data', d => {
-      if (hostConn !== c || !d || !d.s || typeof d.s !== 'object') return;
+    c.on('data', d => { if (hostConn === c) onHostData(d); });
+    c.on('close', () => { if (hostConn === c) netLost('The host left the game.'); });
+  });
+  p.on('error', e => {
+    if (peer !== p) return;
+    if (hostConn && hostConn.open) return;     // already connected: the introduction server no longer matters
+    const m = peerError(e);
+    if (e && e.type === 'peer-unavailable') { netLeave(); state = 'joinCode'; netMsg = m; typedCode = ''; }
+    else netLost(m);
+  });
+}
+// everything a guest receives from the host, by server relay or by a direct Wi-Fi link
+function onHostData(d) {
+      if (!d || typeof d !== 'object') return;
+      if (d.sig) { guestSignal(d.sig); return; }
+      if (!d.s || typeof d.s !== 'object') return;
       lastArrival = performance.now();
       const ts = typeof d.s.ts === 'number' && isFinite(d.s.ts) ? d.s.ts : lastArrival;
       // place each snapshot on the host's own timeline, so bunched or late arrivals don't jerk the picture
@@ -1337,20 +1359,77 @@ async function joinGame(code) {
       while (i > 0 && snaps[i - 1].ts > ts) i--;            // keep them in host-time order
       snaps.splice(i, 0, snap); if (snaps.length > 40) snaps.shift();
       reconcile(d.s);
-    });
-    c.on('close', () => { if (hostConn === c) netLost('The host left the game.'); });
-  });
-  p.on('error', e => {
-    if (peer !== p) return;
-    if (hostConn && hostConn.open) return;     // already connected: the introduction server no longer matters
-    const m = peerError(e);
-    if (e && e.type === 'peer-unavailable') { netLeave(); state = 'joinCode'; netMsg = m; typedCode = ''; }
-    else netLost(m);
-  });
+}
+
+/* ---------- same Wi-Fi: a direct link between a guest and the host tablet ----------
+   In a room hosted by a tablet on the game's server, the host offers each guest a WebRTC link.
+   The offer and answer travel through the server; afterwards game data goes straight between
+   the two devices over the local network. No outside STUN server is used, so the link only
+   forms when both are on the same network; otherwise everything keeps going through the server. */
+const HAS_RTC = typeof RTCPeerConnection !== 'undefined';
+let gpc = null, gU = null, gR = null, gPending = [];   // guest's side of the link
+const linkOpen = ch => !!ch && ch.readyState === 'open';
+function hostDirect(id, g) {
+  if (!usingRelay || HEADLESS || !HAS_RTC) return;
+  let pc;
+  try { pc = new RTCPeerConnection({ iceServers: [] }); } catch (e) { return; }
+  g.pc = pc; g.pending = [];
+  const u = pc.createDataChannel('u', { ordered: false, maxRetransmits: 0 });   // snapshots: newest wins, never wait
+  const r = pc.createDataChannel('r');                                           // the guest's input and requests
+  u.onopen = () => { g.u = u; };
+  u.onclose = () => { if (g.u === u) g.u = null; };
+  r.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } hostData(id, m); };
+  pc.onicecandidate = e => { if (e.candidate) try { g.conn.send({ sig: { c: e.candidate.toJSON() } }); } catch (x) {} };
+  pc.createOffer().then(o => pc.setLocalDescription(o))
+    .then(() => g.conn.send({ sig: { d: pc.localDescription.toJSON() } })).catch(() => {});
+}
+function hostSignal(g, sig) {
+  const pc = g.pc;
+  if (!pc) return;
+  if (sig.d && sig.d.type === 'answer') {
+    pc.setRemoteDescription(sig.d).then(() => { for (const c of g.pending) pc.addIceCandidate(c).catch(() => {}); g.pending = []; }).catch(() => {});
+  } else if (sig.c) {
+    if (pc.remoteDescription) pc.addIceCandidate(sig.c).catch(() => {}); else g.pending.push(sig.c);
+  }
+}
+function guestSignal(sig) {
+  if (!HAS_RTC) return;
+  if (sig.d && sig.d.type === 'offer') {
+    closeGuestLink();
+    try { gpc = new RTCPeerConnection({ iceServers: [] }); } catch (e) { gpc = null; return; }
+    const pc = gpc;
+    pc.ondatachannel = ev => {
+      const ch = ev.channel;
+      if (ch.label === 'u') {
+        ch.onopen = () => { gU = ch; jitter = 5; clockInit = false; };   // a new, faster path: measure afresh
+        ch.onmessage = m => { let d; try { d = JSON.parse(m.data); } catch (e) { return; } onHostData(d); };
+        ch.onclose = () => { if (gU === ch) gU = null; };
+        if (ch.readyState === 'open') ch.onopen();
+      } else if (ch.label === 'r') {
+        gR = ch;
+      }
+    };
+    pc.onicecandidate = e => { if (e.candidate && hostConn) try { hostConn.send({ sig: { c: e.candidate.toJSON() } }); } catch (x) {} };
+    pc.setRemoteDescription(sig.d)
+      .then(() => pc.createAnswer()).then(a => pc.setLocalDescription(a))
+      .then(() => { hostConn.send({ sig: { d: pc.localDescription.toJSON() } }); for (const c of gPending) pc.addIceCandidate(c).catch(() => {}); gPending = []; })
+      .catch(() => {});
+  } else if (sig.c) {
+    if (gpc && gpc.remoteDescription) gpc.addIceCandidate(sig.c).catch(() => {}); else gPending.push(sig.c);
+  }
+}
+function closeGuestLink() {
+  try { if (gpc) gpc.close(); } catch (e) {}
+  gpc = null; gU = null; gR = null; gPending = [];
+}
+// send to the host the direct way if there is one, otherwise through the server
+function toHost(msg) {
+  if (linkOpen(gR)) { try { gR.send(JSON.stringify(msg)); return; } catch (e) {} }
+  if (hostConn && hostConn.open) try { hostConn.send(msg); } catch (e) {}
 }
 function sendCmd(c, v) {
   if (!hostConn || !hostConn.open) return;
-  try { hostConn.send(v === undefined ? { c } : { c, v }); } catch (e) {}
+  toHost(v === undefined ? { c } : { c, v });
 }
 // a server-run room: ask the server for a new room, then join it like everyone else
 async function createGame() {
@@ -1391,7 +1470,7 @@ function sendInput(force) {
   if (!force && key === lastSent && now - lastSentAt < 250) return;   // repeat now and then, in case one was lost
   if (!force && now - lastSentAt < 30) return;
   lastSent = key; lastSentAt = now;
-  try { hostConn.send({ i: msg, p: Math.round(now * 10) / 10 }); } catch (e) {}
+  toHost({ i: msg, p: Math.round(now * 10) / 10 });
 }
 
 function guestStep(dt) {
@@ -1762,6 +1841,7 @@ function applyMenu(it) {
   else if (it.kind === 'leave') goMenu();
   else if (it.kind === 'lobby') hostLobby();
   else if (it.kind === 'host') { sfx.tick(); startHosting(); }
+  else if (it.kind === 'lan') { sfx.tick(); hostGame(); }
   else if (it.kind === 'join') { sfx.tick(); state = 'joinCode'; typedCode = ''; netMsg = ''; loadTransport(); }
   else if (it.kind === 'key') typeKey(it.v);
 }
@@ -2095,7 +2175,9 @@ function drawTopBoard() {
   const cx = land ? JX0 : LW / 2, panelW = land ? S : LW;
   const infoY = land ? 18 : Math.min(S * 0.22, 26), rowY = land ? Math.min(LH * 0.16, 64) : S / 2 + S * 0.06;
   ctx.fillStyle = COL.graphite; ctx.globalAlpha = 0.5; ctx.fillRect(0, 0, land ? S : LW, 4); ctx.globalAlpha = 1;
-  const role = mode === 'host' ? 'hosting' : mode === 'guest' ? 'joined' : '';
+  const nDirect = mode === 'host' ? [...guests.values()].filter(x => linkOpen(x.u)).length : 0;
+  const role = mode === 'host' ? 'hosting' + (usingRelay && guests.size ? ` \u00b7 Wi-Fi direct ${nDirect}/${guests.size}` : '')
+    : mode === 'guest' ? 'joined' + (linkOpen(gU) ? ' \u00b7 Wi-Fi direct' : '') : '';
   const ping = mode === 'guest' && rttMs ? ` \u00b7 ${Math.round(rttMs)} ms` + (netRttMs ? ` (net ${netRttMs})` : '') : '';
   const info = netCode ? `game ${netCode} \u00b7 ${role}${ping}` : 'online';
   label(info, cx, infoY, Math.min(17, (land ? LH : S) * 0.12), COL.graphite, FONT_B, 0.7);
@@ -2131,8 +2213,14 @@ function netItems() {
   const cx = LW / 2, y = v => AY + U * v, items = [];
   const btn = (kind, text, yy, w, v) => items.push({ kind, text, v, x: cx - U * w / 2, y: y(yy) - U * 0.37, w: U * w, h: U * 0.74 });
   if (state === 'online') {
-    btn('host', usingRelay ? 'Create a game' : 'Host a game', 4.4, 5);
-    btn('join', 'Join a game', 5.5, 5);
+    if (usingRelay) {
+      btn('host', 'Create a game', 4.2, 6);
+      btn('lan', 'Same Wi-Fi game', 5.2, 6);
+      btn('join', 'Join a game', 6.2, 6);
+    } else {
+      btn('host', 'Host a game', 4.4, 5);
+      btn('join', 'Join a game', 5.5, 5);
+    }
     btn('back', 'Back', 9.6, 3);
   } else if (state === 'joinCode') {
     const kw = U * 1.35, kh = U * 0.95, gx = U * 0.18, x0 = cx - (kw * 3 + gx * 2) / 2;
@@ -2159,9 +2247,9 @@ function drawNetScreen() {
     line('Each player uses their own tablet.', 2.3, 0.3);
     line(usingRelay ? 'Players can be anywhere with internet.' : 'All tablets on the same Wi-Fi.', 2.75, 0.3);
     line(usingRelay ? 'One creates a game; the others join with its code.' : 'One hosts; the others join with its code.', 3.2, 0.3);
-    line('2 to 5 players', 6.5, 0.3, ink, FONT_B, 0.7);
+    line(usingRelay ? 'Same Wi-Fi game: everyone in one place; this tablet runs it.' : '2 to 5 players', usingRelay ? 7.1 : 6.5, usingRelay ? 0.24 : 0.3, ink, FONT_B, 0.7);
     if (IS_TOUCH && LH > LW) line('Tip: turn the device sideways for the best controls.', 8.3, 0.27, accent, FONT_B);
-    if (netMsg) line(netMsg, 7.4, 0.26, ink, FONT_B, 0.85);
+    if (netMsg) line(netMsg, 7.7, 0.26, ink, FONT_B, 0.85);
   } else if (state === 'joinCode') {
     line('Enter the game code', 1.1, 0.6, accent, FONT_D);
     line('It is shown on the host tablet.', 1.75, 0.28, ink, FONT_B, 0.75);
@@ -2200,7 +2288,7 @@ function drawNetScreen() {
       drawChip(it, lobbySeats().length >= 2, accent, true);
       if (lobbySeats().length < 2) label('needs 2+ players', it.x + it.w / 2, it.y + it.h + U * 0.25, U * 0.22, ink, FONT_B, 0.7);
     } else if (['ammo', 'pu', 'maps', 'win'].includes(it.kind)) drawChip(it, menuValue(it.kind) === it.v, accent);
-    else drawChip(it, it.kind === 'host' || it.kind === 'join', accent, it.kind === 'host' || it.kind === 'join');
+    else { const big = ['host', 'join', 'lan'].includes(it.kind); drawChip(it, big, accent, big); }
   }
 }
 function wrapLines(str, maxW, size) {
@@ -2521,7 +2609,7 @@ window.__tank = {
   get layout() { return { LW, LH, P, AX, AY, AW, AH, S, JR, FR, JX0, FX0, CY0, rotated }; },
   net: { hostGame, joinGame, createGame, startHosting, sendCmd, get isLeader() { return isLeader; }, get dedicated() { return dedicatedGame; }, hostStart, hostLobby, goOnline, netItems, buildSnap, typeKey,
     get mode() { return mode; }, get seats() { return seats; }, get code() { return netCode; }, get msg() { return netMsg; },
-    get mySeat() { return mySeat; }, get rtt() { return rttMs; }, get netRtt() { return netRttMs; }, get interp() { return interpMs; }, get viewFlip() { return viewFlip; }, get guests() { return guests; }, get snaps() { return snaps; }, get NP() { return NP; } },
+    get mySeat() { return mySeat; }, get rtt() { return rttMs; }, get direct() { return mode === 'host' ? [...guests.values()].filter(x => linkOpen(x.u)).length : linkOpen(gU) ? 1 : 0; }, get netRtt() { return netRttMs; }, get interp() { return interpMs; }, get viewFlip() { return viewFlip; }, get guests() { return guests; }, get snaps() { return snaps; }, get NP() { return NP; } },
   get tanksNow() { return tanks; }
 };
 

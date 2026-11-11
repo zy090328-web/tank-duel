@@ -7,6 +7,8 @@ A tank duel drawn on graph paper, for touch-screen tablets.
 
 The game itself is `index.html`. `server.js` serves it and runs online rooms: each room is a copy of the same game script running on the server with drawing switched off, so every player is an equal guest (one network round trip each). Players' own tanks move at once on their device and are corrected toward the server.
 
+**Same Wi-Fi game** (on the game's server): one tablet hosts, and each guest opens a direct WebRTC link to it over the local network (offer/answer passed through the server, no outside STUN). Game data then never leaves the room. If a direct link can't form within the room's network, that guest keeps playing through the server.
+
 Served from anywhere else (no `server.js`), online play falls back to [PeerJS](https://peerjs.com/) with one tablet hosting.
 
 Deploy: Railway (Singapore) builds `server.js` on push. `deploy/setup-server.sh` sets it up on a plain Ubuntu server instead.

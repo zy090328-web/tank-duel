@@ -1020,7 +1020,7 @@ let interpMs = 100, jitter = 15, lastSnapAt = 0;
 // so 'now - clockOff' is the newest host moment that could have arrived by now.
 let clockOff = 0, clockInit = false;
 // round trip from a guest's press to the host's answer, measured by echo (ms; 0 = not measured yet)
-let rttMs = 0, lastEcho = -1;
+let rttMs = 0, lastEcho = -1, netRttMs = 0;
 // the guest's own tank is moved on the guest at once and gently pulled toward what the host says
 const pred = { x: 0, y: 0, angle: 0, active: false, hist: [] };
 let localShots = 0, lastLocalShot = 0;
@@ -1134,6 +1134,7 @@ class RelayPeer extends Emitter {
       case 'nogame': case 'full': this.emit('error', { type: 'peer-unavailable' }); break;
       case 'd': if (host && host.open) host.emit('data', m.d); break;
       case 'hostleft': if (host) { this.conns.delete('host'); host._close(); } break;
+      case 'net': netRttMs = +m.rtt || 0; break;      // round trip measured by the server, network only
     }
   }
   connect(id) {
@@ -1302,7 +1303,7 @@ async function joinGame(code) {
   mode = 'guest'; mySeat = -1; netCode = code; state = 'guestWait'; stateT = 0;
   netMsg = 'Connecting to game ' + code + '…';
   snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1; dedicatedGame = false; isLeader = false; sentPrefs = false;
-  interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; prevNetState = '';
+  interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; netRttMs = 0; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; prevNetState = '';
   trails.clear(); seen.clear();
   if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'guest') return;
@@ -2095,7 +2096,7 @@ function drawTopBoard() {
   const infoY = land ? 18 : Math.min(S * 0.22, 26), rowY = land ? Math.min(LH * 0.16, 64) : S / 2 + S * 0.06;
   ctx.fillStyle = COL.graphite; ctx.globalAlpha = 0.5; ctx.fillRect(0, 0, land ? S : LW, 4); ctx.globalAlpha = 1;
   const role = mode === 'host' ? 'hosting' : mode === 'guest' ? 'joined' : '';
-  const ping = mode === 'guest' && rttMs ? ` \u00b7 ${Math.round(rttMs)} ms` : '';
+  const ping = mode === 'guest' && rttMs ? ` \u00b7 ${Math.round(rttMs)} ms` + (netRttMs ? ` (net ${netRttMs})` : '') : '';
   const info = netCode ? `game ${netCode} \u00b7 ${role}${ping}` : 'online';
   label(info, cx, infoY, Math.min(17, (land ? LH : S) * 0.12), COL.graphite, FONT_B, 0.7);
   const n = NET_SCREENS.includes(state) ? 0 : NP;
@@ -2520,7 +2521,7 @@ window.__tank = {
   get layout() { return { LW, LH, P, AX, AY, AW, AH, S, JR, FR, JX0, FX0, CY0, rotated }; },
   net: { hostGame, joinGame, createGame, startHosting, sendCmd, get isLeader() { return isLeader; }, get dedicated() { return dedicatedGame; }, hostStart, hostLobby, goOnline, netItems, buildSnap, typeKey,
     get mode() { return mode; }, get seats() { return seats; }, get code() { return netCode; }, get msg() { return netMsg; },
-    get mySeat() { return mySeat; }, get rtt() { return rttMs; }, get interp() { return interpMs; }, get viewFlip() { return viewFlip; }, get guests() { return guests; }, get snaps() { return snaps; }, get NP() { return NP; } },
+    get mySeat() { return mySeat; }, get rtt() { return rttMs; }, get netRtt() { return netRttMs; }, get interp() { return interpMs; }, get viewFlip() { return viewFlip; }, get guests() { return guests; }, get snaps() { return snaps; }, get NP() { return NP; } },
   get tanksNow() { return tanks; }
 };
 

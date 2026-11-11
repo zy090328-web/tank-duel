@@ -90,6 +90,8 @@ function wrap(socket) {
     if (c.onclose) c.onclose();
   };
   const control = (op, payload) => { try { socket.write(Buffer.concat([Buffer.from([0x80 | op, payload.length]), payload])); } catch (e) {} };
+  // network round trip as the server sees it: browsers answer a ping with a pong carrying the same bytes
+  c.ping = () => control(0x9, Buffer.from(String(Math.round(performance.now()))));
   socket.on('data', chunk => {
     c.buf = Buffer.concat([c.buf, chunk]);
     while (c.buf.length >= 2) {
@@ -105,7 +107,11 @@ function wrap(socket) {
       c.alive = true;
       if (op === 0x8) { c.close(); return; }
       if (op === 0x9) { control(0xA, body.subarray(0, 125)); continue; }
-      if (op === 0xA) continue;
+      if (op === 0xA) {
+        const sent = Number(body.toString());
+        if (sent > 0) { const r = performance.now() - sent; c.rtt = c.rtt ? c.rtt * 0.7 + r * 0.3 : r; c.rttMax = Math.max(c.rttMax || 0, r); }
+        continue;
+      }
       if (op !== 0x1) continue;                                        // only whole text frames are used
       let msg; try { msg = JSON.parse(body.toString('utf8')); } catch (e) { continue; }
       if (msg && typeof msg === 'object' && c.onmsg) c.onmsg(msg);
@@ -127,6 +133,26 @@ setInterval(() => {
     try { c.socket.write(Buffer.from([0x89, 0])); } catch (e) {}
   }
 }, 20000);
+
+// every 2 s: measure each player's network round trip and tell them, so the game can show it next to
+// its own figure; every 10 s: log each busy room (network times, unsent bytes, server tick gaps)
+setInterval(() => {
+  for (const c of clients) {
+    if (c.virtual || c.closed) continue;
+    c.ping();
+    if (c.rtt) c.send({ t: 'net', rtt: Math.round(c.rtt) });
+  }
+}, 2000);
+setInterval(() => {
+  for (const [code, r] of rooms) {
+    if (!r.guests.size) continue;
+    const room = [...hosted].find(h => h.code === code);
+    const ps = [...r.guests.values()].map(g => `${g.id.slice(-4)} ${Math.round(g.rtt || 0)}/${Math.round(g.rttMax || 0)}ms q${g.socket ? g.socket.writableLength : 0}`);
+    console.log(`room ${code}${room ? ` server-run tick gap max ${Math.round(room.maxGap || 0)}ms` : ' tablet-hosted'} | ${ps.join(' | ')}`);
+    for (const g of r.guests.values()) g.rttMax = 0;
+    if (room) room.maxGap = 0;
+  }
+}, 10000);
 
 /* ---------- rooms: code -> { host, guests: Map(id -> client) } ---------- */
 const rooms = new Map();
@@ -251,6 +277,9 @@ function createRoom() {
     catch (e) { clearTimeout(fail); destroy(room); reject(e); return; }
     hosted.add(room);
     room.timer = setInterval(() => {
+      const now = performance.now();
+      if (room.lastTick) room.maxGap = Math.max(room.maxGap || 0, now - room.lastTick);
+      room.lastTick = now;
       try { env.__tick(); } catch (e) { console.error('room', room.code, e); destroy(room); return; }
       if (room.code) watch(room);
     }, TICK_MS);

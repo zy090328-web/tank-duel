@@ -1006,7 +1006,14 @@ function update(dt) {
 const NET_SCREENS = ['online', 'joinCode', 'hostWait', 'guestWait', 'netLost'];
 const PEER_PREFIX = 'graph-paper-tank-duel-v1-';
 const SEND_RATE = 1 / 30;     // seconds between snapshots
-const INTERP_MS = 100;        // guests draw this far in the past, so there is always a snapshot either side
+// Guests draw other tanks this far in the past, so there is always a snapshot on either side.
+// It grows with the jitter actually measured on the link, so a bumpy connection stays smooth.
+let interpMs = 100, jitter = 15, lastSnapAt = 0;
+// round trip from a guest's press to the host's answer, measured by echo (ms; 0 = not measured yet)
+let rttMs = 0, lastEcho = -1;
+// the guest's own tank is moved on the guest at once and gently pulled toward what the host says
+const pred = { x: 0, y: 0, angle: 0, active: false, hist: [] };
+let localShots = 0, lastLocalShot = 0;
 const PEERJS_URLS = [
   'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
   'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js'
@@ -1195,6 +1202,7 @@ function hostData(id, d) {
   const g = guests.get(id);
   if (!g || !d || typeof d !== 'object' || !Array.isArray(d.i)) return;
   g.lastAt = performance.now();
+  if (typeof d.p === 'number' && isFinite(d.p)) g.echo = Math.round(d.p * 10) / 10;
   g.inp = [num(d.i[0], -1, 1), num(d.i[1], -1, 1), num(d.i[2], 0, 1)];
   const f = Math.floor(num(d.i[3], 0, 1e9));
   if (g.lastFire === null) g.lastFire = f;
@@ -1258,7 +1266,8 @@ function buildSnap() {
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, m.type === 'homing' ? 0 : 1, m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
     P: play ? pickups.map(k => [r2(k.x), r2(k.y), POWER_TYPES.indexOf(k.type)]) : [],
-    E: netEvents.map(e => e.e)
+    E: netEvents.map(e => e.e),
+    PE: seats.map(id => { const g = guests.get(id); return g && g.echo != null ? g.echo : -1; })
   };
 }
 
@@ -1268,7 +1277,8 @@ async function joinGame(code) {
   savedSettings = settings; settings = Object.assign({}, settings);
   mode = 'guest'; mySeat = -1; netCode = code; state = 'guestWait'; stateT = 0;
   netMsg = 'Connecting to game ' + code + '…';
-  snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1; lastMap = -1; localSd = 0; myFire = 0; prevNetState = '';
+  snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1;
+  interpMs = 100; jitter = 15; lastSnapAt = 0; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; prevNetState = '';
   trails.clear(); seen.clear();
   if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'guest') return;
@@ -1282,7 +1292,22 @@ async function joinGame(code) {
     c.on('data', d => {
       if (hostConn !== c || !d || !d.s || typeof d.s !== 'object') return;
       lastArrival = performance.now();
+      if (lastSnapAt) {
+        const gap = lastArrival - lastSnapAt;
+        if (gap < 1000) {
+          jitter += (Math.abs(gap - SEND_RATE * 1000) - jitter) * 0.1;
+          interpMs = clamp(60 + jitter * 2.5, 70, 260);
+        }
+      }
+      lastSnapAt = lastArrival;
+      const echo = Array.isArray(d.s.PE) && mySeat >= 0 ? d.s.PE[mySeat] : -1;
+      if (typeof echo === 'number' && echo > lastEcho && echo <= lastArrival) {
+        lastEcho = echo;
+        const sample = Math.max(1, lastArrival - echo - SEND_RATE * 500);   // minus half a snapshot interval of waiting
+        rttMs = rttMs ? rttMs + (sample - rttMs) * 0.2 : sample;
+      }
       snaps.push({ at: lastArrival, g: d.s }); if (snaps.length > 40) snaps.shift();
+      reconcile(d.s);
     });
     c.on('close', () => { if (hostConn === c) netLost('The host left the game.'); });
   });
@@ -1297,8 +1322,20 @@ async function joinGame(code) {
 function guestFire() {
   myFire++;
   sendInput(true);
-  const t = tanks[mySeat];
-  if (t && t.alive && !t.power && !t.guided && t.charge <= 0 && shotsLeft(t) <= 0 && state === 'play') sfx.empty();
+  const t = tanks[mySeat], now = performance.now();
+  if (!t || !t.alive || t.power || t.guided || t.charge > 0 || t.shield > 0) return;
+  if (state !== 'play' && state !== 'ending' && state !== 'result') return;
+  if (shotsLeft(t) <= 0) { if (state === 'play') sfx.empty(); return; }
+  if (now - lastLocalShot < C.FIRE_COOLDOWN * 1000) return;
+  // answer the press at once with the sound and the muzzle puff; the bullet itself comes from the host
+  lastLocalShot = now; localShots++;
+  t.recoil = 1;
+  const x = t.x + Math.cos(t.angle) * (C.TANK_R + 0.14), y = t.y + Math.sin(t.angle) * (C.TANK_R + 0.14);
+  for (let i = 0; i < 4; i++) {
+    const d = t.angle + (Math.random() - 0.5) * 0.9, sp = 1 + Math.random() * 2;
+    particles.push({ x, y, vx: Math.cos(d) * sp, vy: Math.sin(d) * sp, life: 0.18, max: 0.18, col: COL.graphite, size: 0.035 });
+  }
+  sfx.shoot(mySeat);
 }
 function sendInput(force) {
   if (!hostConn || !hostConn.open) return;
@@ -1307,17 +1344,18 @@ function sendInput(force) {
   if (!force && key === lastSent && now - lastSentAt < 250) return;   // repeat now and then, in case one was lost
   if (!force && now - lastSentAt < 30) return;
   lastSent = key; lastSentAt = now;
-  try { hostConn.send({ i: msg }); } catch (e) {}
+  try { hostConn.send({ i: msg, p: Math.round(now * 10) / 10 }); } catch (e) {}
 }
 
 function guestStep(dt) {
   for (const t of tanks) t.recoil = Math.max(0, t.recoil - dt * 8);
   if (connTimer && performance.now() - connTimer > 15000) { netLost('Could not connect to game ' + netCode + '.' + (usingRelay ? ' Check the internet connection and try again.' : ' Both tablets need to be on the same Wi-Fi.')); return; }
   sendInput(false);
+  if (localShots && performance.now() - lastLocalShot > 1500) localShots = 0;   // the host never confirmed it
   // a host whose tablet went to sleep or left without saying so
   if (lastArrival && performance.now() - lastArrival > 8000) { netLost('Lost contact with the host tablet.'); return; }
   if (!snaps.length) return;
-  const rt = performance.now() - INTERP_MS;
+  const rt = performance.now() - interpMs;
   // drop snapshots that are older than the pair we need
   while (snaps.length > 2 && snaps[1].at <= rt) applySnapEvents(snaps.shift().g);
   let a = snaps[0], b = snaps.length > 1 ? snaps[1] : snaps[0];
@@ -1326,6 +1364,55 @@ function guestStep(dt) {
   applyDiscrete(b.g, dt);
   if (b.at <= rt) applySnapEvents(b.g);
   applyEntities(a.g, b.g, k, dt);
+  predictStep(dt);
+}
+
+// ---- the guest's own tank: move it here at once with the same rules the host uses ----
+function predictable() {
+  const t = tanks[mySeat];
+  return !!t && t.alive && !t.gone && (state === 'play' || state === 'ending' || state === 'result');
+}
+function predictStep(dt) {
+  const t = tanks[mySeat];
+  if (!predictable()) { pred.active = false; pred.hist = []; return; }
+  if (!pred.active) {             // take over from where the host has the tank
+    const last = snaps.length && snaps[snaps.length - 1].g.T && snaps[snaps.length - 1].g.T[mySeat];
+    if (!Array.isArray(last)) return;
+    pred.x = last[0]; pred.y = last[1]; pred.angle = last[2]; pred.hist = []; pred.active = true;
+  }
+  const locked = t.charge > 0 || !!t.guided;
+  const inp = locked ? IDLE : myInput();
+  if (inp.mag > 0) {
+    const diff = wrapAngle(Math.atan2(inp.y, inp.x) - pred.angle);
+    const maxTurn = C.TURN_RATE * dt;
+    pred.angle = wrapAngle(pred.angle + clamp(diff, -maxTurn, maxTurn));
+    const speed = C.TANK_SPEED * inp.mag * Math.max(0, Math.cos(diff));
+    pred.x += Math.cos(pred.angle) * speed * dt;
+    pred.y += Math.sin(pred.angle) * speed * dt;
+  }
+  resolveCircle(pred, C.TANK_R);
+  const now = performance.now();
+  pred.hist.push({ at: now, x: pred.x, y: pred.y, a: pred.angle });
+  while (pred.hist.length && now - pred.hist[0].at > 2000) pred.hist.shift();
+  t.x = pred.x; t.y = pred.y; t.angle = pred.angle;
+  if (t.charge > 0) t.laserPath = tracePath(t.x, t.y, t.angle);
+}
+// When a snapshot arrives, compare the host's position for my tank with where I had it one
+// round trip ago, and move part of the way toward agreement. A big gap (respawn, a shove) snaps.
+function reconcile(g) {
+  if (!pred.active || !Array.isArray(g.T) || !Array.isArray(g.T[mySeat])) return;
+  const q = g.T[mySeat];
+  if (!(q[3] & 1)) { pred.active = false; return; }
+  const back = performance.now() - (rttMs || 150);
+  let h = null;
+  for (let i = pred.hist.length - 1; i >= 0; i--) if (pred.hist[i].at <= back) { h = pred.hist[i]; break; }
+  if (!h) h = pred.hist[0] || { x: pred.x, y: pred.y, a: pred.angle };
+  const ex = q[0] - h.x, ey = q[1] - h.y, ea = wrapAngle(q[2] - h.a);
+  if (Math.hypot(ex, ey) > 1.2) { pred.x = q[0]; pred.y = q[1]; pred.angle = q[2]; pred.hist = []; return; }
+  const f = 0.25;
+  pred.x += ex * f; pred.y += ey * f; pred.angle = wrapAngle(pred.angle + ea * f);
+  for (const e of pred.hist) { e.x += ex * f; e.y += ey * f; e.a = wrapAngle(e.a + ea * f); }
+  resolveCircle(pred, C.TANK_R);
 }
 
 function applyDiscrete(g, dt) {
@@ -1392,6 +1479,7 @@ function playEvent(e) {
   const kind = e[1], pen = i => COL.pens[i] || COL.graphite;
   if (kind === 'shot') {
     const [, , id, x, y, a] = e;
+    if (id === mySeat && localShots > 0) { localShots--; return; }   // already shown when the button was pressed
     if (tanks[id]) tanks[id].recoil = 1;
     for (let i = 0; i < 4; i++) {
       const d = a + (Math.random() - 0.5) * 0.9, sp = 1 + Math.random() * 2;
@@ -1943,7 +2031,8 @@ function drawTopBoard() {
   const infoY = land ? 18 : Math.min(S * 0.22, 26), rowY = land ? Math.min(LH * 0.16, 64) : S / 2 + S * 0.06;
   ctx.fillStyle = COL.graphite; ctx.globalAlpha = 0.5; ctx.fillRect(0, 0, land ? S : LW, 4); ctx.globalAlpha = 1;
   const role = mode === 'host' ? 'hosting' : mode === 'guest' ? 'joined' : '';
-  const info = netCode ? `game ${netCode} \u00b7 ${role}` : 'online';
+  const ping = mode === 'guest' && rttMs ? ` \u00b7 ${Math.round(rttMs)} ms` : '';
+  const info = netCode ? `game ${netCode} \u00b7 ${role}${ping}` : 'online';
   label(info, cx, infoY, Math.min(17, (land ? LH : S) * 0.12), COL.graphite, FONT_B, 0.7);
   const n = NET_SCREENS.includes(state) ? 0 : NP;
   if (!n) return;
@@ -2363,7 +2452,7 @@ window.__tank = {
   get layout() { return { LW, LH, P, AX, AY, AW, AH, S, JR, FR, JX0, FX0, CY0, rotated }; },
   net: { hostGame, joinGame, hostStart, hostLobby, goOnline, netItems, buildSnap, typeKey,
     get mode() { return mode; }, get seats() { return seats; }, get code() { return netCode; }, get msg() { return netMsg; },
-    get mySeat() { return mySeat; }, get viewFlip() { return viewFlip; }, get guests() { return guests; }, get snaps() { return snaps; }, get NP() { return NP; } },
+    get mySeat() { return mySeat; }, get rtt() { return rttMs; }, get interp() { return interpMs; }, get viewFlip() { return viewFlip; }, get guests() { return guests; }, get snaps() { return snaps; }, get NP() { return NP; } },
   get tanksNow() { return tanks; }
 };
 

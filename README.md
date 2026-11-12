@@ -28,7 +28,7 @@ Options for every mode: four ammo rules, power-ups (laser, homing and guided mis
 
 The game itself is `index.html`. `server.js` serves it and runs online rooms: each room is a copy of the same game script running on the server with drawing switched off, so every player is an equal guest (one network round trip each). Players' own tanks move at once on their device and are corrected toward the server.
 
-**Direct game** (on the game's server): one tablet hosts, and each guest opens a direct WebRTC link to it over the local network (offer/answer passed through the server, no outside STUN). Game data then never leaves the room. If a direct link can't form within the room's network, that guest keeps playing through the server.
+**Direct game** (on the game's server): one tablet hosts, and each guest opens a direct WebRTC link to it (offer/answer passed through the server). On one Wi-Fi the link stays on the local network; between different networks STUN servers that answer inside mainland China (Xiaomi, Tencent, Bilibili) plus Cloudflare/Google let the devices connect straight to each other. If a direct link can't form (some mobile networks block it), that guest keeps playing through the server.
 
 Served from anywhere else (no `server.js`), online play falls back to [PeerJS](https://peerjs.com/) with one tablet hosting.
 

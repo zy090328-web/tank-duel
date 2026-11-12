@@ -116,6 +116,11 @@ const C = {
   MINE_TRIGGER: 0.5,     // a tank this close (centre to centre) sets an armed mine off
   MINE_R: 0.15,
   PIERCE_SPEED: 3.4,      // a piercing shot flies through walls, slowly, and never bounces
+  BOMB_SPEED: 3.0,       // a bomb flies straight, slower than a shot...
+  BOMB_LIFE: 1.5,        // ...goes off after this long (about 4.5 cells), or on touching a wall, a tank or a mine...
+  BOMB_BLAST: 1.15,      // ...and hurts every tank within this distance, walls or not
+  BOMB_ARM: 0.25,        // a bomb that goes off sooner than this spares the tank that fired it
+  BOMB_R: 0.16,
 
   // game modes
   RESPAWN_TIME: 2,       // deathmatch and hill: seconds before a destroyed tank comes back
@@ -297,8 +302,9 @@ for (const m of [
 ]) { ROT4.add(MAPS.length); MAPS.push(m); }
 let COLS = 11, ROWS = 11;      // size of the map being played; set by loadMap
 const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-const POWER_TYPES = ['laser', 'homing', 'guided', 'shield', 'spread', 'mine', 'pierce'];
-const POWER_NAME = { laser: 'LASER', homing: 'HOMING', guided: 'GUIDED', shield: 'SHIELD', spread: 'SPREAD', mine: 'MINE', pierce: 'PIERCE' };
+const POWER_TYPES = ['laser', 'homing', 'guided', 'shield', 'spread', 'mine', 'pierce', 'bomb'];
+const POWER_NAME = { laser: 'LASER', homing: 'HOMING', guided: 'GUIDED', shield: 'SHIELD', spread: 'SPREAD', mine: 'MINE', pierce: 'PIERCE', bomb: 'BOMB' };
+const MISSILE_TYPES = ['homing', 'guided', 'bomb'];
 
 /* ---------- helpers ---------- */
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -832,7 +838,7 @@ function usePower(t) {
   t.power = null;
   const shot = extra => Object.assign({ id: ++entId, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0, extra: true }, extra);
   netEv('sfx', type === 'spread' ? 'shoot' : type === 'pierce' ? 'pierce' : type === 'laser' ? 'charge' : type === 'shield' ? 'shield' : type === 'mine' ? 'drop' : 'launch', t.id);
-  if (type === 'spread' || type === 'pierce' || type === 'homing' || type === 'guided' || type === 'laser') netEv('recoil', t.id);
+  if (type === 'spread' || type === 'pierce' || type === 'homing' || type === 'guided' || type === 'laser' || type === 'bomb') netEv('recoil', t.id);
   if (type === 'laser') {
     t.recoil = 1; t.charge = C.LASER_CHARGE; t.laserPath = tracePath(t.x, t.y, t.angle);
     sfx.charge();
@@ -857,7 +863,7 @@ function usePower(t) {
     t.cool = C.FIRE_COOLDOWN; t.recoil = 1;
     sfx.pierce();
   } else {
-    const s = muzzle(t, C.MISSILE_R);
+    const s = muzzle(t, type === 'bomb' ? C.BOMB_R : C.MISSILE_R);
     const m = { id: ++entId, target: nearestEnemy(t.id, s.x, s.y), type, x: s.x, y: s.y, angle: t.angle, owner: t.id, age: 0, replan: 0, wp: null, tick: 0, detonate: false };
     missiles.push(m);
     if (type === 'guided') t.guided = m;
@@ -889,7 +895,7 @@ function fireLaser(t) {
   // the beam cannot hurt the tank that fired it
   for (let i = missiles.length - 1; i >= 0; i--) {
     const m = missiles[i];
-    if (m.owner !== t.id && pathDist(path, m.x, m.y) < C.MISSILE_R + 0.06) { puff(m.x, m.y, m.owner); removeMissile(i); }
+    if (m.owner !== t.id && pathDist(path, m.x, m.y) < C.MISSILE_R + 0.06) { removeMissile(i); if (m.type === 'bomb') blast(m); else puff(m.x, m.y, m.owner); }
   }
   for (const mn of mines) if (pathDist(path, mn.x, mn.y) < C.MINE_R + 0.05) mn.boom = true;
   if (!LETHAL) return;
@@ -923,20 +929,22 @@ function puff(x, y, owner) {
   netEv('puff', r2(x), r2(y), owner);
 }
 function blast(m) {
-  rings.push({ x: m.x, y: m.y, r: C.GUIDED_BLAST, life: 0.4, max: 0.4, col: penOf(m.owner) });
-  for (let i = 0; i < 22; i++) {
+  const R = m.type === 'bomb' ? C.BOMB_BLAST : C.GUIDED_BLAST;
+  const spare = m.type === 'bomb' && m.age < C.BOMB_ARM ? m.owner : -1;
+  rings.push({ x: m.x, y: m.y, r: R, life: 0.4, max: 0.4, col: penOf(m.owner) });
+  for (let i = 0; i < (R > 1 ? 30 : 22); i++) {
     const a = Math.random() * Math.PI * 2, s = 1 + Math.random() * 4, life = 0.25 + Math.random() * 0.4;
     particles.push({ x: m.x, y: m.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 3 ? penOf(m.owner) : COL.graphite, size: 0.04 + Math.random() * 0.05 });
   }
   shake = Math.max(shake, 0.25);
   sfx.boom();
-  netEv('blast', r2(m.x), r2(m.y), m.owner);
-  for (const mn of mines) if (Math.hypot(mn.x - m.x, mn.y - m.y) < C.GUIDED_BLAST) mn.boom = true;     // a blast sets off mines inside it
+  netEv('blast', r2(m.x), r2(m.y), m.owner, R);
+  for (const mn of mines) if (Math.hypot(mn.x - m.x, mn.y - m.y) < R) mn.boom = true;     // a blast sets off mines inside it
   if (settings.soft) {                                                                                   // ...and knocks down breakable walls
-    for (let i = 0; i < soft.length; i++) if (soft[i] && Math.hypot(i % COLS + 0.5 - m.x, ((i / COLS) | 0) + 0.5 - m.y) < C.GUIDED_BLAST + 0.35) breakWall(i);
+    for (let i = 0; i < soft.length; i++) if (soft[i] && Math.hypot(i % COLS + 0.5 - m.x, ((i / COLS) | 0) + 0.5 - m.y) < R + 0.35) breakWall(i);
   }
   if (!LETHAL) return;
-  for (const t of tanks) if (t.alive && canHurt(m.owner, t) && Math.hypot(t.x - m.x, t.y - m.y) < C.GUIDED_BLAST) hit(t, m.owner);
+  for (const t of tanks) if (t.alive && t.id !== spare && canHurt(m.owner, t) && Math.hypot(t.x - m.x, t.y - m.y) < R) hit(t, m.owner);
 }
 
 function kill(t, by = -1) {
@@ -1115,7 +1123,7 @@ function botInput(seat) {
 
   if (hasFoe && los) {
     const off = Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle));
-    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0) { pressFire(seat); ai.react = 0.3 + Math.random() * 0.55; }
+    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0 && !(t.power === 'bomb' && dFoe > C.BOMB_SPEED * C.BOMB_LIFE + 0.5)) { pressFire(seat); ai.react = 0.3 + Math.random() * 0.55; }
   } else if (hasFoe && ai.react <= 0 && (t.power === 'homing' || t.power === 'guided' || t.power === 'mine')) {
     pressFire(seat); ai.react = 0.6;                         // missiles and mines do not need a clear line
   }
@@ -1244,6 +1252,11 @@ function stepPhysics(dt, lethal, control) {
         m.angle = wrapAngle(m.angle + clamp(diff, -C.HOMING_TURN * dt, C.HOMING_TURN * dt));
         speed *= Math.max(0.35, Math.cos(diff));           // slow down for sharp corners
       }
+    } else if (m.type === 'bomb') {
+      // straight on; it goes off where it first touches a wall
+      speed = C.BOMB_SPEED;
+      const nx = m.x + Math.cos(m.angle) * speed * dt, ny = m.y + Math.sin(m.angle) * speed * dt;
+      if (circleHitsWall(nx, ny, C.BOMB_R) || m.age > C.BOMB_LIFE) { removeMissile(i); blast(m); continue; }
     } else {
       speed = C.GUIDED_SPEED;
       const inp = control && owner.alive && owner.guided === m ? getInput(m.owner) : IDLE;   // the owner's stick steers the missile
@@ -1254,21 +1267,21 @@ function stepPhysics(dt, lethal, control) {
     }
     m.x += Math.cos(m.angle) * speed * dt; m.y += Math.sin(m.angle) * speed * dt;
     resolveCircle(m, C.MISSILE_R);
-    if (++m.tick % 4 === 0) particles.push({ x: m.x - Math.cos(m.angle) * 0.18, y: m.y - Math.sin(m.angle) * 0.18, vx: (Math.random() - 0.5) * 0.5, vy: (Math.random() - 0.5) * 0.5, life: 0.35, max: 0.35, col: COL.graphite, size: 0.035 });
+    if (++m.tick % 4 === 0 && m.type !== 'bomb') particles.push({ x: m.x - Math.cos(m.angle) * 0.18, y: m.y - Math.sin(m.angle) * 0.18, vx: (Math.random() - 0.5) * 0.5, vy: (Math.random() - 0.5) * 0.5, life: 0.35, max: 0.35, col: COL.graphite, size: 0.035 });
 
     if (m.type === 'guided' && (m.detonate || m.age > C.GUIDED_LIFE)) { removeMissile(i); blast(m); continue; }
     if (m.type === 'homing' && m.age > C.HOMING_LIFE) { puff(m.x, m.y, m.owner); removeMissile(i); continue; }
     let onMine = false;
     for (const mn of mines) if (!mn.boom && Math.hypot(m.x - mn.x, m.y - mn.y) < C.MINE_R + C.MISSILE_R) { mn.boom = true; onMine = true; }
-    if (onMine) { removeMissile(i); if (m.type === 'guided') blast(m); else puff(m.x, m.y, m.owner); continue; }
+    if (onMine) { removeMissile(i); if (m.type !== 'homing') blast(m); else puff(m.x, m.y, m.owner); continue; }
     for (const t of tanks) {
       if (!t.alive) continue;
       // a homing missile never turns on its own tank; a guided one can, once it is armed
-      if (t.id === m.owner && (m.type === 'homing' || m.age < C.MISSILE_ARM)) continue;
+      if (t.id === m.owner && (m.type !== 'guided' || m.age < C.MISSILE_ARM)) continue;
       if (!canHurt(m.owner, t)) continue;
       if (Math.hypot(t.x - m.x, t.y - m.y) >= mHit) continue;
       removeMissile(i);
-      if (m.type === 'guided') blast(m);
+      if (m.type !== 'homing') blast(m);
       else if (lethal) hit(t, m.owner);
       else puff(m.x, m.y, m.owner);
       break;
@@ -1681,7 +1694,7 @@ function buildSnap() {
     T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0),
       shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
-    M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, m.type === 'homing' ? 0 : 1, m.target]) : [],
+    M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
     P: play ? pickups.map(k => [r2(k.x), r2(k.y), POWER_TYPES.indexOf(k.type)]) : [],
     E: netEvents.map(e => e.e),
@@ -2033,8 +2046,8 @@ function playEvent(e) {
     sfx.zap(); if (!REDUCED) shake = Math.max(shake, 0.12);
   } else if (kind === 'puff') { burst(e[2], e[3], 8, pen(e[4]), 1.4, 0.3, 0.04); sfx.pop(); }
   else if (kind === 'blast') {
-    rings.push({ x: e[2], y: e[3], r: C.GUIDED_BLAST, life: 0.4, max: 0.4, col: pen(e[4]) });
-    burst(e[2], e[3], 22, pen(e[4]), 3, 0.45, 0.06); shake = Math.max(shake, 0.25); sfx.boom();
+    rings.push({ x: e[2], y: e[3], r: e[5] || C.GUIDED_BLAST, life: 0.4, max: 0.4, col: pen(e[4]) });
+    burst(e[2], e[3], (e[5] || 0) > 1 ? 30 : 22, pen(e[4]), 3, 0.45, 0.06); shake = Math.max(shake, 0.25); sfx.boom();
   } else if (kind === 'kill') {
     marks.push({ x: e[3], y: e[4], col: pen(e[2]), seed: e[5] | 0 });
     burst(e[3], e[4], 30, pen(e[2]), 3.2, 0.6, 0.07); shake = 0.35; sfx.boom();
@@ -2078,8 +2091,8 @@ function applyEntities(a, b, k, dt) {
   for (const id of trails.keys()) if (!live.has(id)) trails.delete(id);
   const aM = byId(a.M);
   missiles = (b.M || []).map(q => {
-    const p = aM.get(q[0]) || q, m = { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), angle: lerpA(p[3], q[3]), owner: q[4], type: q[5] ? 'guided' : 'homing', target: q[6], age: age('m' + q[0]) };
-    if (Math.random() < dt * 30 / 4) particles.push({ x: m.x - Math.cos(m.angle) * 0.18, y: m.y - Math.sin(m.angle) * 0.18, vx: (Math.random() - 0.5) * 0.5, vy: (Math.random() - 0.5) * 0.5, life: 0.35, max: 0.35, col: COL.graphite, size: 0.035 });
+    const p = aM.get(q[0]) || q, m = { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), angle: lerpA(p[3], q[3]), owner: q[4], type: MISSILE_TYPES[q[5]] || 'guided', target: q[6], age: age('m' + q[0]) };
+    if (m.type !== 'bomb' && Math.random() < dt * 30 / 4) particles.push({ x: m.x - Math.cos(m.angle) * 0.18, y: m.y - Math.sin(m.angle) * 0.18, vx: (Math.random() - 0.5) * 0.5, vy: (Math.random() - 0.5) * 0.5, life: 0.35, max: 0.35, col: COL.graphite, size: 0.035 });
     return m;
   });
   mines = (b.N || []).map(q => ({ id: q[0], x: q[1], y: q[2], owner: q[3], armed: !!q[4], age: age('n' + q[0]) }));
@@ -2246,7 +2259,7 @@ function menuHintText(lobby) {
   if (k === 'game') return GAME_TEXT[settings.game];
   if (k === 'cpu') return settings.cpu ? `You against ${settings.cpu} computer tank${settings.cpu > 1 ? 's' : ''}, on this screen.` : 'Two players, one at each end of this screen.';
   if (k === 'ammo') return ammoText();
-  if (k === 'pu') return settings.powerups ? 'Pickups appear: laser, missiles, shield, mines and more.' : 'No pickups. Just tanks and shots.';
+  if (k === 'pu') return settings.powerups ? 'Pickups appear: laser, missiles, bombs, shield, mines and more.' : 'No pickups. Just tanks and shots.';
   if (k === 'soft') return settings.soft ? 'Lightly drawn walls break when a shot hits them.' : 'Every wall stops every shot.';
   if (k === 'maps') return settings.maps === 'all' ? 'Small and large maps, shuffled.' : settings.maps === 'classic' ? 'Small 11 by 11 maps. (3+ tanks always get large ones.)' : 'Large 13 by 13 maps with more cover.';
   if (k === 'win') return settings.game === 'dm' ? `The match ends at ${target()} kills.` : settings.game === 'hill' ? `The match ends when a tank has held the hill for ${target()} seconds.` : `The match ends at ${target()} rounds won.`;
@@ -2438,6 +2451,11 @@ function drawGlyph(type, s, col) {
     for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; ctx.moveTo(Math.cos(a) * s * 0.3, Math.sin(a) * s * 0.3); ctx.lineTo(Math.cos(a) * s * 0.64, Math.sin(a) * s * 0.64); }
     ctx.stroke();
     ctx.beginPath(); ctx.arc(0, 0, s * 0.34, 0, Math.PI * 2); ctx.fill();
+  } else if (type === 'bomb') {
+    ctx.beginPath(); ctx.arc(-s * 0.08, s * 0.12, s * 0.44, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(s * 0.22, -s * 0.22); ctx.quadraticCurveTo(s * 0.36, -s * 0.52, s * 0.56, -s * 0.5); ctx.stroke();
+    for (const [x, y] of [[s * 0.66, -s * 0.66], [s * 0.78, -s * 0.42], [s * 0.5, -s * 0.74]]) { ctx.moveTo(s * 0.58, -s * 0.52); ctx.lineTo(x, y); }
+    ctx.stroke();
   } else {
     ctx.rect(-s * 0.14, -s * 0.62, s * 0.28, s * 1.24);
     ctx.moveTo(-s * 0.68, 0); ctx.lineTo(s * 0.4, 0); ctx.stroke();
@@ -2507,7 +2525,23 @@ function drawTank(t) {
   ctx.restore();
 }
 
+function drawBomb(m) {
+  const col = penOf(m.owner), r = P * C.BOMB_R, a = m.age || 0;
+  ctx.save(); ctx.translate(m.x * P, m.y * P);
+  ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, P * 0.03); ctx.globalAlpha = 0.45;
+  ctx.setLineDash([P * 0.12, P * 0.1]); ctx.beginPath(); ctx.arc(0, 0, P * C.BOMB_BLAST, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  ctx.globalAlpha = 1; ctx.fillStyle = COL.graphite; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(-r * 0.3, -r * 0.3, r * 0.32, 0, Math.PI * 2); ctx.fill();
+  // fuse at the back, its spark flickering faster as the bomb is about to go
+  const bx = -Math.cos(m.angle) * r, by = -Math.sin(m.angle) * r, fx = bx * 1.9, fy = by * 1.9;
+  ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(1.2, P * 0.035); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(fx, fy); ctx.stroke();
+  const flick = REDUCED ? 1 : 0.6 + 0.4 * Math.sin(a * (14 + a * 30));
+  ctx.fillStyle = col; ctx.globalAlpha = flick; ctx.beginPath(); ctx.arc(fx, fy, r * 0.42, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
 function drawMissile(m) {
+  if (m.type === 'bomb') { drawBomb(m); return; }
   const col = penOf(m.owner);
   ctx.save(); ctx.translate(m.x * P, m.y * P); ctx.rotate(m.angle);
   const L = 0.4 * P, W = 0.16 * P;

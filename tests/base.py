@@ -25,7 +25,8 @@ async def main():
     cards = await ev(M, "__tank.menuItems().map(it => [it.kind, it.v || '', it.x, it.y, it.w, it.h])")
     boxes = [c[2:] for c in cards]
     overlap = any(not (a[0] + a[2] <= b[0] or b[0] + b[2] <= a[0] or a[1] + a[3] <= b[1] or b[1] + b[3] <= a[1]) for i, a in enumerate(boxes) for b in boxes[i + 1:])
-    check(len(cards) == 6 and not overlap and all(c[2] > 0 and c[2] + c[4] < 820 for c in cards), 'step 1 shows five mode cards and Online, none overlapping')
+    kinds = sorted(c[0] for c in cards)
+    check(kinds == ['board', 'game', 'game', 'game', 'game', 'game', 'online'] and not overlap and all(c[2] > 0 and c[2] + c[4] < 820 for c in cards), f'step 1 shows five mode cards, Online and Leaderboard, none overlapping {kinds}')
     q = await ev(M, "(() => { const it = __tank.menuItems().find(it => it.kind === 'game' && it.v === 'base'); return it && [it.x + it.w / 2, it.y + it.h / 2]; })()")
     await M.mouse.click(q[0], q[1]); await M.wait_for_timeout(100)
     check(await ev(M, "__tank.settings().game") == 'base' and await ev(M, "__tank.menuStep") == 'who', 'tapping Base picks it and moves on to who plays')

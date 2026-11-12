@@ -21,6 +21,67 @@ const MAX_ROOMS = 30;                 // server-run rooms at once
 const TICK_MS = 1000 / 60;            // how often each room's game loop is driven
 const page = () => fs.readFileSync(path.join(__dirname, 'index.html'));
 
+/* ---------- leaderboard: the results of online matches between players with names ---------- */
+// Kept in a JSON file on a disk that survives deploys (a volume mounted at /data on Railway).
+const DATA_DIR = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, 'data'));
+const BOARD_FILE = path.join(DATA_DIR, 'board.json');
+const MAX_MATCHES = 5000;
+let board = { matches: [] };
+try { const b = JSON.parse(fs.readFileSync(BOARD_FILE, 'utf8')); if (Array.isArray(b.matches)) board = b; } catch (e) {}
+console.log(`leaderboard: ${board.matches.length} matches in ${BOARD_FILE}`);
+let saveTimer = null;
+function saveBoard() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(BOARD_FILE + '.tmp', JSON.stringify(board)); fs.renameSync(BOARD_FILE + '.tmp', BOARD_FILE); }
+    catch (e) { console.error('leaderboard not saved:', e.message); }
+  }, 1500);
+}
+const MODES = ['classic', 'teams', 'dm', 'hill', 'base'];
+const seenIds = new Map();                 // match ids already recorded (a result can arrive twice)
+const cleanName = v => String(v || '').replace(/[<>]/g, '').trim().slice(0, 12);
+const count = v => Math.max(0, Math.min(999, v | 0));
+function addResult(r) {
+  if (!r || typeof r !== 'object' || !Array.isArray(r.p) || r.p.length < 2 || r.p.length > 5) return false;
+  const id = String(r.id || '').slice(0, 16);
+  if (!id || seenIds.has(id)) return false;
+  const p = r.p.map(q => ({ n: cleanName(q && q.n), w: !!(q && q.w), k: count(q && q.k), d: count(q && q.d), bot: !!(q && q.bot) }));
+  if (p.filter(q => q.n && !q.bot).length < 2) return false;   // it takes two people with names
+  seenIds.set(id, Date.now());
+  for (const [k, t] of seenIds) if (Date.now() - t > 3600e3) seenIds.delete(k);
+  board.matches.push({ t: Date.now(), m: MODES.includes(r.m) ? r.m : 'classic', u: String(r.u || '').slice(0, 12), p });
+  if (board.matches.length > MAX_MATCHES) board.matches.splice(0, board.matches.length - MAX_MATCHES);
+  saveBoard();
+  return true;
+}
+// totals per player (all time), the week's leaders, and who has beaten whom
+function boardStats() {
+  const weekAgo = Date.now() - 7 * 864e5, all = new Map(), week = new Map(), h2h = {};
+  const key = n => n.toLowerCase();
+  const add = (map, q, m) => {
+    const o = map.get(key(q.n)) || { name: q.n, games: 0, wins: 0, kills: 0, deaths: 0, modes: {} };
+    o.name = q.n; o.games++; if (q.w) o.wins++; o.kills += q.k; o.deaths += q.d; o.modes[m.m] = (o.modes[m.m] || 0) + 1;
+    map.set(key(q.n), o);
+  };
+  for (const m of board.matches) {
+    const people = m.p.filter(q => q.n && !q.bot);
+    for (const q of people) { add(all, q, m); if (m.t >= weekAgo) add(week, q, m); }
+    for (const a of people) if (a.w) for (const b of people) if (!b.w && key(a.n) !== key(b.n)) {
+      const x = h2h[key(a.n)] || (h2h[key(a.n)] = {});
+      x[key(b.n)] = (x[key(b.n)] || 0) + 1;
+    }
+  }
+  const fav = o => Object.keys(o.modes).sort((a, b) => o.modes[b] - o.modes[a])[0] || '';
+  const players = [...all.values()].map(o => ({ name: o.name, games: o.games, wins: o.wins, kills: o.kills, deaths: o.deaths, fav: fav(o) }))
+    .sort((a, b) => b.wins - a.wins || a.games - b.games || b.kills - a.kills).slice(0, 40);
+  const w = [...week.values()], top = f => w.length ? w.reduce((a, b) => f(b) > f(a) ? b : a) : null;
+  const most = (f, label) => { const o = top(f); return o && f(o) > 0 ? { name: o.name, n: Math.round(f(o) * 100) / 100, label } : null; };
+  const titles = [most(o => o.wins, 'most wins'), most(o => o.kills, 'most kills'),
+    most(o => o.games >= 5 ? o.kills / Math.max(1, o.deaths) : 0, 'best K/D'), most(o => o.games, 'most games')].filter(Boolean);
+  return { players, titles, h2h, total: board.matches.length };
+}
+
 /* ---------- http: the page, and a marker that tells the page a relay is here ---------- */
 const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
@@ -38,6 +99,21 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (url === '/healthz') { res.writeHead(200); return res.end('ok'); }
+  if (url === '/board' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    return res.end(JSON.stringify(boardStats()));
+  }
+  if (url === '/result' && req.method === 'POST') {
+    // a tablet that hosted a Same Wi-Fi game reports how it ended
+    let body = '';
+    req.on('data', d => { body += d; if (body.length > 8192) req.destroy(); });
+    req.on('end', () => {
+      let r = null; try { r = JSON.parse(body); } catch (e) {}
+      const ok = addResult(r);
+      res.writeHead(ok ? 200 : 400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok }));
+    });
+    return;
+  }
   if (process.env.TEST_HOOKS && url === '/test/endround' && req.method === 'POST') {
     // tests only: in every server-run room, knock out all tanks but the first one still alive
     for (const room of hosted) {
@@ -240,6 +316,7 @@ function makeSandbox() {
     fetch: async () => ({ ok: true, json: async () => ({ relay: true }) })
   };
   env.window = env;
+  env.__report = r => { try { addResult(JSON.parse(JSON.stringify(r))); } catch (e) {} };
   env.__tick = () => { const cb = rafCb; rafCb = null; if (cb) cb(performance.now()); };
   return env;
 }

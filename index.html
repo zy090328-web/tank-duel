@@ -150,7 +150,8 @@ const C = {
 
   // terrain
   GRASS_SEE: 1.6,        // a tank in grass is seen only by enemies this close (centre to centre)...
-  GRASS_REVEAL: 0.8      // ...or for this long after it fires
+  GRASS_REVEAL: 0.8,     // ...or for this long after it fires
+  FOG_SEE: 3.2           // party rule Fog: enemy tanks further than this from your side are not shown
 };
 
 /* ============================================================
@@ -401,6 +402,36 @@ const COL = {
   grass: tok('--grass-pen') || '#5f8f2f', water: tok('--water-ink') || '#3f93c9'
 };
 const PEN_NAMES = ['Red', 'Blue', 'Green', 'Orange', 'Violet'];
+/* ---------- party rules: one twist for a round, by changing the tuning above ---------- */
+const MUTS = {
+  bouncy: { name: 'Super bounce', text: 'Shots bounce 15 times and last 9 seconds.' },
+  fast: { name: 'Turbo', text: 'Tanks drive and turn much faster.' },
+  big: { name: 'Big tanks', text: 'Bigger tanks: easier to hit, harder to squeeze past walls.' },
+  rapid: { name: 'Rapid fire', text: 'Shots come three times as fast, up to 12 at once.' },
+  storm: { name: 'Pickup storm', text: 'Power-ups keep raining down.' },
+  slow: { name: 'Slow shots', text: 'Shots crawl: dodge them, or box someone in.' },
+  bank: { name: 'Bank shots', text: 'A shot only hurts after it has bounced off a wall.' },
+  fog: { name: 'Fog', text: 'You only see tanks within 3 cells of your side.' }
+};
+const MUT_IDS = Object.keys(MUTS);
+const C0 = Object.assign({}, C);              // the tuning with no party rule
+let mutNow = '';                              // the party rule of the round being played
+function applyMut(id) {
+  Object.assign(C, C0);
+  mutNow = MUTS[id] ? id : '';
+  if (mutNow === 'bouncy') { C.MAX_BOUNCES = 15; C.BULLET_LIFE = 9; }
+  else if (mutNow === 'fast') { C.TANK_SPEED *= 1.6; C.TURN_RATE *= 1.5; }
+  else if (mutNow === 'big') C.TANK_R = 0.42;
+  else if (mutNow === 'rapid') { C.FIRE_COOLDOWN = 0.1; C.MAX_BULLETS = 12; C.CLIP_SIZE = 12; C.RELOAD_TIME = 1.5; }
+  else if (mutNow === 'storm') { C.PICKUP_FIRST = 1; C.PICKUP_INTERVAL = 1.2; }
+  else if (mutNow === 'slow') { C.BULLET_SPEED *= 0.5; C.BULLET_LIFE = 10; }
+}
+// the rule for a new round: the one chosen, or a random one (not the last one again; no fog on a shared screen)
+function pickMut() {
+  if (settings.mut !== 'random') return MUTS[settings.mut] ? settings.mut : '';
+  const pool = MUT_IDS.filter(id => id !== mutNow && !(id === 'fog' && mode === 'local' && !soloMatch));
+  return pool[(Math.random() * pool.length) | 0];
+}
 const MAX_PLAYERS = 5;
 const FONT_D = tok('--font-display'), FONT_B = tok('--font-body');
 const IS_TOUCH = (navigator.maxTouchPoints || 0) > 0 || matchMedia('(pointer: coarse)').matches;
@@ -428,13 +459,13 @@ const GAME_TEXT = {
 const BASE_TIME = { 3: 240, 5: 360, 7: 480 };          // base mode: seconds before the match is decided on what is left
 const KILL_GOAL = { 3: 5, 5: 10, 7: 15 }, HILL_GOAL = { 3: 20, 5: 30, 7: 45 };
 // soft: some walls break when shot. cpu: on one screen, play alone against this many computer tanks (0 = two people).
-let settings = { ammo: 'unlimited', powerups: false, maps: 'all', winScore: C.WIN_SCORE, game: 'classic', soft: false, terrain: true, cpu: 0 };
+let settings = { ammo: 'unlimited', powerups: false, maps: 'all', winScore: C.WIN_SCORE, game: 'classic', soft: false, terrain: true, mut: 'off', cpu: 0 };
 function validSettings(s) {
   if (!s || !AMMO_MODES.includes(s.ammo)) return null;
   return { ammo: s.ammo, powerups: !!s.powerups, maps: MAP_POOLS.includes(s.maps) ? s.maps : 'all',
     winScore: WIN_SCORES.includes(s.winScore) ? s.winScore : C.WIN_SCORE,
     game: GAME_MODES.includes(s.game) ? s.game : 'classic', soft: !!s.soft, terrain: s.terrain === undefined ? true : !!s.terrain,
-    cpu: [1, 2, 3].includes(s.cpu) ? s.cpu : 0 };
+    mut: s.mut === 'random' || MUTS[s.mut] ? s.mut : 'off', cpu: [1, 2, 3].includes(s.cpu) ? s.cpu : 0 };
 }
 // classic = the small 11x11 maps, complex = the 13x13 ones
 function mapPool() {
@@ -662,8 +693,11 @@ const concealed = t => settings.terrain && t.alive && !(t.reveal > 0) && grassAt
 const friendOf = (a, b) => a === b || (teamsOn() && teamOf[a] === teamOf[b]);
 // can the side of seat `viewer` see tank t? A concealed tank shows only to its own side and to enemies right beside it.
 function seenBy(viewer, t) {
-  if (viewer < 0 || !concealed(t) || friendOf(viewer, t.id)) return true;
-  for (const o of tanks) if (o.alive && friendOf(viewer, o.id) && Math.hypot(o.x - t.x, o.y - t.y) < C.GRASS_SEE) return true;
+  if (viewer < 0 || friendOf(viewer, t.id)) return true;
+  // grass hides a tank but for enemies right beside it; fog (a party rule) hides it but for enemies a few cells away
+  const range = concealed(t) ? C.GRASS_SEE : mutNow === 'fog' && t.alive && !(t.reveal > 0) ? C.FOG_SEE : 0;
+  if (!range) return true;
+  for (const o of tanks) if (o.alive && friendOf(viewer, o.id) && Math.hypot(o.x - t.x, o.y - t.y) < range) return true;
   return false;
 }
 // whose eyes this screen shows: nobody's when two people share it (then grass hides no one)
@@ -879,7 +913,20 @@ function resetEntities() {
   pickupTimer = C.PICKUP_FIRST; emptyT = 0;
   roundT = 0; sdClosed = 0; sdStarted = false;
 }
+// every match gets an id, so the server can tell a result it already has
+let matchId = '';
+// at the end of an online match, its result goes on the leaderboard (only counted with two named players)
+function reportResult() {
+  if (mode !== 'host' || NP < 2) return;
+  const ch = champion();
+  const p = tanks.map(t => ({ n: names[t.id] || '', w: ch >= 0 && sideOf(t.id) === ch, k: (stats[t.id] || {}).k | 0, d: (stats[t.id] || {}).d | 0, bot: bots.has(t.id) }));
+  if (p.filter(q => q.n && !q.bot).length < 2) return;
+  const r = { id: matchId, m: settings.game, u: mutNow, p };
+  if (HEADLESS) { if (window.__report) window.__report(r); return; }
+  if (usingRelay && typeof fetch === 'function') fetch('/result', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(r) }).catch(() => {});
+}
 function startMatch() {
+  matchId = Math.random().toString(36).slice(2, 12);
   // teams need both sides manned
   teamOf = tanks.map(t => teamOf[t.id] ? 1 : 0);
   if (NP > 2 || settings.game === 'base') for (const k of [0, 1]) if (!teamOf.includes(k)) teamOf[NP - 1] = k;
@@ -894,6 +941,7 @@ function startMatch() {
   startRound();
 }
 function startRound() {
+  applyMut(pickMut());
   loadMap(mapOrder[mapIdx % mapOrder.length]);
   resetEntities();
   roundId++;
@@ -911,6 +959,7 @@ function setupLocal() {
 function beginFromMenu() { if (resumeMatch) { resumeMatch = false; startRound(); } else { setupLocal(); startMatch(); } }
 function goMenu() {
   if (mode !== 'local') netLeave();
+  applyMut('');
   state = 'title'; stateT = 0; resumeMatch = false; mapIdx = 0; quitArm = 0; menuStep = 'mode'; menuFocus = ''; lobbyPane = '';
   soloMatch = false; bots = new Set(); teamOf = []; names = []; stats = [];
   setTankCount(2); scores = [0, 0]; viewFlip = false;
@@ -1706,6 +1755,7 @@ function stepPhysics(dt, lethal, control) {
       if (!t.alive) continue;
       if (b.owner === t.id && b.age < C.SELF_SAFE_TIME) continue;
       if (!canHurt(b.owner, t) || t.inv > 0) continue;     // shots pass through team-mates, and through a tank that has just come back
+      if (mutNow === 'bank' && !b.pierce && !b.bounces) continue;   // party rule: only a shot that has bounced hurts
       const dx = b.x - t.x, dy = b.y - t.y;
       if (dx * dx + dy * dy < hitR * hitR) {
         if (b.owner !== t.id && !b.extra && stats[b.owner]) stats[b.owner].h++;
@@ -1815,9 +1865,9 @@ function update(dt) {
         while (sdClosed < due && state === 'play') closeRing(sdClosed++);
         if (state !== 'play') break;
       }
-      if (settings.powerups) {
+      if (settings.powerups || mutNow === 'storm') {
         pickupTimer -= dt;
-        if (pickupTimer <= 0 && pickups.length <= 1) { spawnPickups(); pickupTimer = C.PICKUP_INTERVAL; }
+        if (pickupTimer <= 0 && pickups.length <= (mutNow === 'storm' ? 5 : 1)) { spawnPickups(); pickupTimer = C.PICKUP_INTERVAL; }
       }
       // "5 only" without power-ups: when nobody has a shot left and the field is clear, the round is a draw
       if (settings.ammo === 'limited' && !settings.powerups && tanks.filter(t => t.alive).every(t => t.ammo <= 0) && bullets.length === 0) {
@@ -1835,7 +1885,7 @@ function update(dt) {
     case 'result':
       stepPhysics(dt, false, true);
       if (stateT >= (respawnMode() ? 0.4 : 1.6)) {
-        if (respawnMode() || scores.some(n => n >= target())) { state = 'matchEnd'; stateT = 0; sfx.win(); }
+        if (respawnMode() || scores.some(n => n >= target())) { state = 'matchEnd'; stateT = 0; sfx.win(); reportResult(); }
         else { mapIdx++; startRound(); }
       }
       break;
@@ -1851,7 +1901,17 @@ function update(dt) {
    Devices talk directly over WebRTC (PeerJS); a public PeerJS server
    only introduces them, using the 4-digit game code.
    ============================================================ */
-const NET_SCREENS = ['online', 'joinCode', 'hostWait', 'guestWait', 'netLost'];
+const NET_SCREENS = ['online', 'joinCode', 'hostWait', 'guestWait', 'netLost', 'board'];
+// leaderboard: what the server sent, a message instead, the player whose record is open, and where to go back to
+let boardData = null, boardMsg = '', boardPick = -1, boardBack = 'title';
+function openBoard() {
+  boardBack = state; state = 'board'; stateT = 0; boardData = null; boardPick = -1; boardMsg = 'Loading…'; layout();
+  if (typeof fetch !== 'function') { boardMsg = 'The leaderboard is not available here.'; return; }
+  fetch('/board', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(new Error(r.status)))
+    .then(d => { if (state === 'board') { boardData = d; boardMsg = ''; } })
+    .catch(() => { if (state === 'board') boardMsg = "The leaderboard lives on the game's own server. Open the game from its Railway address to see it."; });
+}
+function closeBoard() { state = boardBack === 'online' ? 'online' : 'title'; stateT = 0; layout(); }
 // On the game's server each room runs this same script with no screen ('headless'). That copy is the
 // host but drives no tank: every player is a guest, and the first player still connected leads the room
 // (picks settings, presses START, Rematch and Lobby).
@@ -2138,6 +2198,7 @@ function hostStart() {
 }
 // back to the waiting room with whoever is still connected
 function hostLobby() {
+  applyMut('');
   reseat();
   bots = new Set(); teamOf = []; names = []; stats = [];
   setTankCount(2); scores = [0, 0]; loadMap(0); resetEntities(); layout();
@@ -2170,7 +2231,8 @@ function buildSnap() {
   return {
     ts: r1(now), dd: HEADLESS ? 1 : 0, ld: HEADLESS ? leaderId() : null, st: state, t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
     seats, sc: scores, w: winner, dr: drawReason,
-    set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0, settings.terrain ? 1 : 0],
+    set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0, settings.terrain ? 1 : 0, settings.mut],
+    mu: mutNow,
     tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel),
     hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h, v.b | 0]) : null,
     bw: baseWinner,
@@ -2437,9 +2499,10 @@ function applyDiscrete(g, dt) {
   // the room's creator brings their own saved settings to the server's waiting room once
   if (isLeader && !sentPrefs && g.st === 'hostWait' && savedSettings) { sentPrefs = true; sendCmd('set', savedSettings); }
   if (Array.isArray(g.set)) {
-    const s = validSettings({ ammo: g.set[0], powerups: !!g.set[1], winScore: g.set[2], maps: g.set[3], game: g.set[4], soft: !!g.set[5], terrain: !!g.set[6] });
+    const s = validSettings({ ammo: g.set[0], powerups: !!g.set[1], winScore: g.set[2], maps: g.set[3], game: g.set[4], soft: !!g.set[5], terrain: !!g.set[6], mut: g.set[7] });
     if (s) settings = s;
   }
+  if ((g.mu || '') !== mutNow) applyMut(g.mu || '');
   const n = clamp(g.n | 0, 1, MAX_PLAYERS);
   if (n !== NP) setTankCount(n);
   teamOf = Array.isArray(g.tm) ? g.tm.map(v => v ? 1 : 0) : [];
@@ -2764,10 +2827,13 @@ function whoText(n) {
 }
 const whoShort = () => settings.cpu ? `you + ${settings.cpu} CPU` : '2 players';
 const rulesSummary = () => [{ unlimited: 'unlimited ammo', reload: '5 + reload', limited: '5 shots', single: `1 shot per ${C.SINGLE_COOLDOWN} s` }[settings.ammo],
-  settings.powerups ? 'power-ups' : 'no power-ups', FEAT_TEXT[featIdx()].toLowerCase(), winText(settings.winScore)].join(' · ');
+  settings.powerups ? 'power-ups' : 'no power-ups', FEAT_TEXT[featIdx()].toLowerCase(), winText(settings.winScore),
+  ...(settings.mut === 'off' ? [] : [settings.mut === 'random' ? 'random party rules' : MUTS[settings.mut].name])].join(' · ');
+// the party rules as cards (tapping one picks it and goes back to the rules)
+const mutCards = top => cardGrid(MUT_IDS.map(id => ({ kind: 'mut', v: id, text: MUTS[id].name, sub: MUTS[id].text, on: settings.mut === id })), top, U * 0.82, U * 0.14);
 // big cards in a grid of two columns, the last row centred; `top` is the top edge of the first row
-function cardGrid(list, top) {
-  const cx = mcx(), w = U * 4.7, h = U * 1.0, gx = U * 0.25, gy = U * 0.2;
+function cardGrid(list, top, h = U * 1.0, gy = U * 0.2) {
+  const cx = mcx(), w = U * 4.7, gx = U * 0.25;
   return list.map((c, i) => {
     const row = Math.floor(i / 2), col = i % 2, inRow = Math.min(2, list.length - row * 2);
     return Object.assign({ card: true, x: cx + (col - (inRow - 1) / 2) * (w + gx) - w / 2, y: top + row * (h + gy), w, h }, c);
@@ -2775,19 +2841,21 @@ function cardGrid(list, top) {
 }
 // the rules: one labelled row per setting, every choice shown; `top` is the top edge of the first row
 function ruleRows(top) {
-  const out = [], cx = mcx(), lw = U * 2.2, h = U * 0.5, g = U * 0.12, x0 = cx - U * 5.2 + lw, x1 = cx + U * 5.2;
+  const out = [], cx = mcx(), lw = U * 2.2, h = U * 0.46, g = U * 0.12, x0 = cx - U * 5.2 + lw, x1 = cx + U * 5.2;
   let y = top;
   const row = (text, opts) => {
     out.push({ kind: 'label', text, x: cx - U * 5.2, y, w: lw, h });
     const w = (x1 - x0 - g * (opts.length - 1)) / opts.length;
     opts.forEach(([kind, v, t, on], i) => out.push({ kind, v, text: t, on, x: x0 + i * (w + g), y, w, h }));
-    y += U * 0.62;
+    y += U * 0.58;
   };
   row('Ammo', [['unlimited', 'Unlimited'], ['reload', '5 + reload'], ['limited', '5 only'], ['single', `1 per ${C.SINGLE_COOLDOWN} s`]].map(([v, t]) => ['ammo', v, t, settings.ammo === v]));
   row('Power-ups', [['pu', true, 'On', settings.powerups], ['pu', false, 'Off', !settings.powerups]]);
   row('Map extras', FEAT_SHORT.map((t, i) => ['soft', i, t, featIdx() === i]));
   if (settings.game !== 'base') row('Maps', MAP_POOLS.map(v => ['maps', v, MAP_SHORT[v], settings.maps === v]));
   row(winLabel(), WIN_SCORES.map(v => ['win', v, winText(v), settings.winScore === v]));
+  row('Party rule', [['mut', 'off', 'Off', settings.mut === 'off'], ['mut', 'random', 'Random', settings.mut === 'random'],
+    ['mutpick', '', MUTS[settings.mut] ? MUTS[settings.mut].name + ' ›' : 'Pick one ›', !!MUTS[settings.mut]]]);
   return { items: out, end: y };
 }
 const button = (kind, text, cx, cy, w, v) => ({ kind, v, text, x: cx - w / 2, y: cy - U * 0.35, w, h: U * 0.7 });
@@ -2801,20 +2869,23 @@ function menuItems(top = AY + AH / 2, buttons = null, lobby = false) {
       ...(buttons || []).map(([kind, text], i) => button(kind, text, cx + (i ? 1 : -1) * U * 1.6, top + U * 2.35, U * 2.9))];
   }
   const y0 = top + U * 1.3;
-  if (menuStep === 'mode') return cardGrid([
+  if (menuStep === 'mut') return [...mutCards(y0, 'rules'), Object.assign(button('step', '‹', cx - U * 4.6, top + U * 0.42, U * 1.0, 'rules'), { h: U * 0.6, y: top + U * 0.12 })];
+  if (menuStep === 'mode') return [...cardGrid([
     ...GAME_MODES.map(m => ({ kind: 'game', v: m, text: GAME_NAME[m], sub: GAME_SHORT[m], on: settings.game === m })),
-    { kind: 'online', text: 'Online', sub: 'Each player on their own device' }], y0);
+    { kind: 'online', text: 'Online', sub: 'Each player on their own device' }], y0),
+    Object.assign(button('board', 'Leaderboard', cx + U * 4.0, top + U * 0.42, U * 2.3), { h: U * 0.5, y: top + U * 0.17 })];
   if (menuStep === 'who') return [
     ...cardGrid([0, 1, 2, 3].map(n => ({ kind: 'cpu', v: n, text: n ? `You + ${n} CPU` : '2 players', sub: whoText(n), on: settings.cpu === n })), y0),
     button('step', '‹ Back', cx, top + U * 4.75, U * 2.6, 'mode')];
   const r = ruleRows(y0);
   return [...r.items,
-    button('step', '‹ Back', cx - U * 2.9, top + U * 4.85, U * 2.4, 'who'),
-    button('start', resumeMatch ? 'CONTINUE' : 'START', cx + U * 1.3, top + U * 4.85, U * 4.6)];
+    button('step', '‹ Back', cx - U * 2.9, top + U * 5.08, U * 2.4, 'who'),
+    button('start', resumeMatch ? 'CONTINUE' : 'START', cx + U * 1.3, top + U * 5.08, U * 4.6)];
 }
 // the waiting room's mode and rules pages (for whoever sets the game up)
 function paneItems() {
   const cx = mcx(), top = AY + U * 1.7;
+  if (lobbyPane === 'mut') return [...mutCards(top), button('done', '‹ Back', cx, top + U * 4.15, U * 2.6)];
   if (lobbyPane === 'mode') return [
     ...cardGrid(GAME_MODES.map(m => ({ kind: 'game', v: m, text: GAME_NAME[m], sub: GAME_SHORT[m], on: settings.game === m })), top),
     button('done', '‹ Back', cx, top + U * 4.2, U * 2.6)];
@@ -2829,8 +2900,8 @@ function drawItems(items, col) {
       ctx.globalAlpha = 1; ctx.fillStyle = COL.paper; ctx.fill();
       if (it.on) { ctx.globalAlpha = 0.14; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
       ctx.lineWidth = Math.max(1.5, U * (it.on ? 0.07 : 0.04)); ctx.strokeStyle = it.on ? col : COL.graphite; ctx.globalAlpha = it.on ? 1 : 0.6; ctx.stroke(); ctx.globalAlpha = 1;
-      plain(it.text, it.x + it.w / 2, it.y + it.h * 0.38, U * 0.42, it.on || it.kind === 'online' ? col : COL.graphite, FONT_D);
-      plain(it.sub || '', it.x + it.w / 2, it.y + it.h * 0.74, U * 0.22, COL.graphite, FONT_B);
+      plain(it.text, it.x + it.w / 2, it.y + it.h * 0.38, U * (it.kind === 'mut' ? 0.36 : 0.42), it.on || it.kind === 'online' ? col : COL.graphite, FONT_D);
+      plain(it.sub || '', it.x + it.w / 2, it.y + it.h * 0.74, U * (it.kind === 'mut' ? 0.19 : 0.22), COL.graphite, FONT_B);
     } else if (it.kind === 'label') {
       label(it.text, it.x, it.y + it.h / 2, U * 0.27, COL.graphite, FONT_B, 0.8, 'left');
     } else if (it.kind === 'start') drawChip(it, true, col, true);
@@ -2839,15 +2910,17 @@ function drawItems(items, col) {
       const x = it.x + it.w - it.h * 0.45, y = it.y + it.h / 2, a = it.h * 0.14;
       ctx.strokeStyle = COL.graphite; ctx.globalAlpha = 0.7; ctx.lineWidth = Math.max(1.5, U * 0.04); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.beginPath(); ctx.moveTo(x - a * 0.6, y - a); ctx.lineTo(x + a * 0.6, y); ctx.lineTo(x - a * 0.6, y + a); ctx.stroke(); ctx.globalAlpha = 1;
-    } else if (it.kind === 'step' || it.kind === 'done') drawChip(it, false, col);
-    else if (SETTING_KINDS.includes(it.kind)) drawChip(it, it.on, col);
+    } else if (it.kind === 'step' || it.kind === 'done' || it.kind === 'board') drawChip(it, false, col);
+    else if (SETTING_KINDS.includes(it.kind) || it.kind === 'mutpick') drawChip(it, it.on, col);
   }
 }
-const SETTING_KINDS = ['game', 'cpu', 'ammo', 'pu', 'soft', 'maps', 'win'];
+const SETTING_KINDS = ['game', 'cpu', 'ammo', 'pu', 'soft', 'maps', 'win', 'mut'];
 function menuHintText(lobby) {
   const k = menuFocus;
   if (!lobby && menuStep === 'mode') return 'Step 1 of 3: tap a mode.';
   if (!lobby && menuStep === 'who') return 'Step 2 of 3: who is playing on this screen?';
+  if (!lobby && menuStep === 'mut') return 'A party rule changes one thing about the game.';
+  if (k === 'mut') return settings.mut === 'off' ? 'No party rule: the game as usual.' : settings.mut === 'random' ? 'Every round, one party rule at random.' : MUTS[settings.mut].text;
   if (!k && !lobby) return 'Step 3 of 3: check the rules, then START.';
   if (k === 'game') return GAME_TEXT[settings.game];
   if (k === 'cpu') return settings.cpu ? `You against ${settings.cpu} computer tank${settings.cpu > 1 ? 's' : ''}, on this screen.` : 'Two players, one at each end of this screen.';
@@ -2892,16 +2965,21 @@ function hitItem(items, f) {
   for (const it of items) if (f.x >= it.x - 3 && f.x <= it.x + it.w + 3 && f.y >= it.y - 3 && f.y <= it.y + it.h + 3) return it;
   return null;
 }
-const SETTING_KEY = { ammo: 'ammo', pu: 'powerups', maps: 'maps', win: 'winScore', game: 'game', soft: 'soft' };
+const SETTING_KEY = { ammo: 'ammo', pu: 'powerups', maps: 'maps', win: 'winScore', game: 'game', soft: 'soft', mut: 'mut' };
 function applyMenu(it) {
   if (it.kind === 'label') return;
+  if (it.kind === 'board') { sfx.tick(); openBoard(); return; }
+  if (it.kind === 'bback') { sfx.tick(); closeBoard(); return; }
+  if (it.kind === 'brow') { boardPick = boardPick === it.v ? -1 : it.v; sfx.tick(); return; }
   if (SETTING_KINDS.includes(it.kind)) menuFocus = it.kind;
   if (it.kind === 'step') { menuStep = it.v; menuFocus = ''; sfx.tick(); return; }
   if (it.kind === 'pane') { lobbyPane = it.v; menuFocus = ''; sfx.tick(); return; }
-  if (it.kind === 'done') { lobbyPane = ''; sfx.tick(); return; }
+  if (it.kind === 'done') { lobbyPane = lobbyPane === 'mut' ? 'rules' : ''; sfx.tick(); return; }
   // picking a mode moves on: on the title to who plays; in the waiting room back to the room
   if (it.kind === 'game') { if (state === 'title') { menuStep = 'who'; menuFocus = ''; } if (lobbyPane === 'mode') lobbyPane = ''; }
   if (it.kind === 'cpu' && state === 'title') { menuStep = 'rules'; menuFocus = ''; }
+  if (it.kind === 'mutpick') { if (state === 'title') menuStep = 'mut'; else lobbyPane = 'mut'; sfx.tick(); return; }
+  if (it.kind === 'mut') { if (state === 'title') menuStep = 'rules'; if (lobbyPane === 'mut') lobbyPane = 'rules'; }
   if (it.kind === 'name') { sfx.tick(); openName(); return; }
   if (mode === 'guest') {
     // a guest can only steer a server-run room it leads; everything goes to the server as a request
@@ -2917,6 +2995,7 @@ function applyMenu(it) {
   else if (it.kind === 'game') { settings.game = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'soft') { Object.assign(settings, featPatch(it.v)); saveSettings(); sfx.tick(); }
   else if (it.kind === 'cpu') { settings.cpu = it.v; saveSettings(); sfx.tick(); }
+  else if (it.kind === 'mut') { settings.mut = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'bots') { lobbyBots = clamp(seats.filter(isBotId).length + it.v, 0, MAX_PLAYERS - 1); reseat(); sfx.tick(); }
   else if (it.kind === 'team') { toggleTeam(it.v); sfx.tick(); }
   else if (it.kind === 'start') { if (mode === 'host') hostStart(); else beginFromMenu(); }
@@ -3168,6 +3247,7 @@ function drawTank(t) {
   }
   ctx.save();
   ctx.translate(t.x * P, t.y * P);
+  if (C.TANK_R !== C0.TANK_R) ctx.scale(C.TANK_R / C0.TANK_R, C.TANK_R / C0.TANK_R);
   if (t.power) {                                         // a dashed ring shows the other player that this tank is carrying a power-up
     ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(1.2, P * 0.03); ctx.globalAlpha = 0.75;
     ctx.setLineDash([P * 0.1, P * 0.08]); ctx.beginPath(); ctx.arc(0, 0, P * 0.46, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
@@ -3369,6 +3449,8 @@ function drawStrip(p, seat) {
     ctx.globalAlpha = 0.22; ctx.beginPath(); ctx.arc(FX0, CY0, FR + 11, a0, a1); ctx.stroke();
     ctx.globalAlpha = 0.9; ctx.beginPath(); ctx.arc(FX0, CY0, FR + 11, a0, a0 + (a1 - a0) * k); ctx.stroke();
     ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+  } else if (n > 6) {
+    label(String(left), FX0, CY0 - FR - 14, Math.max(12, FR * 0.3), COL.graphite, FONT_D, 0.85);
   } else {
     for (let i = 0; i < n; i++) {
       const a = -Math.PI / 2 + (i - (n - 1) / 2) * span;
@@ -3426,6 +3508,7 @@ function drawTopBoard() {
     else lines.push([code, role, ping].filter(Boolean).join(' · '));
   }
   if (inMatch) lines.push(`${GAME_NAME[settings.game === 'teams' && !teamsOn() ? 'classic' : settings.game]} · ${goalText()}`);
+  if (inMatch && mutNow) lines.push('★ ' + MUTS[mutNow].name);
   const fs = land ? Math.min(15, S * 0.078) : Math.min(16, S * 0.115);
   let yy = land ? 16 : Math.min(S * 0.17, 20);
   for (const t of lines) { label(t, cx, yy, fs, COL.graphite, FONT_B, 0.7); yy += fs * 1.3; }
@@ -3530,8 +3613,9 @@ function netItems() {
       btn('host', 'Host a game', 4.4, 5);
       btn('join', 'Join a game', 5.5, 5);
     }
-    items.push(nameChip(8.0));
-    btn('back', 'Back', 9.75, 3);
+    items.push(nameChip(7.95));
+    btn('board', 'Leaderboard', 8.85, 4.2);
+    btn('back', 'Back', 9.8, 3);
   } else if (state === 'joinCode') {
     const kw = U * 1.35, kh = U * 0.95, gx = U * 0.18, x0 = cx - (kw * 3 + gx * 2) / 2;
     const keysTxt = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'join'];
@@ -3559,6 +3643,10 @@ function netItems() {
     btn('leave', 'Leave', 9.6, 3);
   } else if (state === 'netLost') {
     btn('back', 'OK', 6.2, 3);
+  } else if (state === 'board') {
+    const list = boardData ? boardData.players.slice(0, 10) : [];
+    list.forEach((_, i) => items.push({ kind: 'brow', v: i, x: cx - U * 5.3, y: y(2.85 + i * 0.5) - U * 0.23, w: U * 10.6, h: U * 0.46 }));
+    btn('bback', 'Back', 10.1, 3);
   }
   return items;
 }
@@ -3588,8 +3676,8 @@ function drawNetScreen() {
     if (netMsg) line(netMsg, 9.0, 0.26, COL.pens[0], FONT_B);
   } else if (lobby && lobbyCtl() && lobbyPane) {
     // the mode or rules page of the waiting room
-    line(lobbyPane === 'mode' ? 'Choose a mode' : `${GAME_NAME[settings.game]}: rules`, 0.75, 0.6, accent, FONT_D);
-    line(lobbyPane === 'mode' ? 'Tap one; it is set for everyone in the game.' : menuHintText(true), 1.3, 0.26, ink, FONT_B, 0.85);
+    line(lobbyPane === 'mode' ? 'Choose a mode' : lobbyPane === 'mut' ? 'Party rules' : `${GAME_NAME[settings.game]}: rules`, 0.75, 0.6, accent, FONT_D);
+    line(lobbyPane === 'mode' ? 'Tap one; it is set for everyone in the game.' : lobbyPane === 'mut' ? 'A party rule changes one thing about the game.' : menuHintText(true), 1.3, 0.26, ink, FONT_B, 0.85);
     drawItems(paneItems(), accent);
     return;
   } else if (lobby && lobbyCtl()) {
@@ -3618,9 +3706,47 @@ function drawNetScreen() {
   } else if (state === 'netLost') {
     line('Online game ended', 2.6, 0.6, accent, FONT_D);
     wrapLines(netMsg, U * 8.5, U * 0.3).forEach((t, i) => line(t, 3.6 + i * 0.5, 0.3));
+  } else if (state === 'board') {
+    drawBoard(accent);
+    drawNetItems(netItems().filter(it => it.kind === 'bback'), accent);
+    return;
   }
   const items = netItems();
   withFrame(fr && fr.R, () => drawNetItems(items, accent));
+}
+const MODE_SHORT = { classic: 'Classic', teams: 'Teams', dm: 'Deathm.', hill: 'Hill', base: 'Base' };
+function drawBoard(accent) {
+  const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite;
+  label('Leaderboard', cx, y(0.7), U * 0.7, accent, FONT_D);
+  label('Online games where at least two players have set a name', cx, y(1.25), U * 0.24, ink, FONT_B, 0.75);
+  if (!boardData) { wrapLines(boardMsg, U * 9, U * 0.3).forEach((t, i) => label(t, cx, y(3 + i * 0.5), U * 0.3, ink, FONT_B, 0.85)); return; }
+  const d = boardData;
+  if (!d.players.length) {
+    ['No games on the board yet.', 'Set your name, play online, and it fills up.'].forEach((t, i) => label(t, cx, y(3 + i * 0.55), U * 0.32, ink, FONT_B, 0.85));
+    return;
+  }
+  // this week's leaders
+  const week = d.titles.map(t => `${t.label}: ${t.name} (${t.n})`).join(' · ');
+  wrapLines('This week · ' + (week || 'no games yet'), U * 10.4, U * 0.24).slice(0, 2).forEach((t, i) => label(t, cx, y(1.72 + i * 0.36), U * 0.24, accent, FONT_B, 0.95));
+  // the table
+  const cols = [['#', -5.0, 'left'], ['Name', -4.5, 'left'], ['Games', -1.3], ['Wins', -0.2], ['Win %', 0.9], ['Kills', 2.0], ['K/D', 3.0], ['Plays most', 5.2, 'right']];
+  for (const [t, dx, al] of cols) label(t, cx + U * dx, y(2.4), U * 0.22, ink, FONT_B, 0.6, al || 'center');
+  d.players.slice(0, 10).forEach((o, i) => {
+    const yy = y(2.85 + i * 0.5), on = boardPick === i, mine = myName && o.name.toLowerCase() === myName.toLowerCase();
+    if (on || mine) { ctx.globalAlpha = on ? 0.16 : 0.07; ctx.fillStyle = accent; rrect(cx - U * 5.3, yy - U * 0.23, U * 10.6, U * 0.46, U * 0.1); ctx.fill(); ctx.globalAlpha = 1; }
+    const cell = (t, dx, al, font, col) => label(String(t), cx + U * dx, yy, U * 0.29, col || ink, font || FONT_B, 0.95, al || 'center');
+    cell(i + 1, -5.0, 'left'); cell(o.name, -4.5, 'left', FONT_D, i === 0 ? accent : ink);
+    cell(o.games, -1.3); cell(o.wins, -0.2); cell(Math.round(100 * o.wins / Math.max(1, o.games)) + '%', 0.9);
+    cell(o.kills, 2.0); cell((o.kills / Math.max(1, o.deaths)).toFixed(1), 3.0); cell(MODE_SHORT[o.fav] || '', 5.2, 'right');
+  });
+  // one player's record against the others
+  const n = Math.min(10, d.players.length), yy = 2.85 + n * 0.5 + 0.35;
+  if (boardPick < 0) { label('Tap a name to see who they have beaten.', cx, y(yy), U * 0.25, ink, FONT_B, 0.7); return; }
+  const me = d.players[boardPick], k = me.name.toLowerCase(), hh = d.h2h || {};
+  const vs = d.players.filter(o => o !== me).map(o => { const a = (hh[k] || {})[o.name.toLowerCase()] || 0, b = (hh[o.name.toLowerCase()] || {})[k] || 0; return a + b ? `${o.name} ${a}:${b}` : ''; }).filter(Boolean);
+  label(`${me.name} against each player (wins : losses)`, cx, y(yy), U * 0.27, accent, FONT_D);
+  wrapLines(vs.length ? vs.join(' · ') : 'No games against other named players yet.', U * 10.2, U * 0.26).slice(0, 3)
+    .forEach((t, i) => label(t, cx, y(yy + 0.45 + i * 0.38), U * 0.26, ink, FONT_B, 0.9));
 }
 function drawNetItems(items, accent) {
   const ink = COL.graphite;
@@ -3639,6 +3765,7 @@ function drawNetItems(items, accent) {
       drawChip(it, false, accent);
       if (!can) { ctx.globalAlpha = 0.55; ctx.fillStyle = COL.paper; ctx.fillRect(it.x - 2, it.y - 2, it.w + 4, it.h + 4); ctx.globalAlpha = 1; }
     } else if (it.kind === 'name') drawChip(it, false, accent);
+    else if (it.kind === 'brow') continue;
     else { const big = ['host', 'join', 'lan'].includes(it.kind); drawChip(it, big, accent, big); }
   }
 }
@@ -3702,7 +3829,7 @@ function drawOverlay(p, seat) {
   const mid = single ? AY + AH * 0.3 : top + h * 0.45;
   const me = tanks[seat];
   if (state === 'title') {
-    const head = menuStep === 'mode' ? 'Tank Duel' : menuStep === 'who' ? `${GAME_NAME[settings.game]}: who plays?` : `${GAME_NAME[settings.game]} · ${whoShort()}`;
+    const head = menuStep === 'mode' ? 'Tank Duel' : menuStep === 'who' ? `${GAME_NAME[settings.game]}: who plays?` : menuStep === 'mut' ? 'Party rules' : `${GAME_NAME[settings.game]} · ${whoShort()}`;
     label(head, cx, top + U * 0.42, U * (menuStep === 'mode' ? 0.72 : 0.56), col, FONT_D);
     label(menuHintText(false), cx, top + U * 0.95, U * 0.27, COL.graphite, FONT_B);
     drawItems(menuItems(), col);
@@ -3710,6 +3837,10 @@ function drawOverlay(p, seat) {
     const n = Math.max(1, 3 - Math.floor(stateT / 0.65)), f = (stateT % 0.65) / 0.65;
     const pop = REDUCED ? 1 : 1 + 0.35 * Math.max(0, 1 - f * 3);
     label(String(n), cx, mid, U * 2.6 * pop, col, FONT_D, 0.92);
+    if (mutNow) {
+      label('★ ' + MUTS[mutNow].name, cx, mid - U * (single ? 1.95 : 1.75), U * 0.55, COL.graphite, FONT_D);
+      label(MUTS[mutNow].text, cx, mid - U * (single ? 1.45 : 1.27), U * 0.27, COL.graphite, FONT_B, 0.9);
+    }
     if (single && seat >= 0) label(teamsOn() ? `You are on the ${TEAM_NAME[teamOf[seat] ? 1 : 0]} team` : `You are ${PEN_NAMES[seat]}`, cx, mid + U * 1.6, U * 0.45, col, FONT_D, 0.9);
     if (settings.game !== 'classic' && (single || mapIdx === 0))
       label(`${GAME_NAME[settings.game === 'teams' && !teamsOn() ? 'classic' : settings.game]} · ${goalText()}`, cx, mid + U * (single ? 2.2 : 1.5), U * 0.32, COL.graphite, FONT_B, 0.85);
@@ -3954,7 +4085,7 @@ addEventListener('keydown', e => {
   audioInit();
   keys.add(k);
   if (state === 'title') {
-    if (k === 'escape') { menuStep = menuStep === 'rules' ? 'who' : 'mode'; menuFocus = ''; return; }
+    if (k === 'escape') { menuStep = menuStep === 'mut' ? 'rules' : menuStep === 'rules' ? 'who' : 'mode'; menuFocus = ''; return; }
     if (k === 'o') { goOnline(); return; }
     if (k === ' ' || k === 'enter') beginFromMenu();
     else if (['1', '2', '3', '4'].includes(k)) setAmmoMode(AMMO_MODES[+k - 1]);
@@ -3966,7 +4097,7 @@ addEventListener('keydown', e => {
     else if (k === 'c') { settings.cpu = (settings.cpu + 1) % 4; saveSettings(); menuFocus = 'cpu'; }
     return;
   }
-  if (k === 'escape') { if (state === 'joinCode') { state = 'online'; netMsg = ''; } else goMenu(); return; }
+  if (k === 'escape') { if (state === 'joinCode') { state = 'online'; netMsg = ''; } else if (state === 'board') closeBoard(); else goMenu(); return; }
   if (state === 'joinCode') {
     if (k === 'backspace') typeKey('del'); else if (k === 'enter') typeKey('join'); else typeKey(k);
     return;
@@ -4033,7 +4164,7 @@ window.__tank = {
   setupLocal, beginFromMenu, applyMenu, breakWall, respawnTank, botInput, target, goalText, distField, mapPool, ROT4,
   get structs() { return structs; }, get minions() { return minions; }, get shells() { return shells; }, get baseWinner() { return baseWinner; },
   damageStruct, spawnWave, endBase, BASEMAPS, set roundTv(v) { roundT = v; },
-  lobbyFrames, paneItems, get menuStep() { return menuStep; }, set menuStep(v) { menuStep = v; }, get lobbyPane() { return lobbyPane; }, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
+  lobbyFrames, paneItems, applyMut, openBoard, reportResult, get boardData() { return boardData; }, get mutNow() { return mutNow; }, MUTS, get menuStep() { return menuStep; }, set menuStep(v) { menuStep = v; }, get lobbyPane() { return lobbyPane; }, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
   lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };
 

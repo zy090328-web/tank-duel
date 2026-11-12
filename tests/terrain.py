@@ -40,11 +40,14 @@ async def main():
     # ---------- menu ----------
     M = await page('menu', 820, 1180)
     check(await ev(M, '__tank.settings().terrain') is True, 'terrain is on by default')
-    seen = []
-    for _ in range(4):
-      q = await ev(M, "(() => { const it = __tank.menuItems().find(it => it.kind === 'soft'); return [it.x + it.w / 2, it.y + it.h / 2, it.text]; })()")
-      seen.append(q[2]); await M.mouse.click(q[0], q[1]); await M.wait_for_timeout(100)
-    check(seen == ['Grass & water', 'All terrain', 'Plain map', 'Breakable walls'], f'map extras chip steps through four choices {seen}')
+    await ev(M, "__tank.menuStep = 'rules'"); await M.wait_for_timeout(100)
+    seen = await ev(M, "__tank.menuItems().filter(it => it.kind === 'soft').map(it => it.text)")
+    check(seen == ['Plain', 'Breakable', 'Grass & water', 'All'], f'map extras offer four choices {seen}')
+    for v, want in [(2, [False, True]), (0, [False, False]), (3, [True, True])]:
+      q = await ev(M, f"(() => {{ const it = __tank.menuItems().find(it => it.kind === 'soft' && it.v === {v}); return [it.x + it.w / 2, it.y + it.h / 2]; }})()")
+      await M.mouse.click(q[0], q[1]); await M.wait_for_timeout(100)
+      got = await ev(M, "[__tank.settings().soft, __tank.settings().terrain]")
+      check(got == want, f'choice {v} sets breakable/terrain to {want} ({got})')
     await M.close()
 
     # ---------- two players on one screen: water blocks, shots cross, grass hides no one ----------

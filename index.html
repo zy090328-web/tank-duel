@@ -527,7 +527,7 @@ const target = () => settings.game === 'dm' ? KILL_GOAL[settings.winScore] : set
 const clock = () => { const t = Math.max(0, Math.ceil(target() - roundT)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 const goalText = () => settings.game === 'dm' ? `first to ${target()} kills` : settings.game === 'hill' ? `hold it for ${target()} s`
   : settings.game === 'base' ? `${clock()} left` : `first to ${target()}`;
-const penOf = i => teamsOn() ? COL.pens[teamOf[i] ? 1 : 0] : (COL.pens[i] || COL.graphite);
+const penOf = i => teamsOn() ? COL.pens[(teamOf[i] ?? i % 2) ? 1 : 0] : (COL.pens[i] || COL.graphite);
 const sideOf = i => teamsOn() ? (teamOf[i] ? 1 : 0) : i;          // what scores[] is counted by: team or tank
 const canHurt = (owner, t) => owner === t.id || !teamsOn() || teamOf[owner] !== teamOf[t.id];
 const champion = () => { if (settings.game === 'base') return baseWinner; let b = 0; scores.forEach((v, i) => { if (v > scores[b]) b = i; }); return b; };
@@ -911,7 +911,7 @@ function setupLocal() {
 function beginFromMenu() { if (resumeMatch) { resumeMatch = false; startRound(); } else { setupLocal(); startMatch(); } }
 function goMenu() {
   if (mode !== 'local') netLeave();
-  state = 'title'; stateT = 0; resumeMatch = false; mapIdx = 0; quitArm = 0;
+  state = 'title'; stateT = 0; resumeMatch = false; mapIdx = 0; quitArm = 0; menuStep = 'mode'; menuFocus = ''; lobbyPane = '';
   soloMatch = false; bots = new Set(); teamOf = []; names = []; stats = [];
   setTankCount(2); scores = [0, 0]; viewFlip = false;
   loadMap(0); resetEntities(); layout();
@@ -2030,7 +2030,7 @@ function netLeave() {
   try { if (hostConn) hostConn.close(); } catch (e) {}
   try { if (peer) peer.destroy(); } catch (e) {}
   peer = null; hostConn = null; guests.clear(); seats = []; snaps = []; hostOpenAt = 0;
-  lobbyBots = 0; teamPick.clear(); bots = new Set(); teamOf = []; names = []; stats = []; soloMatch = false;
+  lobbyBots = 0; teamPick.clear(); bots = new Set(); teamOf = []; names = []; stats = []; soloMatch = false; lobbyPane = '';
   if (savedSettings) { settings = savedSettings; savedSettings = null; }
   mode = 'local'; mySeat = 0; viewFlip = false; netMsg = ''; netCode = '';
 }
@@ -2744,35 +2744,111 @@ const settingPatch = it => it.kind === 'soft' ? featPatch(it.v) : { [SETTING_KEY
 const nextOf = (arr, v) => arr[(arr.indexOf(v) + 1) % arr.length];
 const goalChip = () => settings.game === 'dm' ? `First to ${target()} kills` : settings.game === 'hill' ? `Hold for ${target()} s`
   : settings.game === 'base' ? `${target() / 60} min limit` : `First to ${target()}`;
-// Rows of chips: game mode, who plays (one screen only), ammo, and four switches. `on` = drawn filled.
-// The last two chips step through their choices when tapped. `lobby` = the online waiting room.
-function menuItems(top = AY + AH / 2, buttons = [['start', resumeMatch ? 'CONTINUE' : 'START'], ['online', 'ONLINE']], lobby = false, per = 4) {
-  const cx = mcx(), h = U * 0.54, g = U * 0.15, w = U * (per === 2 ? 2.9 : 2.5), items = [];
-  let y = top + (lobby ? 0 : U * 1.5);
-  const row = all => {
-    const n = per === 4 && all.length === 5 ? 5 : per;                  // the five game modes share one row
-    for (let k = 0; k < all.length; k += n) {
-      const opts = all.slice(k, k + n);
-      const ww = opts.length > 4 ? (w * 4 + g * 3 - g * (opts.length - 1)) / opts.length : w;     // five chips share the width of four
-      opts.forEach(([kind, v, text, on, cyc], i) => items.push({ kind, v, text, on, cyc, x: cx + (i - (opts.length - 1) / 2) * (ww + g) - ww / 2, y: y - h / 2, w: ww, h }));
-      y += U * 0.66;
-    }
+// The menu goes one step at a time: pick a mode, then who plays, then check the rules and START.
+// Online, the waiting room opens the same mode and rules pages from two buttons.
+let menuStep = 'mode', lobbyPane = '';
+const GAME_SHORT = {
+  classic: 'Last tank standing wins the round', teams: 'Two sides; your team cannot hit you', dm: 'Tanks come back; every kill counts',
+  hill: 'Hold the circle in the middle', base: 'Towers, minions: take their base'
+};
+const FEAT_SHORT = ['Plain', 'Breakable', 'Grass & water', 'All'];
+const MAP_SHORT = { all: 'All', classic: 'Small', complex: 'Large' };
+const winText = v => settings.game === 'dm' ? `${KILL_GOAL[v]} kills` : settings.game === 'hill' ? `${HILL_GOAL[v]} s` : settings.game === 'base' ? `${BASE_TIME[v] / 60} min` : `First to ${v}`;
+const winLabel = () => settings.game === 'dm' ? 'To win' : settings.game === 'hill' ? 'Hold for' : settings.game === 'base' ? 'Time limit' : 'Rounds';
+// who plays, in words, for the current mode
+function whoText(n) {
+  const sides = settings.game === 'teams' || settings.game === 'base';
+  if (!n) return settings.game === 'teams' ? 'Teams need 3 tanks: plays as Classic' : 'One at each end of this screen';
+  if (!sides) return `You against ${n} computer tank${n > 1 ? 's' : ''}`;
+  return n === 1 ? 'You against one computer tank' : n === 2 ? 'You and a CPU against a CPU' : 'You and a CPU against two CPUs';
+}
+const whoShort = () => settings.cpu ? `you + ${settings.cpu} CPU` : '2 players';
+const rulesSummary = () => [{ unlimited: 'unlimited ammo', reload: '5 + reload', limited: '5 shots', single: `1 shot per ${C.SINGLE_COOLDOWN} s` }[settings.ammo],
+  settings.powerups ? 'power-ups' : 'no power-ups', FEAT_TEXT[featIdx()].toLowerCase(), winText(settings.winScore)].join(' · ');
+// big cards in a grid of two columns, the last row centred; `top` is the top edge of the first row
+function cardGrid(list, top) {
+  const cx = mcx(), w = U * 4.7, h = U * 1.0, gx = U * 0.25, gy = U * 0.2;
+  return list.map((c, i) => {
+    const row = Math.floor(i / 2), col = i % 2, inRow = Math.min(2, list.length - row * 2);
+    return Object.assign({ card: true, x: cx + (col - (inRow - 1) / 2) * (w + gx) - w / 2, y: top + row * (h + gy), w, h }, c);
+  });
+}
+// the rules: one labelled row per setting, every choice shown; `top` is the top edge of the first row
+function ruleRows(top) {
+  const out = [], cx = mcx(), lw = U * 2.2, h = U * 0.5, g = U * 0.12, x0 = cx - U * 5.2 + lw, x1 = cx + U * 5.2;
+  let y = top;
+  const row = (text, opts) => {
+    out.push({ kind: 'label', text, x: cx - U * 5.2, y, w: lw, h });
+    const w = (x1 - x0 - g * (opts.length - 1)) / opts.length;
+    opts.forEach(([kind, v, t, on], i) => out.push({ kind, v, text: t, on, x: x0 + i * (w + g), y, w, h }));
+    y += U * 0.62;
   };
-  row(GAME_MODES.map(m => ['game', m, GAME_NAME[m], settings.game === m]));
-  if (!lobby) row([0, 1, 2, 3].map(n => ['cpu', n, n ? `1 + ${n} CPU` : '2 players', settings.cpu === n]));
-  row([['unlimited', 'Unlimited'], ['reload', '5 + reload'], ['limited', '5 only'], ['single', `1 per ${C.SINGLE_COOLDOWN} s`]].map(([v, t]) => ['ammo', v, t, settings.ammo === v]));
-  row([['pu', !settings.powerups, settings.powerups ? 'Power-ups on' : 'Power-ups off', settings.powerups],
-    ['soft', (featIdx() + 1) % 4, FEAT_TEXT[featIdx()], false, true],
-    ['maps', nextOf(MAP_POOLS, settings.maps), MAP_TEXT[settings.maps], false, true],
-    ['win', nextOf(WIN_SCORES, settings.winScore), goalChip(), false, true]]);
-  // two big buttons side by side: START and ONLINE on the title, START and Leave in the waiting room
-  const bw = U * 2.9, bg = U * 0.3, by = lobby ? y + U * 0.75 : top + U * 4.72;
-  buttons.forEach(([kind, text], i) => items.push({ kind, text, x: cx - bw - bg / 2 + i * (bw + bg), y: by - U * 0.37, w: bw, h: U * 0.74 }));
-  return items;
+  row('Ammo', [['unlimited', 'Unlimited'], ['reload', '5 + reload'], ['limited', '5 only'], ['single', `1 per ${C.SINGLE_COOLDOWN} s`]].map(([v, t]) => ['ammo', v, t, settings.ammo === v]));
+  row('Power-ups', [['pu', true, 'On', settings.powerups], ['pu', false, 'Off', !settings.powerups]]);
+  row('Map extras', FEAT_SHORT.map((t, i) => ['soft', i, t, featIdx() === i]));
+  if (settings.game !== 'base') row('Maps', MAP_POOLS.map(v => ['maps', v, MAP_SHORT[v], settings.maps === v]));
+  row(winLabel(), WIN_SCORES.map(v => ['win', v, winText(v), settings.winScore === v]));
+  return { items: out, end: y };
+}
+const button = (kind, text, cx, cy, w, v) => ({ kind, v, text, x: cx - w / 2, y: cy - U * 0.35, w, h: U * 0.7 });
+// the title menu (one half of the screen when two share it); in the waiting room, its two buttons and START
+function menuItems(top = AY + AH / 2, buttons = null, lobby = false) {
+  const cx = mcx();
+  if (lobby) {
+    const w = U * 5.6;
+    return [Object.assign(button('pane', `Mode: ${GAME_NAME[settings.game]}`, cx, top, w, 'mode'), { arrow: true }),
+      Object.assign(button('pane', 'Rules', cx, top + U * 0.9, w, 'rules'), { arrow: true }),
+      ...(buttons || []).map(([kind, text], i) => button(kind, text, cx + (i ? 1 : -1) * U * 1.6, top + U * 2.35, U * 2.9))];
+  }
+  const y0 = top + U * 1.3;
+  if (menuStep === 'mode') return cardGrid([
+    ...GAME_MODES.map(m => ({ kind: 'game', v: m, text: GAME_NAME[m], sub: GAME_SHORT[m], on: settings.game === m })),
+    { kind: 'online', text: 'Online', sub: 'Each player on their own device' }], y0);
+  if (menuStep === 'who') return [
+    ...cardGrid([0, 1, 2, 3].map(n => ({ kind: 'cpu', v: n, text: n ? `You + ${n} CPU` : '2 players', sub: whoText(n), on: settings.cpu === n })), y0),
+    button('step', '‹ Back', cx, top + U * 4.75, U * 2.6, 'mode')];
+  const r = ruleRows(y0);
+  return [...r.items,
+    button('step', '‹ Back', cx - U * 2.9, top + U * 4.85, U * 2.4, 'who'),
+    button('start', resumeMatch ? 'CONTINUE' : 'START', cx + U * 1.3, top + U * 4.85, U * 4.6)];
+}
+// the waiting room's mode and rules pages (for whoever sets the game up)
+function paneItems() {
+  const cx = mcx(), top = AY + U * 1.7;
+  if (lobbyPane === 'mode') return [
+    ...cardGrid(GAME_MODES.map(m => ({ kind: 'game', v: m, text: GAME_NAME[m], sub: GAME_SHORT[m], on: settings.game === m })), top),
+    button('done', '‹ Back', cx, top + U * 4.2, U * 2.6)];
+  const r = ruleRows(top);
+  return [...r.items, button('done', 'Done', cx, r.end + U * 0.55, U * 3.2)];
+}
+// draw a list of menu items: cards, labels, choices and buttons
+function drawItems(items, col) {
+  for (const it of items) {
+    if (it.card) {
+      rrect(it.x, it.y, it.w, it.h, U * 0.16);
+      ctx.globalAlpha = 1; ctx.fillStyle = COL.paper; ctx.fill();
+      if (it.on) { ctx.globalAlpha = 0.14; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
+      ctx.lineWidth = Math.max(1.5, U * (it.on ? 0.07 : 0.04)); ctx.strokeStyle = it.on ? col : COL.graphite; ctx.globalAlpha = it.on ? 1 : 0.6; ctx.stroke(); ctx.globalAlpha = 1;
+      plain(it.text, it.x + it.w / 2, it.y + it.h * 0.38, U * 0.42, it.on || it.kind === 'online' ? col : COL.graphite, FONT_D);
+      plain(it.sub || '', it.x + it.w / 2, it.y + it.h * 0.74, U * 0.22, COL.graphite, FONT_B);
+    } else if (it.kind === 'label') {
+      label(it.text, it.x, it.y + it.h / 2, U * 0.27, COL.graphite, FONT_B, 0.8, 'left');
+    } else if (it.kind === 'start') drawChip(it, true, col, true);
+    else if (it.kind === 'pane') {
+      drawChip(it, false, col, true);
+      const x = it.x + it.w - it.h * 0.45, y = it.y + it.h / 2, a = it.h * 0.14;
+      ctx.strokeStyle = COL.graphite; ctx.globalAlpha = 0.7; ctx.lineWidth = Math.max(1.5, U * 0.04); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(x - a * 0.6, y - a); ctx.lineTo(x + a * 0.6, y); ctx.lineTo(x - a * 0.6, y + a); ctx.stroke(); ctx.globalAlpha = 1;
+    } else if (it.kind === 'step' || it.kind === 'done') drawChip(it, false, col);
+    else if (SETTING_KINDS.includes(it.kind)) drawChip(it, it.on, col);
+  }
 }
 const SETTING_KINDS = ['game', 'cpu', 'ammo', 'pu', 'soft', 'maps', 'win'];
 function menuHintText(lobby) {
   const k = menuFocus;
+  if (!lobby && menuStep === 'mode') return 'Step 1 of 3: tap a mode.';
+  if (!lobby && menuStep === 'who') return 'Step 2 of 3: who is playing on this screen?';
+  if (!k && !lobby) return 'Step 3 of 3: check the rules, then START.';
   if (k === 'game') return GAME_TEXT[settings.game];
   if (k === 'cpu') return settings.cpu ? `You against ${settings.cpu} computer tank${settings.cpu > 1 ? 's' : ''}, on this screen.` : 'Two players, one at each end of this screen.';
   if (k === 'ammo') return ammoText();
@@ -2818,7 +2894,14 @@ function hitItem(items, f) {
 }
 const SETTING_KEY = { ammo: 'ammo', pu: 'powerups', maps: 'maps', win: 'winScore', game: 'game', soft: 'soft' };
 function applyMenu(it) {
+  if (it.kind === 'label') return;
   if (SETTING_KINDS.includes(it.kind)) menuFocus = it.kind;
+  if (it.kind === 'step') { menuStep = it.v; menuFocus = ''; sfx.tick(); return; }
+  if (it.kind === 'pane') { lobbyPane = it.v; menuFocus = ''; sfx.tick(); return; }
+  if (it.kind === 'done') { lobbyPane = ''; sfx.tick(); return; }
+  // picking a mode moves on: on the title to who plays; in the waiting room back to the room
+  if (it.kind === 'game') { if (state === 'title') { menuStep = 'who'; menuFocus = ''; } if (lobbyPane === 'mode') lobbyPane = ''; }
+  if (it.kind === 'cpu' && state === 'title') { menuStep = 'rules'; menuFocus = ''; }
   if (it.kind === 'name') { sfx.tick(); openName(); return; }
   if (mode === 'guest') {
     // a guest can only steer a server-run room it leads; everything goes to the server as a request
@@ -3406,8 +3489,8 @@ const nameChip = yy => { const w = U * 3.9, h = U * 0.54; return { kind: 'name',
 // Held wide, the waiting room is two columns (who is in it; how the game is set), each as large as
 // the screen allows. Returns null when the screen is upright or the single column is just as large.
 function lobbyFrames() {
-  if (!land || !inLobby()) return null;
-  const ctl = lobbyCtl(), l = ctl ? [0.3, 5.85] : [0.5, 5.05], r = ctl ? [5.3, 11.7] : [5.4, 9.6];
+  if (!land || !inLobby() || (lobbyPane && lobbyCtl())) return null;
+  const ctl = lobbyCtl(), l = ctl ? [0.3, 5.85] : [0.5, 5.05], r = ctl ? [5.2, 8.5] : [5.4, 9.6];
   const top = 24, hh = LH - top - 28;
   const v = Math.min(hh / Math.max(l[1] - l[0], r[1] - r[0]), LW / 14.6);
   if (v <= U * 1.05) return null;
@@ -3455,6 +3538,8 @@ function netItems() {
     keysTxt.forEach((k, i) => items.push({ kind: 'key', v: k, text: k === 'del' ? '←' : k === 'join' ? 'Join' : k,
       x: x0 + (i % 3) * (kw + gx), y: y(4.0) + Math.floor(i / 3) * (kh + gx), w: kw, h: kh }));
     btn('back', 'Back', 9.9, 3);
+  } else if (inLobby() && lobbyPane && lobbyCtl()) {
+    return paneItems();
   } else if (inLobby()) {
     const ctl = lobbyCtl(), n = lobbySeats().length, fr = lobbyFrames();
     withFrame(fr && fr.L, () => {
@@ -3467,7 +3552,7 @@ function netItems() {
       items.push(Object.assign(nameChip(4.85), { x: x0 + (bw + g) * 2 }));
     });
     withFrame(fr && fr.R, () => {
-      if (ctl) menuItems(y(5.6), [['start', 'START'], ['leave', 'Leave']], true, fr ? 2 : 4).forEach(it => items.push(it));
+      if (ctl) menuItems(y(5.65), [['start', 'START'], ['leave', 'Leave']], true).forEach(it => items.push(it));
       else { items.push(nameChip(8.1)); btn('leave', 'Leave', 9.1, 3); }
     });
   } else if (state === 'guestWait') {
@@ -3501,13 +3586,20 @@ function drawNetScreen() {
       if (typedCode[i]) label(typedCode[i], it.x + bw / 2, it.y + it.h / 2, U * 0.8, accent, FONT_D);
     }
     if (netMsg) line(netMsg, 9.0, 0.26, COL.pens[0], FONT_B);
+  } else if (lobby && lobbyCtl() && lobbyPane) {
+    // the mode or rules page of the waiting room
+    line(lobbyPane === 'mode' ? 'Choose a mode' : `${GAME_NAME[settings.game]}: rules`, 0.75, 0.6, accent, FONT_D);
+    line(lobbyPane === 'mode' ? 'Tap one; it is set for everyone in the game.' : menuHintText(true), 1.3, 0.26, ink, FONT_B, 0.85);
+    drawItems(paneItems(), accent);
+    return;
   } else if (lobby && lobbyCtl()) {
     withFrame(fr && fr.L, () => {
       line('Game ' + (netCode || '…'), 0.75, 0.8, accent, FONT_D);
       line(netMsg || 'Others: Play online → Join a game → type this code.', 1.42, 0.25, ink, FONT_B, 0.8);
       seatRows();
-      line(menuHintText(true), fr ? 5.55 : 7.55, 0.25, ink, FONT_B, 0.85);
+      line(GAME_TEXT[settings.game], fr ? 5.55 : 8.85, 0.25, ink, FONT_B, 0.85);
     });
+    withFrame(fr && fr.R, () => line(rulesSummary(), 7.12, 0.23, ink, FONT_B, 0.8));
   } else if (lobby) {
     withFrame(fr && fr.L, () => {
       line('Joined game ' + netCode, 0.9, 0.6, accent, FONT_D);
@@ -3532,9 +3624,9 @@ function drawNetScreen() {
 }
 function drawNetItems(items, accent) {
   const ink = COL.graphite;
-  drawMenuChips(items, accent);
+  drawItems(items.filter(it => it.kind === 'pane'), accent);
   for (const it of items) {
-    if (SETTING_KINDS.includes(it.kind) || it.kind === 'team') continue;
+    if (SETTING_KINDS.includes(it.kind) || it.kind === 'team' || it.kind === 'pane') continue;
     if (it.kind === 'key') {
       const off = it.v === 'join' && typedCode.length < 4;
       drawChip(it, it.v === 'join' && !off, accent, it.v === 'join');
@@ -3610,16 +3702,10 @@ function drawOverlay(p, seat) {
   const mid = single ? AY + AH * 0.3 : top + h * 0.45;
   const me = tanks[seat];
   if (state === 'title') {
-    label('Tank Duel', cx, top + U * 0.42, U * 0.72, col, FONT_D);
-    const hint = IS_TOUCH ? 'Left thumb drives, right thumb fires.'
-      : p === 0 ? 'Keyboard: arrow keys to drive, Enter to fire.' : 'Keyboard: W A S D to drive, Space to fire.';
-    label(menuHintText(false) || hint, cx, top + U * 0.95, U * 0.27, COL.graphite, FONT_B);
-    const items = menuItems();
-    drawMenuChips(items, col);
-    for (const it of items) {
-      if (it.kind === 'start') drawChip(it, true, col, true);
-      else if (it.kind === 'online') drawChip(it, false, col, true);
-    }
+    const head = menuStep === 'mode' ? 'Tank Duel' : menuStep === 'who' ? `${GAME_NAME[settings.game]}: who plays?` : `${GAME_NAME[settings.game]} · ${whoShort()}`;
+    label(head, cx, top + U * 0.42, U * (menuStep === 'mode' ? 0.72 : 0.56), col, FONT_D);
+    label(menuHintText(false), cx, top + U * 0.95, U * 0.27, COL.graphite, FONT_B);
+    drawItems(menuItems(), col);
   } else if (state === 'countdown') {
     const n = Math.max(1, 3 - Math.floor(stateT / 0.65)), f = (stateT % 0.65) / 0.65;
     const pop = REDUCED ? 1 : 1 + 0.35 * Math.max(0, 1 - f * 3);
@@ -3868,6 +3954,7 @@ addEventListener('keydown', e => {
   audioInit();
   keys.add(k);
   if (state === 'title') {
+    if (k === 'escape') { menuStep = menuStep === 'rules' ? 'who' : 'mode'; menuFocus = ''; return; }
     if (k === 'o') { goOnline(); return; }
     if (k === ' ' || k === 'enter') beginFromMenu();
     else if (['1', '2', '3', '4'].includes(k)) setAmmoMode(AMMO_MODES[+k - 1]);
@@ -3912,7 +3999,7 @@ function start(data) {
   mapOrder = mapPool();
   if (data && Array.isArray(data.scores) && data.scores.length === 2 && data.inMatch && settings.game === 'classic' &&
       data.scores.every(n => Number.isInteger(n) && n >= 0 && n < settings.winScore)) {
-    scores = data.scores.slice(); mapIdx = (data.mapIdx | 0) || 0; resumeMatch = true;
+    scores = data.scores.slice(); mapIdx = (data.mapIdx | 0) || 0; resumeMatch = true; menuStep = 'rules';
   }
   loadMap(mapIdx);
   resetEntities();
@@ -3946,7 +4033,7 @@ window.__tank = {
   setupLocal, beginFromMenu, applyMenu, breakWall, respawnTank, botInput, target, goalText, distField, mapPool, ROT4,
   get structs() { return structs; }, get minions() { return minions; }, get shells() { return shells; }, get baseWinner() { return baseWinner; },
   damageStruct, spawnWave, endBase, BASEMAPS, set roundTv(v) { roundT = v; },
-  lobbyFrames, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
+  lobbyFrames, paneItems, get menuStep() { return menuStep; }, set menuStep(v) { menuStep = v; }, get lobbyPane() { return lobbyPane; }, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
   lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };
 

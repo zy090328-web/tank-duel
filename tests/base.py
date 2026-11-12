@@ -22,11 +22,16 @@ async def main():
 
     # ---------- menu ----------
     M = await page('menu', 820, 1180)
-    q = await ev(M, "(() => { const it = __tank.menuItems().find(it => it.kind === 'game' && it.v === 'base'); return it && [it.x + it.w / 2, it.y + it.h / 2, it.w]; })()")
+    cards = await ev(M, "__tank.menuItems().map(it => [it.kind, it.v || '', it.x, it.y, it.w, it.h])")
+    boxes = [c[2:] for c in cards]
+    overlap = any(not (a[0] + a[2] <= b[0] or b[0] + b[2] <= a[0] or a[1] + a[3] <= b[1] or b[1] + b[3] <= a[1]) for i, a in enumerate(boxes) for b in boxes[i + 1:])
+    check(len(cards) == 6 and not overlap and all(c[2] > 0 and c[2] + c[4] < 820 for c in cards), 'step 1 shows five mode cards and Online, none overlapping')
+    q = await ev(M, "(() => { const it = __tank.menuItems().find(it => it.kind === 'game' && it.v === 'base'); return it && [it.x + it.w / 2, it.y + it.h / 2]; })()")
     await M.mouse.click(q[0], q[1]); await M.wait_for_timeout(100)
-    check(await ev(M, "__tank.settings().game") == 'base', 'Base chip picks base mode')
-    xs = await ev(M, "__tank.menuItems().filter(it => it.kind === 'game').map(it => [it.x, it.x + it.w])")
-    check(all(xs[i][1] < xs[i + 1][0] for i in range(4)) and xs[0][0] > 0 and xs[-1][1] < 820, 'five mode chips fit in one row')
+    check(await ev(M, "__tank.settings().game") == 'base' and await ev(M, "__tank.menuStep") == 'who', 'tapping Base picks it and moves on to who plays')
+    q = await ev(M, "(() => { const it = __tank.menuItems().find(it => it.kind === 'step'); return [it.x + it.w / 2, it.y + it.h / 2]; })()")
+    await M.mouse.click(q[0], q[1]); await M.wait_for_timeout(100)
+    check(await ev(M, "__tank.menuStep") == 'mode', 'Back returns to the modes')
     await M.close()
 
     # ---------- two players on one screen ----------

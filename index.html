@@ -126,7 +126,7 @@ const C = {
 
   // game modes
   RESPAWN_TIME: 2,       // deathmatch and hill: seconds before a destroyed tank comes back
-  SPAWN_SHIELD: 1.5,     // ...and how long it is shielded when it does (it cannot fire meanwhile)
+  SPAWN_INV: 2,          // ...and for how long nothing can hurt it when it does (ends early once it fires)
   HILL_R: 1.5,           // hill: radius of the circle in the middle
 
   // terrain
@@ -455,7 +455,7 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
 let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], particles = [], marks = [];
@@ -759,7 +759,7 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0;
-    t.respawn = 0; t.ai = null; t.reveal = 0;
+    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0;
   });
   hillHolder = -1;
   bullets = []; missiles = []; mines = []; pickups = []; beams = []; rings = []; particles = []; marks = [];
@@ -834,7 +834,7 @@ function respawnTank(t) {
   if (!best) best = spawn[t.id] || spawn[0];
   t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
   t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.fireQ = 0;
-  t.respawn = 0; t.shield = C.SPAWN_SHIELD; t.ai = null;
+  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.ai = null;
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
   sfx.spawn(); netEv('spawn', t.id, r2(t.x), r2(t.y));
 }
@@ -842,6 +842,7 @@ function respawnTank(t) {
 function hillStep(dt) {
   const cx = COLS / 2, cy = ROWS / 2;
   const inside = tanks.filter(t => t.alive && Math.hypot(t.x - cx, t.y - cy) < C.HILL_R);
+  for (const t of inside) t.inv = 0;                      // stepping on the hill ends the protection
   hillHolder = inside.length === 1 ? inside[0].id : inside.length ? -2 : -1;
   if (hillHolder < 0) return;
   hillT[hillHolder] += dt;
@@ -942,6 +943,7 @@ function usePower(t) {
 
 // Every hit goes through here: a shield takes one hit in the tank's place.
 function hit(t, by = -1) {
+  if (t.inv > 0) return false;                           // just came back: untouchable
   if (t.shield > 0) {
     t.shield = 0;
     rings.push({ x: t.x, y: t.y, r: 0.75, life: 0.3, max: 0.3, col: penOf(t.id) });
@@ -1208,7 +1210,7 @@ function botInput(seat) {
 
   if (hasFoe && los) {
     const off = Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle));
-    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0 && !(t.power === 'bomb' && dFoe > C.BOMB_SPEED * C.BOMB_LIFE + 0.5)) { pressFire(seat); ai.react = 0.3 + Math.random() * 0.55; }
+    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0 && !(foe.inv > 0) && !(t.power === 'bomb' && dFoe > C.BOMB_SPEED * C.BOMB_LIFE + 0.5)) { pressFire(seat); ai.react = 0.3 + Math.random() * 0.55; }
   } else if (hasFoe && ai.react <= 0 && (t.power === 'homing' || t.power === 'guided' || t.power === 'mine')) {
     pressFire(seat); ai.react = 0.6;                         // missiles and mines do not need a clear line
   }
@@ -1237,6 +1239,7 @@ function stepPhysics(dt, lethal, control) {
     t.recoil = Math.max(0, t.recoil - dt * 8);
     t.shield = Math.max(0, t.shield - dt);
     t.reveal = Math.max(0, t.reveal - dt);
+    t.inv = Math.max(0, t.inv - dt);
     if (t.reload > 0) { t.reload -= dt; if (t.reload <= 0) { t.reload = 0; t.ammo = clipSize(); sfx.reloaded(); netEv('sfx', 'reloaded', t.id); } }
     const locked = t.charge > 0 || t.guided !== null;      // charging a laser or steering a missile: the tank stands still
     if (t.charge > 0) {
@@ -1256,7 +1259,7 @@ function stepPhysics(dt, lethal, control) {
       t.y += Math.sin(t.angle) * speed * dt;
     }
     resolveCircle(t, C.TANK_R, true);
-    if (t.fireQ > 0) { if (control && fire(t)) { t.fireQ = 0; t.reveal = C.GRASS_REVEAL; } else t.fireQ -= dt; }
+    if (t.fireQ > 0) { if (control && fire(t)) { t.fireQ = 0; t.reveal = C.GRASS_REVEAL; t.inv = 0; } else t.fireQ -= dt; }
     if (!t.power && !t.guided && t.charge <= 0) {
       for (let i = pickups.length - 1; i >= 0; i--) {
         const k = pickups[i];
@@ -1311,7 +1314,7 @@ function stepPhysics(dt, lethal, control) {
     for (const t of tanks) {
       if (!t.alive) continue;
       if (b.owner === t.id && b.age < C.SELF_SAFE_TIME) continue;
-      if (!canHurt(b.owner, t)) continue;                  // shots pass through team-mates
+      if (!canHurt(b.owner, t) || t.inv > 0) continue;     // shots pass through team-mates, and through a tank that has just come back
       const dx = b.x - t.x, dy = b.y - t.y;
       if (dx * dx + dy * dy < hitR * hitR) {
         if (b.owner !== t.id && !b.extra && stats[b.owner]) stats[b.owner].h++;
@@ -1364,7 +1367,7 @@ function stepPhysics(dt, lethal, control) {
       if (!t.alive) continue;
       // a homing missile never turns on its own tank; a guided one can, once it is armed
       if (t.id === m.owner && (m.type !== 'guided' || m.age < C.MISSILE_ARM)) continue;
-      if (!canHurt(m.owner, t)) continue;
+      if (!canHurt(m.owner, t) || t.inv > 0) continue;
       if (Math.hypot(t.x - m.x, t.y - m.y) >= mHit) continue;
       removeMissile(i);
       if (m.type !== 'homing') blast(m);
@@ -1380,7 +1383,7 @@ function stepPhysics(dt, lethal, control) {
     mn.age += dt;
     // a mine arms once its time is up and the tank that laid it has moved off it; after that it spares nobody
     if (!mn.armed && mn.age >= C.MINE_ARM && (!owner.alive || Math.hypot(owner.x - mn.x, owner.y - mn.y) > C.MINE_TRIGGER + 0.08)) { mn.armed = true; sfx.armed(); netEv('sfx', 'armed'); }
-    if (mn.armed && lethal && !mn.boom) for (const t of tanks) if (t.alive && canHurt(mn.owner, t) && Math.hypot(t.x - mn.x, t.y - mn.y) < C.MINE_TRIGGER) mn.boom = true;
+    if (mn.armed && lethal && !mn.boom) for (const t of tanks) if (t.alive && !(t.inv > 0) && canHurt(mn.owner, t) && Math.hypot(t.x - mn.x, t.y - mn.y) < C.MINE_TRIGGER) mn.boom = true;
     if (mn.boom) { mines.splice(i, 1); blast(mn); }
   }
 }
@@ -1778,7 +1781,7 @@ function buildSnap() {
     tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel),
     hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h]) : null,
     T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0),
-      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0]) : [],
+      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
@@ -2157,7 +2160,7 @@ function applyEntities(a, b, k, dt) {
     t.x = lerp(p[0], q[0]); t.y = lerp(p[1], q[1]); t.angle = lerpA(p[2], q[2]);
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
-    t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0;
+    t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0; t.inv = +q[11] || 0;
     t.laserPath = t.charge > 0 ? tracePath(t.x, t.y, t.angle) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -2648,6 +2651,14 @@ function drawPickup(k) {
 
 function drawTank(t) {
   const col = penOf(t.id);
+  if (t.inv > 0) {
+    const a = REDUCED ? 0 : performance.now() / 300;
+    ctx.save(); ctx.translate(t.x * P, t.y * P); ctx.rotate(a);
+    ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, P * 0.055); ctx.globalAlpha = 0.9;
+    ctx.setLineDash([P * 0.18, P * 0.12]); ctx.beginPath(); ctx.arc(0, 0, P * 0.58, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    ctx.restore();
+    if (!REDUCED && Math.floor(performance.now() / 110) % 2 === 0) return;     // flicker
+  }
   ctx.save();
   ctx.translate(t.x * P, t.y * P);
   if (t.power) {                                         // a dashed ring shows the other player that this tank is carrying a power-up

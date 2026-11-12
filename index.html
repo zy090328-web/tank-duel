@@ -20,6 +20,8 @@
   --green-pen: #1b8450;
   --orange-pen: #d06a12;
   --violet-pen: #7b3ab4;
+  --grass-pen: #5f8f2f;
+  --water-ink: #3f93c9;
   --font-display: "Gochi Hand", "Marker Felt", "Chalkboard SE", "Comic Sans MS", cursive;
   --font-body: "Patrick Hand", "Chalkboard SE", "Comic Sans MS", cursive;
   color-scheme: light;
@@ -125,7 +127,11 @@ const C = {
   // game modes
   RESPAWN_TIME: 2,       // deathmatch and hill: seconds before a destroyed tank comes back
   SPAWN_SHIELD: 1.5,     // ...and how long it is shielded when it does (it cannot fire meanwhile)
-  HILL_R: 1.5            // hill: radius of the circle in the middle
+  HILL_R: 1.5,           // hill: radius of the circle in the middle
+
+  // terrain
+  GRASS_SEE: 1.6,        // a tank in grass is seen only by enemies this close (centre to centre)...
+  GRASS_REVEAL: 0.8      // ...or for this long after it fires
 };
 
 /* ============================================================
@@ -324,7 +330,8 @@ const tok = n => css.getPropertyValue(n).trim();
 const COL = {
   paper: tok('--paper'), grid: tok('--grid'), margin: tok('--margin-line'),
   graphite: tok('--graphite'),
-  pens: [tok('--red-pen'), tok('--blue-pen'), tok('--green-pen'), tok('--orange-pen'), tok('--violet-pen')]
+  pens: [tok('--red-pen'), tok('--blue-pen'), tok('--green-pen'), tok('--orange-pen'), tok('--violet-pen')],
+  grass: tok('--grass-pen') || '#5f8f2f', water: tok('--water-ink') || '#3f93c9'
 };
 const PEN_NAMES = ['Red', 'Blue', 'Green', 'Orange', 'Violet'];
 const MAX_PLAYERS = 5;
@@ -334,7 +341,8 @@ const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const st = document.createElement('canvas');   // static layer: paper, grid, walls
+const st = document.createElement('canvas');   // static layer: paper, grid, walls, water
+const gst = document.createElement('canvas');  // grass, drawn over the tanks
 
 /* ---------- settings ---------- */
 const AMMO_MODES = ['unlimited', 'reload', 'limited', 'single'];
@@ -351,12 +359,13 @@ const GAME_TEXT = {
 };
 const KILL_GOAL = { 3: 5, 5: 10, 7: 15 }, HILL_GOAL = { 3: 20, 5: 30, 7: 45 };
 // soft: some walls break when shot. cpu: on one screen, play alone against this many computer tanks (0 = two people).
-let settings = { ammo: 'unlimited', powerups: false, maps: 'all', winScore: C.WIN_SCORE, game: 'classic', soft: false, cpu: 0 };
+let settings = { ammo: 'unlimited', powerups: false, maps: 'all', winScore: C.WIN_SCORE, game: 'classic', soft: false, terrain: true, cpu: 0 };
 function validSettings(s) {
   if (!s || !AMMO_MODES.includes(s.ammo)) return null;
   return { ammo: s.ammo, powerups: !!s.powerups, maps: MAP_POOLS.includes(s.maps) ? s.maps : 'all',
     winScore: WIN_SCORES.includes(s.winScore) ? s.winScore : C.WIN_SCORE,
-    game: GAME_MODES.includes(s.game) ? s.game : 'classic', soft: !!s.soft, cpu: [1, 2, 3].includes(s.cpu) ? s.cpu : 0 };
+    game: GAME_MODES.includes(s.game) ? s.game : 'classic', soft: !!s.soft, terrain: s.terrain === undefined ? true : !!s.terrain,
+    cpu: [1, 2, 3].includes(s.cpu) ? s.cpu : 0 };
 }
 // classic = the small 11x11 maps, complex = the 13x13 ones
 function mapPool() {
@@ -427,6 +436,7 @@ let bots = new Set();       // tanks driven by the computer
 let soloMatch = false;      // one person on this screen against computer tanks
 let stats = [];             // per tank, this match: kills, deaths, shots, hits
 let soft = new Uint8Array(0), broken = [];     // breakable wall cells; the ones broken this round, in order
+let water = new Uint8Array(0), grass = new Uint8Array(0);   // terrain: water stops tanks but not shots; grass hides tanks
 let hillHolder = -1, hillT = [];               // hill: who holds the circle (-1 nobody, -2 contested); seconds held per tank
 const respawnMode = () => settings.game === 'dm' || settings.game === 'hill';
 const teamsOn = () => settings.game === 'teams' && NP > 2;
@@ -445,7 +455,7 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
 let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], particles = [], marks = [];
@@ -459,6 +469,7 @@ function loadMap(i) {
   const m = MAPS[mapId];
   ROWS = m.length; COLS = m[0].length;
   crushed = new Uint8Array(COLS * ROWS); soft = new Uint8Array(COLS * ROWS); broken = [];
+  water = new Uint8Array(COLS * ROWS); grass = new Uint8Array(COLS * ROWS);
   const rot4 = ROT4.has(mapId), N = ROWS - 1, M = COLS - 1;
   const mark = (r, c) => m[r][c] === '#';
   walls = [];
@@ -476,6 +487,7 @@ function loadMap(i) {
   for (const [r, c] of rot4 ? four : two) walls[r][c] = false;
   if (settings.game === 'hill') carveHill(sc, sr);
   if (settings.soft) markSoft(rot4);
+  if (settings.terrain) addTerrain(rot4, rot4 ? four : two);
   const at = ([r, c]) => ({ x: c + 0.5, y: r + 0.5 });
   if (teamsOn()) spawn = teamSpawns(sc, sr);
   else if (NP <= 2) spawn = two.map(at);
@@ -501,6 +513,59 @@ function markSoft(rot4) {
     if (mulberry32(mapId * 7919 + key * 31 + 5)() < 0.42) soft[r * COLS + c] = 1;
   }
 }
+// Grass and water, laid the same way on every device and with the same symmetry as the map.
+// Neither goes on a starting cell, next to one, or in the middle; water never cuts any cell off.
+function addTerrain(rot4, starts) {
+  const N = ROWS - 1, M = COLS - 1, rnd = mulberry32(mapId * 104729 + 977);
+  const orbit = (r, c) => { const o = [[r, c], [N - r, M - c]]; if (rot4) o.push([c, N - r], [N - c, r]); return o; };
+  const idx = (r, c) => r * COLS + c;
+  const near = (r, c) => starts.some(([sr, sc]) => Math.abs(sr - r) <= 1 && Math.abs(sc - c) <= 1);
+  const mid = (r, c) => Math.hypot(c + 0.5 - COLS / 2, r + 0.5 - ROWS / 2) < C.HILL_R + 0.8;
+  const free = (r, c) => r >= 0 && c >= 0 && r < ROWS && c < COLS && !walls[r][c] && !water[idx(r, c)] && !near(r, c) && !mid(r, c);
+  const ok = (r, c) => free(r, c) && !grass[idx(r, c)];
+  // a start cell, more often away from the edge of the arena, where cover matters more
+  const pick = () => { for (let k = 0; k < 40; k++) { const r = (rnd() * ROWS) | 0, c = (rnd() * COLS) | 0, edge = r === 0 || c === 0 || r === N || c === M; if (ok(r, c) && !(edge && rnd() < 0.65)) return [r, c]; } return null; };
+  const big = COLS > 11, [s0r, s0c] = starts[0];
+  // water: short straight runs
+  for (let w = 0, tries = 0; w < (rot4 ? 1 : 2) && tries < 30; tries++) {
+    const st0 = pick(); if (!st0) break;
+    const [dc, dr] = DIRS4[(rnd() * 4) | 0], len = 2 + ((rnd() * 2) | 0), run = [];
+    for (let k = 0; k < len; k++) { const r = st0[0] + dr * k, c = st0[1] + dc * k; if (!ok(r, c)) break; run.push([r, c]); }
+    if (run.length < 2) continue;
+    const cells = [];
+    for (const [r, c] of run) for (const [or, oc] of orbit(r, c)) if (free(or, oc)) cells.push(idx(or, oc));
+    const before = distField(s0c, s0r);
+    for (const i of cells) water[i] = 1;
+    const after = distField(s0c, s0r);
+    let cut = starts.some(([r, c]) => after[idx(r, c)] < 0);
+    for (let i = 0; i < before.length && !cut; i++) if (before[i] >= 0 && !water[i] && after[i] < 0) cut = true;
+    if (cut) { for (const i of cells) water[i] = 0; continue; }
+    w++;
+  }
+  // grass: patches of two to four cells
+  for (let g = 0, tries = 0; g < (rot4 ? 2 : big ? 4 : 3) && tries < 40; tries++) {
+    const st0 = pick(); if (!st0) break;
+    const patch = [st0], size = 2 + ((rnd() * 3) | 0);
+    for (let k = 0; k < 14 && patch.length < size; k++) {
+      const [r, c] = patch[(rnd() * patch.length) | 0], [dc, dr] = DIRS4[(rnd() * 4) | 0];
+      if (ok(r + dr, c + dc) && !patch.some(q => q[0] === r + dr && q[1] === c + dc)) patch.push([r + dr, c + dc]);
+    }
+    for (const [r, c] of patch) for (const [or, oc] of orbit(r, c)) if (free(or, oc)) grass[idx(or, oc)] = 1;
+    g++;
+  }
+}
+const grassAt = (x, y) => { const c = Math.floor(x), r = Math.floor(y); return c >= 0 && r >= 0 && c < COLS && r < ROWS && grass[r * COLS + c] === 1; };
+// in grass and not given away by a recent shot
+const concealed = t => settings.terrain && t.alive && !(t.reveal > 0) && grassAt(t.x, t.y);
+const friendOf = (a, b) => a === b || (teamsOn() && teamOf[a] === teamOf[b]);
+// can the side of seat `viewer` see tank t? A concealed tank shows only to its own side and to enemies right beside it.
+function seenBy(viewer, t) {
+  if (viewer < 0 || !concealed(t) || friendOf(viewer, t.id)) return true;
+  for (const o of tanks) if (o.alive && friendOf(viewer, o.id) && Math.hypot(o.x - t.x, o.y - t.y) < C.GRASS_SEE) return true;
+  return false;
+}
+// whose eyes this screen shows: nobody's when two people share it (then grass hides no one)
+const viewer = () => twoSided() ? -1 : mySeat;
 function softAt(x, y, rad) {
   const c0 = Math.max(0, Math.floor(x - rad)), c1 = Math.min(COLS - 1, Math.floor(x + rad));
   const r0 = Math.max(0, Math.floor(y - rad)), r1 = Math.min(ROWS - 1, Math.floor(y + rad));
@@ -572,12 +637,13 @@ function spreadSpawns(n, sc, sr) {
   return out;
 }
 
-function circleHitsWall(x, y, rad) {
+// `wet`: water counts as a wall too (for tanks)
+function circleHitsWall(x, y, rad, wet = false) {
   if (x - rad < 0 || y - rad < 0 || x + rad > COLS || y + rad > ROWS) return true;
   const c0 = Math.floor(x - rad), c1 = Math.min(COLS - 1, Math.floor(x + rad));
   const r0 = Math.floor(y - rad), r1 = Math.min(ROWS - 1, Math.floor(y + rad));
   for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-    if (!walls[r][c]) continue;
+    if (!walls[r][c] && !(wet && water[r * COLS + c])) continue;
     const dx = x - clamp(x, c, c + 1), dy = y - clamp(y, r, r + 1);
     if (dx * dx + dy * dy < rad * rad) return true;
   }
@@ -585,13 +651,13 @@ function circleHitsWall(x, y, rad) {
 }
 
 // Push a circle (tank or missile) out of every wall cell it overlaps. Sliding along walls falls out of this for free.
-function resolveCircle(o, R) {
+function resolveCircle(o, R, wet = false) {
   for (let it = 0; it < 3; it++) {
     o.x = clamp(o.x, R, COLS - R); o.y = clamp(o.y, R, ROWS - R);
     const c0 = Math.floor(o.x - R), c1 = Math.min(COLS - 1, Math.floor(o.x + R));
     const r0 = Math.floor(o.y - R), r1 = Math.min(ROWS - 1, Math.floor(o.y + R));
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-      if (!walls[r][c]) continue;
+      if (!walls[r][c] && !(wet && water[r * COLS + c])) continue;
       const dx = o.x - clamp(o.x, c, c + 1), dy = o.y - clamp(o.y, r, r + 1);
       const d2 = dx * dx + dy * dy;
       if (d2 >= R * R || d2 < 1e-12) continue;
@@ -602,9 +668,9 @@ function resolveCircle(o, R) {
 }
 
 // Is the straight path from a to b free for a circle of radius r?
-function lineClear(ax, ay, bx, by, r) {
+function lineClear(ax, ay, bx, by, r, wet = false) {
   const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.1));
-  for (let i = 0; i <= n; i++) if (circleHitsWall(ax + (bx - ax) * i / n, ay + (by - ay) * i / n, r)) return false;
+  for (let i = 0; i <= n; i++) if (circleHitsWall(ax + (bx - ax) * i / n, ay + (by - ay) * i / n, r, wet)) return false;
   return true;
 }
 
@@ -645,14 +711,15 @@ function pathDist(path, px, py) {
 }
 
 /* ---------- homing missile: shortest way through the grid ---------- */
-function distField(tc, tr) {
+// steps from every cell to (tc, tr); `wet` (the default, for tanks): water is in the way
+function distField(tc, tr, wet = true) {
   const d = new Int16Array(COLS * ROWS).fill(-1), q = [tr * COLS + tc];
   d[q[0]] = 0;
   for (let h = 0; h < q.length; h++) {
     const i = q[h], c = i % COLS, r = (i / COLS) | 0;
     for (const [dc, dr] of DIRS4) {
       const nc = c + dc, nr = r + dr;
-      if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS || walls[nr][nc]) continue;
+      if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS || walls[nr][nc] || (wet && water[nr * COLS + nc])) continue;
       const j = nr * COLS + nc;
       if (d[j] >= 0) continue;
       d[j] = d[i] + 1; q.push(j);
@@ -660,11 +727,11 @@ function distField(tc, tr) {
   }
   return d;
 }
-function planWaypoint(m, target, R = C.MISSILE_R + 0.05) {
+function planWaypoint(m, target, R = C.MISSILE_R + 0.05, wet = false) {
   const tc = clamp(Math.floor(target.x), 0, COLS - 1), tr = clamp(Math.floor(target.y), 0, ROWS - 1);
   let c = clamp(Math.floor(m.x), 0, COLS - 1), r = clamp(Math.floor(m.y), 0, ROWS - 1);
-  if ((c === tc && r === tr) || lineClear(m.x, m.y, target.x, target.y, R)) return { x: target.x, y: target.y };
-  const d = distField(tc, tr);
+  if ((c === tc && r === tr) || lineClear(m.x, m.y, target.x, target.y, R, wet)) return { x: target.x, y: target.y };
+  const d = distField(tc, tr, wet);
   if (d[r * COLS + c] < 0) return { x: target.x, y: target.y };
   let wp = { x: c + 0.5, y: r + 0.5 };
   // walk down the distance field; aim at the farthest cell on the route that can be reached in a straight line
@@ -677,7 +744,7 @@ function planWaypoint(m, target, R = C.MISSILE_R + 0.05) {
       if (v >= 0 && v < best) { best = v; bc = nc; br = nr; }
     }
     if (bc === c && br === r) break;
-    if (step > 0 && !lineClear(m.x, m.y, bc + 0.5, br + 0.5, R)) break;
+    if (step > 0 && !lineClear(m.x, m.y, bc + 0.5, br + 0.5, R, wet)) break;
     wp = { x: bc + 0.5, y: br + 0.5 }; c = bc; r = br;
   }
   return wp;
@@ -692,7 +759,7 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0;
-    t.respawn = 0; t.ai = null;
+    t.respawn = 0; t.ai = null; t.reveal = 0;
   });
   hillHolder = -1;
   bullets = []; missiles = []; mines = []; pickups = []; beams = []; rings = []; particles = []; marks = [];
@@ -988,7 +1055,7 @@ function spawnPickups() {
   const far = q => tanks.every(t => !t.alive || Math.hypot(t.x - q.x, t.y - q.y) > 2) && pickups.every(k => Math.hypot(k.x - q.x, k.y - q.y) > 1.2);
   for (let tries = 0; tries < 80; tries++) {
     const c = (Math.random() * COLS) | 0, r = (Math.random() * ROWS) | 0;
-    if (walls[r][c]) continue;
+    if (walls[r][c] || water[r * COLS + c]) continue;
     if (sdOn() && ringOf(c, r) <= sdClosed) continue;     // not in a ring that is closed or about to close
     const a = { x: c + 0.5, y: r + 0.5 }, b = { x: COLS - c - 0.5, y: ROWS - r - 0.5 };
     if (!far(a) || !far(b)) continue;
@@ -1008,7 +1075,7 @@ const ringCount = () => Math.ceil(Math.min(COLS, ROWS) / 2);
 const sdOn = () => C.SUDDEN_DEATH_TIME > 0 && !respawnMode() && roundT >= C.SUDDEN_DEATH_TIME;
 function closeRing(k) {
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-    if (ringOf(c, r) === k && !walls[r][c]) { walls[r][c] = true; crushed[r * COLS + c] = 1; }
+    if (ringOf(c, r) === k && !walls[r][c]) { walls[r][c] = true; crushed[r * COLS + c] = 1; water[r * COLS + c] = grass[r * COLS + c] = 0; }
   }
   const inWall = o => { const c = Math.floor(o.x), r = Math.floor(o.y); return c < 0 || r < 0 || c >= COLS || r >= ROWS || walls[r][c]; };
   for (let i = bullets.length - 1; i >= 0; i--) if (!bullets[i].pierce && circleHitsWall(bullets[i].x, bullets[i].y, C.BULLET_R)) bullets.splice(i, 1);
@@ -1021,7 +1088,7 @@ function closeRing(k) {
   // a tank caught inside a closing cell is crushed; one that only overlaps it is pushed inward at once,
   // before it can move: a centre that slips inside a wall cell could no longer be pushed out
   for (const t of tanks) if (t.alive && inWall(t)) kill(t);
-  for (const t of tanks) if (t.alive) resolveCircle(t, C.TANK_R);
+  for (const t of tanks) if (t.alive) resolveCircle(t, C.TANK_R, true);
   for (const m of missiles) resolveCircle(m, C.MISSILE_R);
 }
 
@@ -1079,7 +1146,16 @@ function botInput(seat) {
   const t = tanks[seat], dt = C.STEP;
   if (!t || (state !== 'play' && state !== 'ending')) return IDLE;
   const ai = t.ai || (t.ai = { replan: 0, wp: null, react: 0.4 + Math.random() * 0.5, dodge: 0, da: 0, wander: 0, wa: 0, chk: 0.6, px: t.x, py: t.y });
-  const foe = tanks[nearestEnemy(seat, t.x, t.y)], hasFoe = !!foe && foe.id !== seat && foe.alive;
+  let fi = -1, fd = Infinity;
+  for (const o of tanks) {
+    if (!o.alive || friendOf(seat, o.id) || !seenBy(seat, o)) continue;
+    const d = Math.hypot(o.x - t.x, o.y - t.y);
+    if (d < fd) { fd = d; fi = o.id; }
+  }
+  const foe = fi >= 0 ? tanks[fi] : null, hasFoe = !!foe;
+  // remember where an enemy was last seen; go and look there for a while
+  if (hasFoe) ai.last = { x: foe.x, y: foe.y, t: 4 };
+  else if (ai.last && ((ai.last.t -= dt) <= 0 || Math.hypot(ai.last.x - t.x, ai.last.y - t.y) < 0.6)) ai.last = null;
   ai.react -= dt;
   if (t.guided && typeof t.guided === 'object') {
     // steering a guided missile: fly it at the enemy and set it off beside them
@@ -1119,6 +1195,15 @@ function botInput(seat) {
     for (const k of pickups) { const d = Math.hypot(k.x - t.x, k.y - t.y); if (d < bd) { bd = d; bk = k; } }
     if (bk) { goal = bk; fight = false; }
   }
+  if (!goal) goal = ai.last;
+  if (!goal) {                                               // nobody in sight: roam to somewhere else on the map
+    if (!ai.roam || (ai.roam.t -= dt) <= 0 || Math.hypot(ai.roam.x - t.x, ai.roam.y - t.y) < 0.8) {
+      ai.roam = null;
+      const d = distField(Math.floor(t.x), Math.floor(t.y));
+      for (let k = 0; k < 30 && !ai.roam; k++) { const i = (Math.random() * d.length) | 0; if (d[i] > 3) ai.roam = { x: i % COLS + 0.5, y: ((i / COLS) | 0) + 0.5, t: 6 }; }
+    }
+    goal = ai.roam;
+  }
   if (!goal) return IDLE;
 
   if (hasFoe && los) {
@@ -1130,7 +1215,7 @@ function botInput(seat) {
   if (fight && los) return unitTo(foe.x - t.x, foe.y - t.y, dFoe > 3 ? 1 : 0.04);
 
   ai.replan -= dt;
-  if (ai.replan <= 0 || !ai.wp) { ai.replan = 0.2; ai.wp = planWaypoint(t, goal, C.TANK_R + 0.04); }
+  if (ai.replan <= 0 || !ai.wp) { ai.replan = 0.2; ai.wp = planWaypoint(t, goal, C.TANK_R + 0.04, true); }
   ai.chk -= dt;
   if (ai.chk <= 0) {                                         // not getting anywhere: try another way for a moment
     if (Math.hypot(t.x - ai.px, t.y - ai.py) < 0.1) { ai.wander = 0.45; ai.wa = Math.random() * Math.PI * 2; ai.wp = null; }
@@ -1151,6 +1236,7 @@ function stepPhysics(dt, lethal, control) {
     t.cool = Math.max(0, t.cool - dt);
     t.recoil = Math.max(0, t.recoil - dt * 8);
     t.shield = Math.max(0, t.shield - dt);
+    t.reveal = Math.max(0, t.reveal - dt);
     if (t.reload > 0) { t.reload -= dt; if (t.reload <= 0) { t.reload = 0; t.ammo = clipSize(); sfx.reloaded(); netEv('sfx', 'reloaded', t.id); } }
     const locked = t.charge > 0 || t.guided !== null;      // charging a laser or steering a missile: the tank stands still
     if (t.charge > 0) {
@@ -1169,8 +1255,8 @@ function stepPhysics(dt, lethal, control) {
       t.x += Math.cos(t.angle) * speed * dt;
       t.y += Math.sin(t.angle) * speed * dt;
     }
-    resolveCircle(t, C.TANK_R);
-    if (t.fireQ > 0) { if (control && fire(t)) t.fireQ = 0; else t.fireQ -= dt; }
+    resolveCircle(t, C.TANK_R, true);
+    if (t.fireQ > 0) { if (control && fire(t)) { t.fireQ = 0; t.reveal = C.GRASS_REVEAL; } else t.fireQ -= dt; }
     if (!t.power && !t.guided && t.charge <= 0) {
       for (let i = pickups.length - 1; i >= 0; i--) {
         const k = pickups[i];
@@ -1186,7 +1272,7 @@ function stepPhysics(dt, lethal, control) {
     if (d < min && d > 1e-6) {
       const push = (min - d) / 2;
       a.x -= dx / d * push; a.y -= dy / d * push; b2.x += dx / d * push; b2.y += dy / d * push;
-      resolveCircle(a, C.TANK_R); resolveCircle(b2, C.TANK_R);
+      resolveCircle(a, C.TANK_R, true); resolveCircle(b2, C.TANK_R, true);
     }
   }
 
@@ -1688,11 +1774,11 @@ function buildSnap() {
   return {
     ts: r1(now), dd: HEADLESS ? 1 : 0, ld: HEADLESS ? leaderId() : null, st: state, t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
     seats, sc: scores, w: winner, dr: drawReason,
-    set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0],
+    set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0, settings.terrain ? 1 : 0],
     tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel),
     hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h]) : null,
     T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0),
-      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0]) : [],
+      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
@@ -1919,7 +2005,7 @@ function predictStep(dt) {
     pred.x += Math.cos(pred.angle) * speed * dt;
     pred.y += Math.sin(pred.angle) * speed * dt;
   }
-  resolveCircle(pred, C.TANK_R);
+  resolveCircle(pred, C.TANK_R, true);
   const now = performance.now();
   pred.hist.push({ at: now, x: pred.x, y: pred.y, a: pred.angle });
   while (pred.hist.length && now - pred.hist[0].at > 2000) pred.hist.shift();
@@ -1941,7 +2027,7 @@ function reconcile(g) {
   const f = 0.25;
   pred.x += ex * f; pred.y += ey * f; pred.angle = wrapAngle(pred.angle + ea * f);
   for (const e of pred.hist) { e.x += ex * f; e.y += ey * f; e.a = wrapAngle(e.a + ea * f); }
-  resolveCircle(pred, C.TANK_R);
+  resolveCircle(pred, C.TANK_R, true);
 }
 
 function applyDiscrete(g, dt) {
@@ -1951,7 +2037,7 @@ function applyDiscrete(g, dt) {
   // the room's creator brings their own saved settings to the server's waiting room once
   if (isLeader && !sentPrefs && g.st === 'hostWait' && savedSettings) { sentPrefs = true; sendCmd('set', savedSettings); }
   if (Array.isArray(g.set)) {
-    const s = validSettings({ ammo: g.set[0], powerups: !!g.set[1], winScore: g.set[2], maps: g.set[3], game: g.set[4], soft: !!g.set[5] });
+    const s = validSettings({ ammo: g.set[0], powerups: !!g.set[1], winScore: g.set[2], maps: g.set[3], game: g.set[4], soft: !!g.set[5], terrain: !!g.set[6] });
     if (s) settings = s;
   }
   const n = clamp(g.n | 0, 1, MAX_PLAYERS);
@@ -1992,7 +2078,7 @@ function applyDiscrete(g, dt) {
   if (sd > localSd && st !== 'guestWait') {
     while (localSd < sd) {
       const k = localSd++;
-      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (ringOf(c, r) === k && !walls[r][c]) { walls[r][c] = true; crushed[r * COLS + c] = 1; }
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (ringOf(c, r) === k && !walls[r][c]) { walls[r][c] = true; crushed[r * COLS + c] = 1; water[r * COLS + c] = grass[r * COLS + c] = 0; }
     }
     sdClosed = localSd;
     buildStatic(); shake = Math.max(shake, 0.2); sfx.slam();
@@ -2071,7 +2157,7 @@ function applyEntities(a, b, k, dt) {
     t.x = lerp(p[0], q[0]); t.y = lerp(p[1], q[1]); t.angle = lerpA(p[2], q[2]);
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
-    t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0;
+    t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0;
     t.laserPath = t.charge > 0 ? tracePath(t.x, t.y, t.angle) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -2227,6 +2313,11 @@ function withFrame(f, fn) {
   try { return fn(); } finally { U = u; AY = ay; FRM = o; }
 }
 const MAP_TEXT = { all: 'All maps', classic: 'Classic maps', complex: 'Complex maps' };
+// map extras: 0 plain, 1 breakable walls, 2 grass and water, 3 both
+const FEAT_TEXT = ['Plain map', 'Breakable walls', 'Grass & water', 'All terrain'];
+const featIdx = () => (settings.soft ? 1 : 0) + (settings.terrain ? 2 : 0);
+const featPatch = v => ({ soft: !!(v & 1), terrain: !!(v & 2) });
+const settingPatch = it => it.kind === 'soft' ? featPatch(it.v) : { [SETTING_KEY[it.kind]]: it.v };
 const nextOf = (arr, v) => arr[(arr.indexOf(v) + 1) % arr.length];
 const goalChip = () => settings.game === 'dm' ? `First to ${target()} kills` : settings.game === 'hill' ? `Hold for ${target()} s` : `First to ${target()}`;
 // Rows of chips: game mode, who plays (one screen only), ammo, and four switches. `on` = drawn filled.
@@ -2245,7 +2336,7 @@ function menuItems(top = AY + AH / 2, buttons = [['start', resumeMatch ? 'CONTIN
   if (!lobby) row([0, 1, 2, 3].map(n => ['cpu', n, n ? `1 + ${n} CPU` : '2 players', settings.cpu === n]));
   row([['unlimited', 'Unlimited'], ['reload', '5 + reload'], ['limited', '5 only'], ['single', `1 per ${C.SINGLE_COOLDOWN} s`]].map(([v, t]) => ['ammo', v, t, settings.ammo === v]));
   row([['pu', !settings.powerups, settings.powerups ? 'Power-ups on' : 'Power-ups off', settings.powerups],
-    ['soft', !settings.soft, settings.soft ? 'Breakable walls' : 'Solid walls', settings.soft],
+    ['soft', (featIdx() + 1) % 4, FEAT_TEXT[featIdx()], false, true],
     ['maps', nextOf(MAP_POOLS, settings.maps), MAP_TEXT[settings.maps], false, true],
     ['win', nextOf(WIN_SCORES, settings.winScore), goalChip(), false, true]]);
   // two big buttons side by side: START and ONLINE on the title, START and Leave in the waiting room
@@ -2260,7 +2351,11 @@ function menuHintText(lobby) {
   if (k === 'cpu') return settings.cpu ? `You against ${settings.cpu} computer tank${settings.cpu > 1 ? 's' : ''}, on this screen.` : 'Two players, one at each end of this screen.';
   if (k === 'ammo') return ammoText();
   if (k === 'pu') return settings.powerups ? 'Pickups appear: laser, missiles, bombs, shield, mines and more.' : 'No pickups. Just tanks and shots.';
-  if (k === 'soft') return settings.soft ? 'Lightly drawn walls break when a shot hits them.' : 'Every wall stops every shot.';
+  if (k === 'soft') return [
+    'Plain map: every wall stops every shot.',
+    'Lightly drawn walls break when a shot hits them.',
+    !lobby && !settings.cpu ? 'Water stops tanks, not shots. Grass hides only when each player has a screen.' : 'Grass hides tanks from enemies; water stops tanks but not shots.',
+    'Breakable walls, grass to hide in, and water to shoot across.'][featIdx()];
   if (k === 'maps') return settings.maps === 'all' ? 'Small and large maps, shuffled.' : settings.maps === 'classic' ? 'Small 11 by 11 maps. (3+ tanks always get large ones.)' : 'Large 13 by 13 maps with more cover.';
   if (k === 'win') return settings.game === 'dm' ? `The match ends at ${target()} kills.` : settings.game === 'hill' ? `The match ends when a tank has held the hill for ${target()} seconds.` : `The match ends at ${target()} rounds won.`;
   return lobby ? GAME_TEXT[settings.game] : '';
@@ -2300,7 +2395,7 @@ function applyMenu(it) {
   if (it.kind === 'name') { sfx.tick(); openName(); return; }
   if (mode === 'guest') {
     // a guest can only steer a server-run room it leads; everything goes to the server as a request
-    if (SETTING_KEY[it.kind]) { if (isLeader) { sendCmd('set', Object.assign({}, settings, { [SETTING_KEY[it.kind]]: it.v })); sfx.tick(); } return; }
+    if (SETTING_KEY[it.kind]) { if (isLeader) { sendCmd('set', Object.assign({}, settings, settingPatch(it))); sfx.tick(); } return; }
     if (it.kind === 'start' || it.kind === 'rematch' || it.kind === 'lobby') { if (isLeader) { sendCmd(it.kind); sfx.tick(); } return; }
     if (it.kind === 'bots') { if (isLeader) { sendCmd('bots', clamp(lobbySeats().filter(isBotId).length + it.v, 0, MAX_PLAYERS - 1)); sfx.tick(); } return; }
     if (it.kind === 'team') { if (isLeader) sendCmd('team', it.v); else if (it.v === mySeat) sendCmd('side'); sfx.tick(); return; }
@@ -2310,7 +2405,7 @@ function applyMenu(it) {
   else if (it.kind === 'maps') { settings.maps = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'win') { settings.winScore = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'game') { settings.game = it.v; saveSettings(); sfx.tick(); }
-  else if (it.kind === 'soft') { settings.soft = it.v; saveSettings(); sfx.tick(); }
+  else if (it.kind === 'soft') { Object.assign(settings, featPatch(it.v)); saveSettings(); sfx.tick(); }
   else if (it.kind === 'cpu') { settings.cpu = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'bots') { lobbyBots = clamp(seats.filter(isBotId).length + it.v, 0, MAX_PLAYERS - 1); reseat(); sfx.tick(); }
   else if (it.kind === 'team') { toggleTeam(it.v); sfx.tick(); }
@@ -2345,6 +2440,30 @@ function ammoText() {
   return settings.powerups ? `${C.CLIP_SIZE} shots per round. After that, only pickups.` : `${C.CLIP_SIZE} shots per round. Both empty: draw.`;
 }
 
+// a grass cell with its origin at (0, 0), blades upright
+function grassCell(h, r, c) {
+  const rnd = mulberry32(71 + mapId * 389 + r * 23 + c);
+  h.globalAlpha = 0.2; h.fillStyle = COL.grass; h.fillRect(0, 0, P, P);
+  h.globalAlpha = 0.9; h.strokeStyle = COL.grass; h.lineWidth = Math.max(1.2, P * 0.04); h.lineCap = 'round';
+  h.beginPath();
+  for (let k = 0; k < 9; k++) {                        // tufts: three blades each
+    const bx = P * (0.12 + ((k % 3) + rnd() * 0.7) * 0.27), by = P * (0.32 + Math.floor(k / 3) * 0.3 + rnd() * 0.06), hh = P * (0.16 + rnd() * 0.08);
+    h.moveTo(bx, by); h.lineTo(bx - P * 0.07, by - hh * 0.8);
+    h.moveTo(bx, by); h.lineTo(bx, by - hh);
+    h.moveTo(bx, by); h.lineTo(bx + P * 0.07, by - hh * 0.8);
+  }
+  h.stroke();
+  h.globalAlpha = 1;
+}
+// draw the grass of the cells under a tank again, over the tank
+function grassOver(t) {
+  if (gst.width <= 1) return;
+  const k = gst.width / (COLS * P);
+  for (let r = Math.floor(t.y - 0.45); r <= Math.floor(t.y + 0.45); r++) for (let c = Math.floor(t.x - 0.45); c <= Math.floor(t.x + 0.45); c++) {
+    if (r < 0 || c < 0 || r >= ROWS || c >= COLS || !grass[r * COLS + c]) continue;
+    ctx.drawImage(gst, c * P * k, r * P * k, P * k, P * k, c * P, r * P, P, P);
+  }
+}
 function buildStatic() {
   if (HEADLESS) return;                 // the server draws nothing
   if (!LW) return;
@@ -2388,9 +2507,45 @@ function buildStatic() {
     g.setLineDash([]);
   }
 
+  // water: a pale wash with pencil ripples
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    if (!water[r * COLS + c] || (walls[r] && walls[r][c])) continue;
+    const x = AX + (viewFlip ? COLS - 1 - c : c) * P, y = AY + (viewFlip ? ROWS - 1 - r : r) * P;
+    const rnd = mulberry32(31 + mapId * 613 + r * 17 + c);
+    g.globalAlpha = 0.22; g.fillStyle = COL.water; g.fillRect(x, y, P, P);
+    g.globalAlpha = 0.85; g.strokeStyle = COL.water; g.lineWidth = Math.max(1.2, P * 0.035); g.lineCap = 'round';
+    for (let k = 0; k < 3; k++) {
+      const yy = y + P * (0.25 + k * 0.25) + (rnd() - 0.5) * P * 0.06, x0 = x + P * (0.12 + rnd() * 0.08), x1 = x + P * (0.88 - rnd() * 0.08), a = P * 0.06;
+      g.beginPath(); g.moveTo(x0, yy);
+      for (let q = 1; q <= 4; q++) { const xm = x0 + (x1 - x0) * (q - 0.5) / 4, xe = x0 + (x1 - x0) * q / 4; g.quadraticCurveTo(xm, yy + (q % 2 ? -a : a), xe, yy); }
+      g.stroke();
+    }
+  }
+
+  // grass on the paper
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    if (!grass[r * COLS + c] || (walls[r] && walls[r][c])) continue;
+    g.save(); g.translate(AX + (viewFlip ? COLS - 1 - c : c) * P, AY + (viewFlip ? ROWS - 1 - r : r) * P);
+    grassCell(g, r, c); g.restore();
+  }
+
   // arena border
   g.globalAlpha = 1; g.strokeStyle = COL.graphite; g.lineWidth = Math.max(2, P * 0.07);
   g.strokeRect(AX, AY, AW, AH);
+
+  // the same grass in arena coordinates, to lay back over tanks standing in it (see grassOver)
+  gst.width = Math.max(1, Math.round(COLS * P * dpr)); gst.height = Math.max(1, Math.round(ROWS * P * dpr));
+  const h = gst.getContext('2d');
+  h.setTransform(dpr, 0, 0, dpr, 0, 0);
+  h.clearRect(0, 0, COLS * P, ROWS * P);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    if (!grass[r * COLS + c] || (walls[r] && walls[r][c])) continue;
+    h.save();
+    // this layer is drawn inside the arena's turn (see viewFlip), so turn each cell back to keep the blades upright
+    if (viewFlip) { h.translate(c * P + P, r * P + P); h.rotate(Math.PI); } else h.translate(c * P, r * P);
+    grassCell(h, r, c);
+    h.restore();
+  }
 }
 
 /* ---------- drawing ---------- */
@@ -2874,7 +3029,7 @@ function drawNetScreen() {
       line(`${GAME_NAME[settings.game]} · ${goalText()}`, 5.75, 0.4, accent, FONT_D);
       line(GAME_TEXT[settings.game], 6.3, 0.26, ink, FONT_B, 0.85);
       line(ammoText(), 6.75, 0.26, ink, FONT_B, 0.85);
-      line(`${settings.powerups ? 'Power-ups on' : 'Power-ups off'} · ${settings.soft ? 'breakable walls' : 'solid walls'} · ${MAP_TEXT[settings.maps].toLowerCase()}`, 7.2, 0.26, ink, FONT_B, 0.85);
+      line(`${settings.powerups ? 'Power-ups on' : 'Power-ups off'} · ${FEAT_TEXT[featIdx()].toLowerCase()} · ${MAP_TEXT[settings.maps].toLowerCase()}`, 7.2, 0.26, ink, FONT_B, 0.85);
     });
   } else if (state === 'guestWait') {
     line('Joining…', 0.9, 0.6, accent, FONT_D);
@@ -3071,15 +3226,16 @@ function render() {
   ctx.globalAlpha = 1;
 
   // a ring marks the tank a homing missile is hunting
+  const eye = viewer();
   for (const m of missiles) {
     const tg = tanks[m.target];
-    if (m.type !== 'homing' || !tg || !tg.alive || tg.id === m.owner) continue;
+    if (m.type !== 'homing' || !tg || !tg.alive || tg.id === m.owner || !seenBy(eye, tg)) continue;
     const pulse = REDUCED ? 0 : 0.05 * Math.sin(m.age * 10);
     ctx.strokeStyle = penOf(m.owner); ctx.lineWidth = Math.max(1.5, P * 0.04); ctx.globalAlpha = 0.8;
     ctx.setLineDash([P * 0.14, P * 0.1]); ctx.beginPath(); ctx.arc(tg.x * P, tg.y * P, P * (0.5 + pulse), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     ctx.globalAlpha = 1;
   }
-  if (!NET_SCREENS.includes(state)) for (const t of tanks) if (t.alive) drawTank(t);
+  if (!NET_SCREENS.includes(state)) for (const t of tanks) if (t.alive && seenBy(eye, t)) { drawTank(t); if (settings.terrain) grassOver(t); }
   if (state === 'countdown' && !twoSided() && tanks[mySeat]) {
     // which tank is mine: a ring closes in on it while the round counts down
     const t = tanks[mySeat], k = REDUCED ? 0.5 : (stateT % 0.65) / 0.65;
@@ -3226,7 +3382,7 @@ addEventListener('keydown', e => {
     else if (k === 'm') { settings.maps = MAP_POOLS[(MAP_POOLS.indexOf(settings.maps) + 1) % MAP_POOLS.length]; saveSettings(); }
     else if (k === 'n') { settings.winScore = WIN_SCORES[(WIN_SCORES.indexOf(settings.winScore) + 1) % WIN_SCORES.length]; saveSettings(); menuFocus = 'win'; }
     else if (k === 'g') { settings.game = nextOf(GAME_MODES, settings.game); saveSettings(); menuFocus = 'game'; }
-    else if (k === 'b') { settings.soft = !settings.soft; saveSettings(); menuFocus = 'soft'; }
+    else if (k === 'b') { Object.assign(settings, featPatch((featIdx() + 1) % 4)); saveSettings(); menuFocus = 'soft'; }
     else if (k === 'c') { settings.cpu = (settings.cpu + 1) % 4; saveSettings(); menuFocus = 'cpu'; }
     return;
   }
@@ -3295,7 +3451,7 @@ window.__tank = {
   get soft() { return soft; }, get broken() { return broken; }, get hillHolder() { return hillHolder; }, get solo() { return soloMatch; },
   get NP() { return NP; }, get mode() { return mode; }, get land() { return land; }, get myName() { return myName; },
   setupLocal, beginFromMenu, applyMenu, breakWall, respawnTank, botInput, target, goalText, distField, mapPool, ROT4,
-  lobbyFrames,
+  lobbyFrames, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
   lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };
 

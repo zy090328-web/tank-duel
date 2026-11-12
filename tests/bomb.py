@@ -39,7 +39,7 @@ async def main():
       await p.goto(URL); await p.wait_for_timeout(400); return p
     ev = lambda p, js, a=None: p.evaluate(js, a)
     async def fresh(p):
-      await ev(p, "__tank.setSettings(Object.assign({}, __tank.settings(), { game: 'dm', cpu: 0, soft: false, powerups: false, winScore: 7 }))")
+      await ev(p, "__tank.setSettings(Object.assign({}, __tank.settings(), { game: 'dm', cpu: 0, soft: false, terrain: false, powerups: false, winScore: 7 }))")
       await ev(p, "(() => { __tank.goMenu(); __tank.beginFromMenu(); })()")
       await p.wait_for_timeout(2400)
 
@@ -119,7 +119,7 @@ async def main():
 
     # 8. online (this tablet hosts): the guest sees the bomb and the blast
     H = await page('host'); G = await page('guest', 844, 390)
-    await ev(H, "__tank.setSettings({ ammo: 'unlimited', powerups: false, maps: 'all', winScore: 7, game: 'dm', soft: false })")
+    await ev(H, "__tank.setSettings({ ammo: 'unlimited', powerups: false, maps: 'all', winScore: 7, game: 'dm', soft: false, terrain: false })")
     await ev(H, '__tank.net.goOnline()'); await H.wait_for_timeout(500)
     await ev(H, '__tank.net.hostGame()'); await H.wait_for_timeout(1500)
     code = await ev(H, '__tank.net.code')

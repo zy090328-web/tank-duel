@@ -6,7 +6,11 @@ USE_MOCK = not (len(sys.argv) > 2 and sys.argv[2] == 'relay')
 MOCK = open('/home/claude/tests/mockpeer.js').read()
 errors = []
 
+BR = None
 async def new_page(ctx, name):
+    # through the relay, each player gets a window of its own: tabs in one window are background tabs,
+    # which the browser slows to one frame a second (the BroadcastChannel stand-in needs one shared context)
+    if not USE_MOCK and BR is not None: ctx = await BR.new_context(viewport={'width': 820, 'height': 1180})
     p = await ctx.new_page()
     # fonts and the favicon cannot load in this offline sandbox; anything else is a real error
     p.on('console', lambda m, n=name: errors.append(f'{n} console.{m.type}: {m.text}') if m.type == 'error' and 'Failed to load resource' not in m.text else None)
@@ -27,6 +31,7 @@ async def main():
     async with async_playwright() as pw:
         br = await pw.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--autoplay-policy=no-user-gesture-required','--disable-renderer-backgrounding','--disable-background-timer-throttling','--disable-backgrounding-occluded-windows'])
         ctx = await br.new_context(viewport={'width': 820, 'height': 1180})
+        global BR; BR = br
         if USE_MOCK: await ctx.add_init_script(MOCK)
 
         # ---- one screen, two players: unchanged behaviour

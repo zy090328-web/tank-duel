@@ -17,6 +17,8 @@ A tank game drawn on graph paper, for touch-screen tablets and phones.
 | Deathmatch | Destroyed tanks come back after 2 s with a short shield. A kill is +1, destroying yourself −1. | 5 / 10 / 15 kills |
 | Hill | Tanks come back; a tank alone in the circle in the middle scores a point a second. | 20 / 30 / 45 seconds |
 
+**Terrain** (on by default; the map-extras chip switches it): **grass** hides a tank from enemies unless one is within 1.6 cells or it has just fired; **water** stops tanks but not shots. On a screen shared by two players grass hides no one. Computer tanks see only what a player on their side would see.
+
 Options for every mode: four ammo rules, power-ups (laser, homing and guided missiles, bomb, shield, spread, mine, piercing shot), **breakable walls** (lightly drawn walls break when shot), and the map set. Three and more tanks play on the 13×13 maps, three of which are four-way symmetric. After a match a table shows each tank's score, kills, losses and hit rate.
 
 The game itself is `index.html`. `server.js` serves it and runs online rooms: each room is a copy of the same game script running on the server with drawing switched off, so every player is an equal guest (one network round trip each). Players' own tanks move at once on their device and are corrected toward the server.
@@ -27,4 +29,4 @@ Served from anywhere else (no `server.js`), online play falls back to [PeerJS](h
 
 Deploy: Railway builds `server.js` on push. `deploy/setup-server.sh` sets it up on a plain Ubuntu server instead.
 
-`tests/`: Playwright tests for game modes, computer tanks, teams and names (`modes.py`, needs the server on port 8790), map checks (`maps_check.py`), the bomb (`bomb.py`), server-run rooms (`dedicated.py`, `dedicated_end.py`), tablet-hosted rooms (`run_test.py`, with `mockpeer.js` standing in for PeerJS), landscape controls (`land.py`), and latency/smoothness under simulated lag (`compare.py`, `smooth.py`, using the server's `TEST_LAG_MS` / `TEST_SPIKE`).
+`tests/`: Playwright tests for game modes, computer tanks, teams and names (`modes.py`, needs the server on port 8790), map checks (`maps_check.py`), the bomb (`bomb.py`), grass and water (`terrain.py`), server-run rooms (`dedicated.py`, `dedicated_end.py`), tablet-hosted rooms (`run_test.py`, with `mockpeer.js` standing in for PeerJS), landscape controls (`land.py`), and latency/smoothness under simulated lag (`compare.py`, `smooth.py`, using the server's `TEST_LAG_MS` / `TEST_SPIKE`).

@@ -129,6 +129,25 @@ const C = {
   SPAWN_INV: 2,          // ...and for how long nothing can hurt it when it does (ends early once it fires)
   HILL_R: 1.5,           // hill: radius of the circle in the middle
 
+  // base mode
+  TOWER_HP: 10,          // hits a tower takes
+  CORE_HP: 20,           // hits a base takes, once one of its two towers is down
+  TOWER_RANGE: 5,        // a tower fires at enemies this close that it can see...
+  TOWER_RELOAD: 1.3,     // ...this often...
+  SHELL_SPEED: 3.6,      // ...with slow shots that do not bounce
+  SHELL_R: 0.1,
+  MINION_R: 0.2,
+  MINION_HP: 2,          // a minion takes two shots (a blast or a laser is enough on its own)
+  MINION_LANE: 2,        // minions per lane in a wave at first; one more every 2.5 minutes
+  MINION_SPEED: 1.35,
+  MINION_RANGE: 2.6,
+  MINION_RELOAD: 1.6,
+  MINION_SHOT_SPEED: 3.2,
+  WAVE_FIRST: 4,         // seconds into the match before the first minions march...
+  WAVE_EVERY: 20,        // ...and between waves
+  MINION_MAX: 10,        // most minions one side can have at once
+  RESPAWN_GROW: 1 / 60,  // base mode: the wait to come back grows by a second for every minute played
+
   // terrain
   GRASS_SEE: 1.6,        // a tank in grass is seen only by enemies this close (centre to centre)...
   GRASS_REVEAL: 0.8      // ...or for this long after it fires
@@ -306,6 +325,54 @@ for (const m of [
     "......1......",
     "............." ]
 ]) { ROT4.add(MAPS.length); MAPS.push(m); }
+// Base maps: only the bottom half is drawn; the top half is the same turned 180 degrees.
+// C = this side's base, T = its towers, 1 = where its tanks start. The bottom side is the red team.
+const BASEMAPS = new Set();
+const DOTS15 = '...............', DOTS17 = '.................';
+for (const m of [
+  // Twin lanes
+  [ DOTS15, DOTS15, DOTS15, DOTS15, DOTS15, DOTS15, DOTS15,
+    "...##.###.##...",
+    "......#.#......",
+    "..#.........#..",
+    ".....#...#.....",
+    "..T.........T..",
+    ".......1.......",
+    "....##...##....",
+    ".......C......." ],
+  // Crossing
+  [ DOTS15, DOTS15, DOTS15, DOTS15, DOTS15, DOTS15, DOTS15,
+    "#.....###.....#",
+    "...#.......#...",
+    ".#....#.#....#.",
+    "...............",
+    "...T.......T...",
+    "..#....1....#..",
+    ".....#...#.....",
+    ".......C......." ],
+  // Fortress
+  [ DOTS17, DOTS17, DOTS17, DOTS17, DOTS17, DOTS17, DOTS17, DOTS17,
+    "...##..###..##...",
+    ".......#.#.......",
+    "..#...........#..",
+    ".....##...##.....",
+    DOTS17,
+    "...T.........T...",
+    "........1........",
+    ".....##...##.....",
+    "........C........" ],
+  // Courtyard
+  [ DOTS17, DOTS17, DOTS17, DOTS17, DOTS17, DOTS17, DOTS17, DOTS17,
+    "..#....###....#..",
+    "....#.......#....",
+    ".......#.#.......",
+    "..##.........##..",
+    "......#...#......",
+    "...T.........T...",
+    "........1........",
+    "......#...#......",
+    "........C........" ]
+]) { BASEMAPS.add(MAPS.length); MAPS.push(m); }
 let COLS = 11, ROWS = 11;      // size of the map being played; set by loadMap
 const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const POWER_TYPES = ['laser', 'homing', 'guided', 'shield', 'spread', 'mine', 'pierce', 'bomb'];
@@ -349,14 +416,16 @@ const AMMO_MODES = ['unlimited', 'reload', 'limited', 'single'];
 const MAP_POOLS = ['all', 'classic', 'complex'], WIN_SCORES = [3, 5, 7];
 // classic: last tank standing takes the round. teams: the same, two sides. dm: destroyed tanks come back
 // and kills are counted. hill: tanks come back, and holding the circle in the middle scores.
-const GAME_MODES = ['classic', 'teams', 'dm', 'hill'];
-const GAME_NAME = { classic: 'Classic', teams: 'Teams', dm: 'Deathmatch', hill: 'Hill' };
+const GAME_MODES = ['classic', 'teams', 'dm', 'hill', 'base'];
+const GAME_NAME = { classic: 'Classic', teams: 'Teams', dm: 'Deathmatch', hill: 'Hill', base: 'Base' };
 const GAME_TEXT = {
   classic: 'Last tank standing wins the round.',
   teams: 'Two teams; your side cannot hit you. Needs 3 or more tanks.',
   dm: 'Destroyed tanks come back. Every kill is a point.',
-  hill: 'Stand alone in the circle in the middle to score.'
+  hill: 'Stand alone in the circle in the middle to score.',
+  base: 'Two teams: take down a tower, then their base.'
 };
+const BASE_TIME = { 3: 240, 5: 360, 7: 480 };          // base mode: seconds before the match is decided on what is left
 const KILL_GOAL = { 3: 5, 5: 10, 7: 15 }, HILL_GOAL = { 3: 20, 5: 30, 7: 45 };
 // soft: some walls break when shot. cpu: on one screen, play alone against this many computer tanks (0 = two people).
 let settings = { ammo: 'unlimited', powerups: false, maps: 'all', winScore: C.WIN_SCORE, game: 'classic', soft: false, terrain: true, cpu: 0 };
@@ -369,7 +438,9 @@ function validSettings(s) {
 }
 // classic = the small 11x11 maps, complex = the 13x13 ones
 function mapPool() {
-  const all = MAPS.map((_, i) => i);
+  // base mode has maps of its own: 15 by 15 for up to three tanks, 17 by 17 for more
+  if (settings.game === 'base') return [...BASEMAPS].filter(i => NP >= 4 ? MAPS[i].length > 15 : MAPS[i].length <= 15);
+  const all = MAPS.map((_, i) => i).filter(i => !BASEMAPS.has(i));
   if (NP >= 4 || teamsOn()) return all.filter(i => MAPS[i].length > 11);   // four or five tanks, or teams, need the bigger maps
   if (NP === 3 && settings.maps !== 'classic') return all.filter(i => MAPS[i].length > 11);
   if (settings.maps === 'classic') return all.filter(i => MAPS[i].length <= 11);
@@ -437,15 +508,29 @@ let soloMatch = false;      // one person on this screen against computer tanks
 let stats = [];             // per tank, this match: kills, deaths, shots, hits
 let soft = new Uint8Array(0), broken = [];     // breakable wall cells; the ones broken this round, in order
 let water = new Uint8Array(0), grass = new Uint8Array(0);   // terrain: water stops tanks but not shots; grass hides tanks
+// base mode: towers and bases (each fills one cell, which counts as a wall while it stands), minions, and the shots of both
+let structs = [], structCell = new Int16Array(0), minions = [], shells = [], waveT = 0, baseWinner = -1, baseAnchor = [];
+const baseOn = () => settings.game === 'base' && structs.length > 0;
+const coreOf = k => structs.find(s => s.kind === 'core' && s.team === k);
+const towersUp = k => structs.filter(s => s.kind === 'tower' && s.team === k && s.hp > 0).length;
+const coreOpen = k => towersUp(k) < 2;                    // a base can be hurt once one of its towers is down
+// what the score shows: in base mode the health of each side's base
+const hudScore = k => settings.game === 'base' ? (coreOf(k) ? coreOf(k).hp : 0) : (scores[k] | 0);
+const hudOf = () => settings.game === 'base' ? 'base · ' + clock() : 'of ' + target();
 let hillHolder = -1, hillT = [];               // hill: who holds the circle (-1 nobody, -2 contested); seconds held per tank
-const respawnMode = () => settings.game === 'dm' || settings.game === 'hill';
-const teamsOn = () => settings.game === 'teams' && NP > 2;
-const target = () => settings.game === 'dm' ? KILL_GOAL[settings.winScore] : settings.game === 'hill' ? HILL_GOAL[settings.winScore] : settings.winScore;
-const goalText = () => settings.game === 'dm' ? `first to ${target()} kills` : settings.game === 'hill' ? `hold it for ${target()} s` : `first to ${target()}`;
+const respawnMode = () => settings.game === 'dm' || settings.game === 'hill' || settings.game === 'base';
+const teamsOn = () => (settings.game === 'teams' && NP > 2) || settings.game === 'base';
+const pickTeams = () => settings.game === 'teams' || settings.game === 'base';      // the waiting room shows team choices
+const target = () => settings.game === 'dm' ? KILL_GOAL[settings.winScore] : settings.game === 'hill' ? HILL_GOAL[settings.winScore]
+  : settings.game === 'base' ? BASE_TIME[settings.winScore] : settings.winScore;
+// base mode: time left, as m:ss
+const clock = () => { const t = Math.max(0, Math.ceil(target() - roundT)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+const goalText = () => settings.game === 'dm' ? `first to ${target()} kills` : settings.game === 'hill' ? `hold it for ${target()} s`
+  : settings.game === 'base' ? `${clock()} left` : `first to ${target()}`;
 const penOf = i => teamsOn() ? COL.pens[teamOf[i] ? 1 : 0] : (COL.pens[i] || COL.graphite);
 const sideOf = i => teamsOn() ? (teamOf[i] ? 1 : 0) : i;          // what scores[] is counted by: team or tank
 const canHurt = (owner, t) => owner === t.id || !teamsOn() || teamOf[owner] !== teamOf[t.id];
-const champion = () => { let b = 0; scores.forEach((v, i) => { if (v > scores[b]) b = i; }); return b; };
+const champion = () => { if (settings.game === 'base') return baseWinner; let b = 0; scores.forEach((v, i) => { if (v > scores[b]) b = i; }); return b; };
 const cleanName = v => String(v == null ? '' : v).replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 12);
 const nameOf = i => names[i] || (bots.has(i) ? 'CPU' : teamsOn() ? 'Player ' + (i + 1) : PEN_NAMES[i]);
 
@@ -470,6 +555,7 @@ function loadMap(i) {
   ROWS = m.length; COLS = m[0].length;
   crushed = new Uint8Array(COLS * ROWS); soft = new Uint8Array(COLS * ROWS); broken = [];
   water = new Uint8Array(COLS * ROWS); grass = new Uint8Array(COLS * ROWS);
+  structs = []; structCell = new Int16Array(COLS * ROWS).fill(-1);
   const rot4 = ROT4.has(mapId), N = ROWS - 1, M = COLS - 1;
   const mark = (r, c) => m[r][c] === '#';
   walls = [];
@@ -487,7 +573,23 @@ function loadMap(i) {
   for (const [r, c] of rot4 ? four : two) walls[r][c] = false;
   if (settings.game === 'hill') carveHill(sc, sr);
   if (settings.soft) markSoft(rot4);
-  if (settings.terrain) addTerrain(rot4, rot4 ? four : two);
+  const keep = (rot4 ? four : two).slice();       // cells grass and water stay clear of
+  if (BASEMAPS.has(mapId)) {
+    // towers and bases, one side drawn and the other turned 180 degrees
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const ch = m[r][c];
+      if (ch !== 'C' && ch !== 'T') continue;
+      for (const [team, rr, cc] of [[0, r, c], [1, N - r, M - c]]) {
+        const kind = ch === 'C' ? 'core' : 'tower', max = kind === 'core' ? C.CORE_HP : C.TOWER_HP;
+        structCell[rr * COLS + cc] = structs.length;
+        structs.push({ i: structs.length, kind, team, r: rr, c: cc, x: cc + 0.5, y: rr + 0.5, hp: max, max, cool: 1, aim: team ? Math.PI / 2 : -Math.PI / 2, flash: 0 });
+        walls[rr][cc] = true; soft[rr * COLS + cc] = 0;
+        keep.push([rr, cc]);
+      }
+    }
+    baseAnchor = [{ c: sc, r: sr }, { c: M - sc, r: N - sr }];
+  }
+  if (settings.terrain) addTerrain(rot4, keep);
   const at = ([r, c]) => ({ x: c + 0.5, y: r + 0.5 });
   if (teamsOn()) spawn = teamSpawns(sc, sr);
   else if (NP <= 2) spawn = two.map(at);
@@ -589,6 +691,15 @@ function breakWall(idx) {
   walls[r][c] = false; soft[idx] = 0; broken.push(idx);
   crackFx(c + 0.5, r + 0.5);
   buildStatic();
+}
+// a shot that touches a tower or base is spent there, and hurts it if it belongs to the other side
+function strike(b) {
+  const k = structAt(b.x, b.y, C.BULLET_R + 0.01);
+  if (k < 0) return false;
+  const s = structs[k];
+  if (teamOf[b.owner] !== s.team) damageStruct(s, 1, b.owner);
+  fizz(b.x, b.y);
+  return true;
 }
 // a shot that touches a breakable wall breaks it and is spent
 function crack(b) {
@@ -762,6 +873,7 @@ function resetEntities() {
     t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0;
   });
   hillHolder = -1;
+  minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
   bullets = []; missiles = []; mines = []; pickups = []; beams = []; rings = []; particles = []; marks = [];
   netEvents = [];
   pickupTimer = C.PICKUP_FIRST; emptyT = 0;
@@ -770,7 +882,7 @@ function resetEntities() {
 function startMatch() {
   // teams need both sides manned
   teamOf = tanks.map(t => teamOf[t.id] ? 1 : 0);
-  if (NP > 2) for (const k of [0, 1]) if (!teamOf.includes(k)) teamOf[NP - 1] = k;
+  if (NP > 2 || settings.game === 'base') for (const k of [0, 1]) if (!teamOf.includes(k)) teamOf[NP - 1] = k;
   scores = new Array(teamsOn() ? 2 : NP).fill(0); mapIdx = 0;
   stats = tanks.map(() => ({ k: 0, d: 0, s: 0, h: 0 }));
   hillT = new Array(NP).fill(0);
@@ -821,7 +933,19 @@ function roundOver() { return new Set(tanks.filter(o => o.alive).map(o => sideOf
 function respawnTank(t) {
   const d = distField(Math.floor(spawn[0].x), Math.floor(spawn[0].y)), cx = COLS / 2, cy = ROWS / 2;
   let best = null, bs = -1;
-  for (let i = 0; i < d.length; i++) {
+  if (baseOn()) {
+    // base mode: back at home, on the free cell nearest the team's start
+    const a = baseAnchor[teamOf[t.id] ? 1 : 0], h = distField(a.c, a.r);
+    let low = Infinity;
+    for (let i = 0; i < h.length; i++) {
+      if (h[i] < 0) continue;
+      const x = i % COLS + 0.5, y = ((i / COLS) | 0) + 0.5;
+      if (tanks.some(o => o.alive && o !== t && Math.hypot(o.x - x, o.y - y) < 0.9)) continue;
+      const v = h[i] + Math.random() * 0.6;
+      if (v < low) { low = v; best = { x, y }; }
+    }
+  }
+  if (!best) for (let i = 0; i < d.length; i++) {
     if (d[i] < 0) continue;
     const x = i % COLS + 0.5, y = ((i / COLS) | 0) + 0.5;
     if (settings.game === 'hill' && Math.hypot(x - cx, y - cy) < C.HILL_R + 1.5) continue;
@@ -838,6 +962,195 @@ function respawnTank(t) {
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
   sfx.spawn(); netEv('spawn', t.id, r2(t.x), r2(t.y));
 }
+/* ---------- base mode ---------- */
+// the tower or base whose cell a circle touches, or -1
+function structAt(x, y, rad) {
+  if (!structs.length) return -1;
+  const c0 = Math.max(0, Math.floor(x - rad)), c1 = Math.min(COLS - 1, Math.floor(x + rad));
+  const r0 = Math.max(0, Math.floor(y - rad)), r1 = Math.min(ROWS - 1, Math.floor(y + rad));
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const k = structCell[r * COLS + c];
+    if (k < 0 || structs[k].hp <= 0) continue;
+    const dx = x - clamp(x, c, c + 1), dy = y - clamp(y, r, r + 1);
+    if (dx * dx + dy * dy < rad * rad) return k;
+  }
+  return -1;
+}
+function damageStruct(s, n, by) {
+  if (s.hp <= 0 || (state !== 'play' && state !== 'ending')) return;
+  if (s.kind === 'core' && !coreOpen(s.team)) {           // both towers still up: the base shrugs it off
+    s.flash = 0.25; sfx.block(); netEv('sblock', s.i); return;
+  }
+  s.hp = Math.max(0, s.hp - n); s.flash = 0.2;
+  if (by >= 0 && stats[by]) stats[by].b = (stats[by].b || 0) + n;
+  netEv('shit', s.i);
+  if (s.hp > 0) { sfx.crack(); return; }
+  walls[s.r][s.c] = false;
+  scores[1 - s.team]++;
+  structDown(s);
+  netEv('sdown', s.i);
+  if (s.kind === 'core' && state === 'play') endBase(1 - s.team);
+}
+function structDown(s) {
+  marks.push({ x: s.x, y: s.y, col: COL.pens[s.team], seed: 1000 + s.i * 77 });
+  rings.push({ x: s.x, y: s.y, r: s.kind === 'core' ? 2.2 : 1.4, life: 0.6, max: 0.6, col: COL.pens[s.team] });
+  for (let i = 0; i < 40; i++) {
+    const a = Math.random() * Math.PI * 2, v = 1 + Math.random() * 5, life = 0.4 + Math.random() * 0.7;
+    particles.push({ x: s.x, y: s.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life, max: life, col: i % 3 ? COL.pens[s.team] : COL.graphite, size: 0.05 + Math.random() * 0.07 });
+  }
+  shake = Math.max(shake, s.kind === 'core' ? 0.6 : 0.4); sfx.boom(); sfx.slam();
+}
+// the match is decided: by a base falling, or when time is up by what is left standing
+function endBase(w) {
+  if (w < 0) {
+    const hp = k => (coreOf(k) ? coreOf(k).hp : 0) * 100 + structs.filter(s => s.team === k && s.kind === 'tower').reduce((a, s) => a + s.hp, 0);
+    w = hp(0) > hp(1) ? 0 : hp(1) > hp(0) ? 1 : -1;
+  }
+  baseWinner = w; state = 'ending'; stateT = 0;
+}
+function fizz(x, y) {
+  for (let i = 0; i < 4; i++) {
+    const a = Math.random() * Math.PI * 2, v = 0.5 + Math.random() * 1.2;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.2, max: 0.2, col: COL.graphite, size: 0.03 });
+  }
+}
+function shell(x, y, a, team, off, speed, src) {
+  shells.push({ id: ++entId, x: x + Math.cos(a) * off, y: y + Math.sin(a) * off, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, team, src, age: 0 });
+  sfx.pop(); netEv('sfx', 'pop');
+}
+function hurtMinion(j, n) {
+  const m = minions[j];
+  m.hp = (m.hp || 1) - n;
+  if (m.hp <= 0) killMinion(j); else fizz(m.x, m.y);
+}
+function killMinion(j) {
+  const m = minions[j];
+  minions.splice(j, 1);
+  for (let i = 0; i < 10; i++) {
+    const a = Math.random() * Math.PI * 2, v = 0.6 + Math.random() * 2;
+    particles.push({ x: m.x, y: m.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.3, max: 0.3, col: i % 2 ? COL.pens[m.team] : COL.graphite, size: 0.035 });
+  }
+  sfx.pop(); netEv('mdie', r2(m.x), r2(m.y), m.team);
+}
+// a point on the face of a tower or base, on the side towards (x, y): what a shooter aims at
+function facePoint(s, x, y) {
+  const d = Math.hypot(x - s.x, y - s.y) || 1;
+  return { x: s.x + (x - s.x) / d * 0.55, y: s.y + (y - s.y) / d * 0.55 };
+}
+// is (x, y) in range of s and in sight of it? (starting just outside its own cell)
+function inSight(fx, fy, x, y, range, start, r) {
+  const d = Math.hypot(x - fx, y - fy);
+  if (d >= range || d < 1e-6) return false;
+  return lineClear(fx + (x - fx) / d * start, fy + (y - fy) / d * start, x, y, r);
+}
+function spawnWave() {
+  for (const team of [0, 1]) {
+    const core = coreOf(team);
+    if (!core || core.hp <= 0) continue;
+    const a = baseAnchor[team], d = distField(a.c, a.r);
+    const per = C.MINION_LANE + Math.floor(roundT / 150);
+    for (let n = 0; n < per * 2; n++) {
+      const lane = n % 2;
+      if (minions.filter(m => m.team === team).length >= C.MINION_MAX) break;
+      // the free cell nearest the start, on this lane's side of the base
+      let best = null, bd = Infinity;
+      for (let i = 0; i < d.length; i++) {
+        if (d[i] < 0) continue;
+        const x = i % COLS + 0.5, y = ((i / COLS) | 0) + 0.5;
+        if ((lane === 0) !== (x < core.x)) continue;
+        if (tanks.some(o => o.alive && Math.hypot(o.x - x, o.y - y) < 0.7) || minions.some(o => Math.hypot(o.x - x, o.y - y) < 0.5)) continue;
+        if (d[i] < bd) { bd = d[i]; best = { x, y }; }
+      }
+      if (best) minions.push({ id: ++entId, team, lane, x: best.x, y: best.y, angle: team ? Math.PI / 2 : -Math.PI / 2, cool: 0.8, replan: 0, wp: null, hp: C.MINION_HP });
+    }
+  }
+  sfx.spawn(); netEv('sfx', 'spawn');
+}
+// where a minion is heading: the enemy tower on its lane, then the other one, then the base
+function minionGoal(m) {
+  const foe = structs.filter(s => s.team !== m.team && s.hp > 0);
+  return foe.find(s => s.kind === 'tower' && (s.x < COLS / 2) === (m.lane === 0)) || foe.find(s => s.kind === 'tower') || foe.find(s => s.kind === 'core');
+}
+function stepMinions(dt) {
+  for (let i = minions.length - 1; i >= 0; i--) {
+    const m = minions[i];
+    m.cool -= dt;
+    // something to shoot: the nearest enemy minion in range and in sight, else a building (minions leave tanks alone)
+    let tgt = null, td = C.MINION_RANGE;
+    for (const o of minions) if (o.team !== m.team) { const d = Math.hypot(o.x - m.x, o.y - m.y); if (d < td && inSight(m.x, m.y, o.x, o.y, td, 0, 0.06)) { tgt = o; td = d; } }
+    if (!tgt) for (const s of structs) {
+      if (s.team === m.team || s.hp <= 0 || (s.kind === 'core' && !coreOpen(s.team))) continue;
+      const f = facePoint(s, m.x, m.y);
+      if (inSight(m.x, m.y, f.x, f.y, C.MINION_RANGE, 0, 0.06)) { tgt = f; break; }
+    }
+    if (tgt) {
+      m.angle = Math.atan2(tgt.y - m.y, tgt.x - m.x);
+      if (m.cool <= 0) { m.cool = C.MINION_RELOAD; shell(m.x, m.y, m.angle, m.team, C.MINION_R + 0.08, C.MINION_SHOT_SPEED, 'minion'); }
+    } else {
+      const g = minionGoal(m);
+      if (g) {
+        m.replan -= dt;
+        if (m.replan <= 0 || !m.wp) { m.replan = 0.3; m.wp = planWaypoint(m, g, C.MINION_R + 0.03, true); }
+        const dx = m.wp.x - m.x, dy = m.wp.y - m.y, d = Math.hypot(dx, dy);
+        if (d > 0.02) {
+          m.angle = Math.atan2(dy, dx);
+          m.x += dx / d * C.MINION_SPEED * dt; m.y += dy / d * C.MINION_SPEED * dt;
+        }
+      }
+    }
+    // tanks and other minions push minions aside
+    for (const t of tanks) {
+      if (!t.alive) continue;
+      const dx = m.x - t.x, dy = m.y - t.y, d = Math.hypot(dx, dy), min = C.TANK_R + C.MINION_R;
+      if (d < min && d > 1e-6) { m.x += dx / d * (min - d); m.y += dy / d * (min - d); }
+    }
+    for (const o of minions) {
+      if (o === m) continue;
+      const dx = m.x - o.x, dy = m.y - o.y, d = Math.hypot(dx, dy), min = C.MINION_R * 2;
+      if (d < min && d > 1e-6) { m.x += dx / d * (min - d) / 2; m.y += dy / d * (min - d) / 2; }
+    }
+    resolveCircle(m, C.MINION_R, true);
+  }
+}
+function stepShells(dt) {
+  shellLoop:
+  for (let i = shells.length - 1; i >= 0; i--) {
+    const b = shells[i];
+    b.age += dt; b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.age > 2.5) { shells.splice(i, 1); continue; }
+    const k = structAt(b.x, b.y, C.SHELL_R);
+    if (k >= 0) { if (structs[k].team !== b.team) damageStruct(structs[k], 1, -1); fizz(b.x, b.y); shells.splice(i, 1); continue; }
+    if (circleHitsWall(b.x, b.y, C.SHELL_R)) { if (settings.soft && softAt(b.x, b.y, C.SHELL_R + 0.01) >= 0) breakWall(softAt(b.x, b.y, C.SHELL_R + 0.01)); fizz(b.x, b.y); shells.splice(i, 1); continue; }
+    for (let j = minions.length - 1; j >= 0; j--) {
+      const m = minions[j];
+      if (m.team !== b.team && Math.hypot(m.x - b.x, m.y - b.y) < C.MINION_R + C.SHELL_R) { hurtMinion(j, 1); shells.splice(i, 1); continue shellLoop; }
+    }
+    if (b.src === 'minion') continue;                         // a minion's shot passes tanks by
+    for (const t of tanks) {
+      if (!t.alive || t.inv > 0 || teamOf[t.id] === b.team) continue;
+      if (Math.hypot(t.x - b.x, t.y - b.y) < C.TANK_R * 0.92 + C.SHELL_R) { hit(t, -1); shells.splice(i, 1); continue shellLoop; }
+    }
+  }
+}
+function baseStep(dt) {
+  for (const s of structs) {
+    if (s.hp <= 0 || s.kind !== 'tower') continue;
+    s.cool -= dt;
+    // aim at the nearest enemy minion it can see, else the nearest enemy tank
+    let best = null, bd = C.TOWER_RANGE;
+    for (const m of minions) if (m.team !== s.team) { const d = Math.hypot(m.x - s.x, m.y - s.y); if (d < bd && inSight(s.x, s.y, m.x, m.y, bd, 0.75, C.SHELL_R)) { best = m; bd = d; } }
+    if (!best) for (const t of tanks) if (t.alive && !(t.inv > 0) && teamOf[t.id] !== s.team) { const d = Math.hypot(t.x - s.x, t.y - s.y); if (d < bd && inSight(s.x, s.y, t.x, t.y, bd, 0.75, C.SHELL_R)) { best = t; bd = d; } }
+    if (!best) continue;
+    s.aim = Math.atan2(best.y - s.y, best.x - s.x);
+    if (s.cool <= 0) { s.cool = C.TOWER_RELOAD; shell(s.x, s.y, s.aim, s.team, 0.75, C.SHELL_SPEED, 'tower'); }
+  }
+  waveT -= dt;
+  if (waveT <= 0) { waveT = C.WAVE_EVERY; spawnWave(); }
+  stepMinions(dt);
+  stepShells(dt);
+  if (state === 'play' && roundT >= target()) endBase(-1);
+}
+
 // hill: one side alone in the circle scores a point a second
 function hillStep(dt) {
   const cx = COLS / 2, cy = ROWS / 2;
@@ -968,6 +1281,14 @@ function fireLaser(t) {
   }
   for (const mn of mines) if (pathDist(path, mn.x, mn.y) < C.MINE_R + 0.05) mn.boom = true;
   if (!LETHAL) return;
+  if (structs.length) {                                     // base mode: the beam hurts buildings where it strikes them, and minions on its way
+    const ot = teamOf[t.id], done = new Set();
+    for (let i = 1; i < path.length; i++) {
+      const k = structAt(path[i].x, path[i].y, 0.08);
+      if (k >= 0 && !done.has(k) && structs[k].team !== ot) { done.add(k); damageStruct(structs[k], 3, t.id); }
+    }
+    for (let j = minions.length - 1; j >= 0; j--) if (minions[j].team !== ot && pathDist(path, minions[j].x, minions[j].y) < C.MINION_R + 0.05) killMinion(j);
+  }
   for (const o of tanks) if (o !== t && o.alive && canHurt(t.id, o) && pathDist(path, o.x, o.y) < C.TANK_R * 0.92 + 0.04) hit(o, t.id);
 }
 
@@ -1013,6 +1334,11 @@ function blast(m) {
     for (let i = 0; i < soft.length; i++) if (soft[i] && Math.hypot(i % COLS + 0.5 - m.x, ((i / COLS) | 0) + 0.5 - m.y) < R + 0.35) breakWall(i);
   }
   if (!LETHAL) return;
+  if (structs.length) {                                     // base mode: blasts hurt buildings and minions of the other side
+    const ot = teamOf[m.owner];
+    for (const s of structs) if (s.team !== ot && s.hp > 0 && Math.hypot(s.x - m.x, s.y - m.y) < R + 0.6) damageStruct(s, m.type === 'bomb' ? 3 : 2, m.owner);
+    for (let j = minions.length - 1; j >= 0; j--) if (minions[j].team !== ot && Math.hypot(minions[j].x - m.x, minions[j].y - m.y) < R + C.MINION_R) killMinion(j);
+  }
   for (const t of tanks) if (t.alive && t.id !== spare && canHurt(m.owner, t) && Math.hypot(t.x - m.x, t.y - m.y) < R) hit(t, m.owner);
 }
 
@@ -1030,7 +1356,7 @@ function kill(t, by = -1) {
   if (stats[t.id]) stats[t.id].d++;
   if (by >= 0 && by !== t.id && stats[by]) stats[by].k++;
   if (respawnMode()) {
-    t.respawn = C.RESPAWN_TIME;
+    t.respawn = C.RESPAWN_TIME + (settings.game === 'base' ? roundT * C.RESPAWN_GROW : 0);
     if (settings.game === 'dm' && state === 'play') {
       // a kill is a point; destroying yourself (or being crushed) costs one
       if (by >= 0 && by !== t.id) scores[by]++; else scores[t.id] = Math.max(0, scores[t.id] - 1);
@@ -1184,6 +1510,21 @@ function botInput(seat) {
   }
   if (ai.wander > 0) { ai.wander -= dt; return { x: Math.cos(ai.wa), y: Math.sin(ai.wa), mag: 1 }; }
 
+  if (baseOn() && !(hasFoe && fd < 4)) {
+    // base mode with no enemy tank close: clear minions, push buildings behind our own minions, else follow them
+    const tg = baseGoal(seat, t);
+    if (tg) {
+      if (tg.ax != null && lineClear(t.x, t.y, tg.ax, tg.ay, C.BULLET_R + 0.02) && Math.hypot(tg.ax - t.x, tg.ay - t.y) < 5) {
+        const off = Math.abs(wrapAngle(Math.atan2(tg.ay - t.y, tg.ax - t.x) - t.angle));
+        if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0) { pressFire(seat); ai.react = 0.2 + Math.random() * 0.3; }
+        return unitTo(tg.ax - t.x, tg.ay - t.y, tg.key[0] !== 'o' && Math.hypot(tg.ax - t.x, tg.ay - t.y) > 3.2 ? 1 : 0.04);
+      }
+      ai.replan -= dt;
+      if (ai.replan <= 0 || !ai.wp || ai.goalKey !== tg.key) { ai.replan = 0.25; ai.goalKey = tg.key; ai.wp = planWaypoint(t, tg, C.TANK_R + 0.04, true); }
+      if (Math.hypot(tg.x - t.x, tg.y - t.y) < 1.2) return IDLE;
+      return unitTo(ai.wp.x - t.x, ai.wp.y - t.y, 1);
+    }
+  }
   const cx = COLS / 2, cy = ROWS / 2;
   const los = hasFoe && lineClear(t.x, t.y, foe.x, foe.y, C.BULLET_R + 0.02);
   const dFoe = hasFoe ? Math.hypot(foe.x - t.x, foe.y - t.y) : 99;
@@ -1225,6 +1566,51 @@ function botInput(seat) {
     if (!ai.wp) return IDLE;
   }
   return unitTo(ai.wp.x - t.x, ai.wp.y - t.y, 1);
+}
+
+// base mode: where a computer tank goes, and what it aims at on the way ({x, y} to drive to; ax, ay to shoot at)
+function baseGoal(seat, t) {
+  const team = teamOf[seat] ? 1 : 0;
+  // a building our minions are already at (the tower is busy with them), or the base once it can be hurt
+  const mine = minions.filter(m => m.team === team);
+  const targets = structs.filter(s => s.team !== team && s.hp > 0 && (s.kind === 'tower' || coreOpen(s.team)));
+  targets.sort((a, b) => Math.hypot(a.x - t.x, a.y - t.y) - Math.hypot(b.x - t.x, b.y - t.y));
+  for (const s of targets) {
+    const f = facePoint(s, t.x, t.y);
+    if (s.kind !== 'tower' || mine.some(m => Math.hypot(m.x - s.x, m.y - s.y) < C.TOWER_RANGE)) return { x: f.x, y: f.y, ax: f.x, ay: f.y, key: 's' + s.i };
+    // a tower with no minions at it: shoot it from just out of its reach
+    const ai = t.ai;
+    if (!ai.stand || ai.stand.k !== s.i || (ai.stand.t -= C.STEP) <= 0) {
+      let best = null, bd = Infinity;
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+        if (walls[r][c] || water[r * COLS + c]) continue;
+        const x = c + 0.5, y = r + 0.5, d = Math.hypot(x - s.x, y - s.y);
+        if (d < C.TOWER_RANGE + 0.45 || d > C.TOWER_RANGE + 1.6) continue;
+        const g = facePoint(s, x, y);
+        if (!lineClear(x, y, g.x, g.y, C.BULLET_R + 0.02)) continue;
+        const v = Math.hypot(x - t.x, y - t.y);
+        if (v < bd) { bd = v; best = { x, y }; }
+      }
+      ai.stand = { k: s.i, t: 1, p: best };
+    }
+    if (!ai.stand.p) continue;
+    const p = ai.stand.p, near = Math.hypot(p.x - t.x, p.y - t.y) < 0.5, g = facePoint(s, t.x, t.y);
+    return near ? { x: p.x, y: p.y, ax: g.x, ay: g.y, key: 'o' + s.i } : { x: p.x, y: p.y, key: 'o' + s.i };
+  }
+  // enemy minions nearby
+  let best = null, bd = 5;
+  for (const m of minions) if (m.team !== team) { const d = Math.hypot(m.x - t.x, m.y - t.y); if (d < bd) { bd = d; best = m; } }
+  if (best) return { x: best.x, y: best.y, ax: best.x, ay: best.y, key: 'm' + best.id };
+  // otherwise walk with the minion furthest ahead, or wait by our own tower on our side of the map
+  if (mine.length) {
+    const ec = coreOf(1 - team) || { x: COLS / 2, y: ROWS / 2 };
+    const lead = mine.reduce((a, m) => Math.hypot(m.x - ec.x, m.y - ec.y) < Math.hypot(a.x - ec.x, a.y - ec.y) ? m : a);
+    return { x: lead.x, y: lead.y, key: 'f' + lead.id };
+  }
+  const home = structs.find(s => s.team === team && s.kind === 'tower' && s.hp > 0 && (s.x < COLS / 2) === (seat % 2 === 0)) || coreOf(team);
+  if (!home) return null;
+  const f = facePoint(home, COLS / 2, ROWS / 2);
+  return { x: f.x + (COLS / 2 - home.x) * 0.12, y: f.y + (ROWS / 2 - home.y) * 0.12, key: 'h' + home.i };
 }
 
 /* ---------- physics (always called with the fixed step) ---------- */
@@ -1289,12 +1675,13 @@ function stepPhysics(dt, lethal, control) {
       // a piercing shot goes straight through walls and is gone when it leaves the arena
       b.x += b.vx * dt; b.y += b.vy * dt;
       if (b.x < 0 || b.y < 0 || b.x > COLS || b.y > ROWS) { bullets.splice(i, 1); continue; }
+      if (strike(b)) { bullets.splice(i, 1); continue; }
     } else {
       // move on each axis separately: hitting a wall while moving in x flips vx, in y flips vy
       b.x += b.vx * dt;
-      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { if (crack(b)) { bullets.splice(i, 1); continue; } b.x -= b.vx * dt; b.vx = -b.vx; b.bounces++; bounceFx(b); }
+      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { if (strike(b) || crack(b)) { bullets.splice(i, 1); continue; } b.x -= b.vx * dt; b.vx = -b.vx; b.bounces++; bounceFx(b); }
       b.y += b.vy * dt;
-      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { if (crack(b)) { bullets.splice(i, 1); continue; } b.y -= b.vy * dt; b.vy = -b.vy; b.bounces++; bounceFx(b); }
+      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { if (strike(b) || crack(b)) { bullets.splice(i, 1); continue; } b.y -= b.vy * dt; b.vy = -b.vy; b.bounces++; bounceFx(b); }
     }
     if (++b.tick % 2 === 0) { b.trail.push(b.x, b.y); if (b.trail.length > 22) b.trail.splice(0, 2); }
     if (b.age > (b.life || C.BULLET_LIFE) || b.bounces > (b.maxB ?? C.MAX_BOUNCES)) { bullets.splice(i, 1); continue; }
@@ -1311,6 +1698,10 @@ function stepPhysics(dt, lethal, control) {
       }
     }
     if (!lethal) continue;
+    for (let j = minions.length - 1; j >= 0; j--) {
+      const m = minions[j];
+      if (teamOf[b.owner] !== m.team && Math.hypot(b.x - m.x, b.y - m.y) < C.MINION_R + C.BULLET_R) { hurtMinion(j, 1); bullets.splice(i, 1); continue bulletLoop; }
+    }
     for (const t of tanks) {
       if (!t.alive) continue;
       if (b.owner === t.id && b.age < C.SELF_SAFE_TIME) continue;
@@ -1401,6 +1792,7 @@ function update(dt) {
   for (let i = beams.length - 1; i >= 0; i--) { beams[i].life -= dt; if (beams[i].life <= 0) beams.splice(i, 1); }
   for (let i = rings.length - 1; i >= 0; i--) { rings[i].life -= dt; if (rings[i].life <= 0) rings.splice(i, 1); }
   for (const k of pickups) k.age += dt;
+  for (const st of structs) st.flash = Math.max(0, st.flash - dt);
   if (mode === 'guest') { guestStep(dt); return; }
   if (mode === 'host') hostStep(dt);
 
@@ -1416,6 +1808,7 @@ function update(dt) {
       if (state !== 'play') break;
       roundT += dt;
       if (settings.game === 'hill') { hillStep(dt); if (state !== 'play') break; }
+      if (baseOn()) { baseStep(dt); if (state !== 'play') break; }
       if (sdOn()) {
         if (!sdStarted) { sdStarted = true; sfx.alarm(); }
         const due = Math.min(ringCount(), Math.floor((roundT - C.SUDDEN_DEATH_TIME) / C.SHRINK_INTERVAL));
@@ -1779,13 +2172,17 @@ function buildSnap() {
     seats, sc: scores, w: winner, dr: drawReason,
     set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0, settings.terrain ? 1 : 0],
     tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel),
-    hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h]) : null,
+    hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h, v.b | 0]) : null,
+    bw: baseWinner,
     T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0),
       shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
     P: play ? pickups.map(k => [r2(k.x), r2(k.y), POWER_TYPES.indexOf(k.type)]) : [],
+    Z: play && structs.length ? structs.map(st => [st.hp, r2(st.aim)]) : null,
+    Y: play && structs.length ? minions.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.team, m.hp]) : null,
+    Q: play && structs.length ? shells.map(q => [q.id, r2(q.x), r2(q.y), q.team]) : null,
     E: netEvents.map(e => e.e),
     PE: seats.map(id => { const g = guests.get(id); return g && g.echo != null ? g.echo : -1; })
   };
@@ -2050,7 +2447,8 @@ function applyDiscrete(g, dt) {
   // in the waiting room, make sure the host has this player's name (the first message can arrive before the host is listening)
   if (g.st === 'hostWait' && mySeat >= 0 && (names[mySeat] || '') !== myName && performance.now() - nameSentAt > 1000) { nameSentAt = performance.now(); toHost({ n: myName }); }
   hillHolder = typeof g.hz === 'number' ? g.hz : -1;
-  if (Array.isArray(g.S)) stats = g.S.map(a => Array.isArray(a) ? { k: a[0] | 0, d: a[1] | 0, s: a[2] | 0, h: a[3] | 0 } : { k: 0, d: 0, s: 0, h: 0 });
+  if (Array.isArray(g.S)) stats = g.S.map(a => Array.isArray(a) ? { k: a[0] | 0, d: a[1] | 0, s: a[2] | 0, h: a[3] | 0, b: a[4] | 0 } : { k: 0, d: 0, s: 0, h: 0, b: 0 });
+  if (typeof g.bw === 'number') baseWinner = g.bw;
   if (Array.isArray(g.sc)) scores = g.sc.map(v => v | 0);
   winner = typeof g.w === 'number' ? g.w : -1; drawReason = g.dr || '';
   const st = g.st === 'hostWait' ? 'guestWait' : g.st;
@@ -2086,6 +2484,13 @@ function applyDiscrete(g, dt) {
     sdClosed = localSd;
     buildStatic(); shake = Math.max(shake, 0.2); sfx.slam();
   }
+  // base mode: what is left of each tower and base; a fallen one frees its cell
+  if (Array.isArray(g.Z) && st !== 'guestWait') g.Z.forEach((q, i) => {
+    const s = structs[i];
+    if (!s || !Array.isArray(q)) return;
+    s.hp = q[0] | 0; s.aim = +q[1] || 0;
+    if (s.hp <= 0 && walls[s.r] && walls[s.r][s.c]) walls[s.r][s.c] = false;
+  });
   // breakable walls the host has seen broken since the round began
   const X = Array.isArray(g.X) ? g.X : [];
   if (X.length > broken.length && st !== 'guestWait') {
@@ -2140,6 +2545,18 @@ function playEvent(e) {
   } else if (kind === 'kill') {
     marks.push({ x: e[3], y: e[4], col: pen(e[2]), seed: e[5] | 0 });
     burst(e[3], e[4], 30, pen(e[2]), 3.2, 0.6, 0.07); shake = 0.35; sfx.boom();
+  } else if (kind === 'shit' || kind === 'sblock') {
+    const s = structs[e[2]];
+    if (s) { s.flash = 0.22; if (kind === 'sblock') sfx.block(); else sfx.crack(); }
+  } else if (kind === 'sdown') {
+    const s = structs[e[2]];
+    if (s) { s.hp = 0; if (walls[s.r]) walls[s.r][s.c] = false; structDown(s); }
+  } else if (kind === 'mdie') {
+    for (let i = 0; i < 10; i++) {
+      const a = Math.random() * Math.PI * 2, v = 0.6 + Math.random() * 2;
+      particles.push({ x: e[2], y: e[3], vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.3, max: 0.3, col: i % 2 ? COL.pens[e[4]] : COL.graphite, size: 0.035 });
+    }
+    sfx.pop();
   } else if (kind === 'spawn') {
     rings.push({ x: e[3], y: e[4], r: 0.8, life: 0.4, max: 0.4, col: pen(e[2]) }); sfx.spawn();
   } else if (kind === 'bounce') {
@@ -2185,6 +2602,9 @@ function applyEntities(a, b, k, dt) {
     return m;
   });
   mines = (b.N || []).map(q => ({ id: q[0], x: q[1], y: q[2], owner: q[3], armed: !!q[4], age: age('n' + q[0]) }));
+  const aY = byId(a.Y), aQ = byId(a.Q);
+  minions = (b.Y || []).map(q => { const p = aY.get(q[0]) || q; return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), angle: lerpA(p[3], q[3]), team: q[4], hp: q[5] | 0 }; });
+  shells = (b.Q || []).map(q => { const p = aQ.get(q[0]) || q; return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), team: q[3] }; });
   pickups = (b.P || []).map(q => ({ x: q[0], y: q[1], type: POWER_TYPES[q[2]] || 'laser', age: age('p' + q[0] + ',' + q[1] + ',' + lastRound) }));
 }
 
@@ -2322,16 +2742,19 @@ const featIdx = () => (settings.soft ? 1 : 0) + (settings.terrain ? 2 : 0);
 const featPatch = v => ({ soft: !!(v & 1), terrain: !!(v & 2) });
 const settingPatch = it => it.kind === 'soft' ? featPatch(it.v) : { [SETTING_KEY[it.kind]]: it.v };
 const nextOf = (arr, v) => arr[(arr.indexOf(v) + 1) % arr.length];
-const goalChip = () => settings.game === 'dm' ? `First to ${target()} kills` : settings.game === 'hill' ? `Hold for ${target()} s` : `First to ${target()}`;
+const goalChip = () => settings.game === 'dm' ? `First to ${target()} kills` : settings.game === 'hill' ? `Hold for ${target()} s`
+  : settings.game === 'base' ? `${target() / 60} min limit` : `First to ${target()}`;
 // Rows of chips: game mode, who plays (one screen only), ammo, and four switches. `on` = drawn filled.
 // The last two chips step through their choices when tapped. `lobby` = the online waiting room.
 function menuItems(top = AY + AH / 2, buttons = [['start', resumeMatch ? 'CONTINUE' : 'START'], ['online', 'ONLINE']], lobby = false, per = 4) {
   const cx = mcx(), h = U * 0.54, g = U * 0.15, w = U * (per === 2 ? 2.9 : 2.5), items = [];
   let y = top + (lobby ? 0 : U * 1.5);
   const row = all => {
-    for (let k = 0; k < all.length; k += per) {
-      const opts = all.slice(k, k + per);
-      opts.forEach(([kind, v, text, on, cyc], i) => items.push({ kind, v, text, on, cyc, x: cx + (i - (opts.length - 1) / 2) * (w + g) - w / 2, y: y - h / 2, w, h }));
+    const n = per === 4 && all.length === 5 ? 5 : per;                  // the five game modes share one row
+    for (let k = 0; k < all.length; k += n) {
+      const opts = all.slice(k, k + n);
+      const ww = opts.length > 4 ? (w * 4 + g * 3 - g * (opts.length - 1)) / opts.length : w;     // five chips share the width of four
+      opts.forEach(([kind, v, text, on, cyc], i) => items.push({ kind, v, text, on, cyc, x: cx + (i - (opts.length - 1) / 2) * (ww + g) - ww / 2, y: y - h / 2, w: ww, h }));
       y += U * 0.66;
     }
   };
@@ -2360,6 +2783,7 @@ function menuHintText(lobby) {
     !lobby && !settings.cpu ? 'Water stops tanks, not shots. Grass hides only when each player has a screen.' : 'Grass hides tanks from enemies; water stops tanks but not shots.',
     'Breakable walls, grass to hide in, and water to shoot across.'][featIdx()];
   if (k === 'maps') return settings.maps === 'all' ? 'Small and large maps, shuffled.' : settings.maps === 'classic' ? 'Small 11 by 11 maps. (3+ tanks always get large ones.)' : 'Large 13 by 13 maps with more cover.';
+  if (k === 'win' && settings.game === 'base') return `After ${target() / 60} minutes the side with more of its base left wins.`;
   if (k === 'win') return settings.game === 'dm' ? `The match ends at ${target()} kills.` : settings.game === 'hill' ? `The match ends when a tank has held the hill for ${target()} seconds.` : `The match ends at ${target()} rounds won.`;
   return lobby ? GAME_TEXT[settings.game] : '';
 }
@@ -2487,7 +2911,7 @@ function buildStatic() {
 
   // walls: pencil-shaded squares
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-    if (!walls[r] || !walls[r][c]) continue;
+    if (!walls[r] || !walls[r][c] || structCell[r * COLS + c] >= 0) continue;
     // online, the arena may be drawn turned 180 degrees (see viewFlip)
     const x = AX + (viewFlip ? COLS - 1 - c : c) * P, y = AY + (viewFlip ? ROWS - 1 - r : r) * P;
     const rnd = mulberry32(11 + mapId * 977 + r * 31 + c), shut = crushed[r * COLS + c] === 1;
@@ -2720,6 +3144,59 @@ function drawMissile(m) {
   ctx.restore();
 }
 
+// base mode: towers, bases and minions
+function drawBase() {
+  const lw = Math.max(1.5, P * 0.05);
+  for (const s of structs) {
+    if (s.hp <= 0) continue;
+    const col = COL.pens[s.team], x = s.c * P, y = s.r * P;
+    if (s.kind === 'tower') {                             // its reach, faintly
+      ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, P * 0.025); ctx.globalAlpha = 0.13;
+      ctx.setLineDash([P * 0.12, P * 0.14]); ctx.beginPath(); ctx.arc(s.x * P, s.y * P, C.TOWER_RANGE * P, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.globalAlpha = 1; ctx.fillStyle = COL.paper; ctx.fillRect(x + 1, y + 1, P - 2, P - 2);
+    ctx.globalAlpha = 0.22; ctx.fillStyle = col; ctx.fillRect(x + 1, y + 1, P - 2, P - 2);
+    ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.strokeRect(x + lw / 2 + 1, y + lw / 2 + 1, P - lw - 2, P - lw - 2);
+    ctx.save(); ctx.translate(s.x * P, s.y * P);
+    if (s.kind === 'tower') {
+      ctx.rotate(s.aim);
+      ctx.fillStyle = COL.paper; ctx.strokeStyle = col;
+      rrect(P * 0.05, -P * 0.07, P * 0.42, P * 0.14, P * 0.03); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, 0, P * 0.22, 0, Math.PI * 2); ctx.fill();
+    } else {
+      // the base: a star, and a dashed ring while both its towers stand
+      ctx.fillStyle = col; ctx.beginPath();
+      for (let k = 0; k < 10; k++) { const a = -Math.PI / 2 + k * Math.PI / 5, rr = P * (k % 2 ? 0.16 : 0.36); ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+      ctx.closePath(); ctx.fill();
+      if (!coreOpen(s.team)) {
+        ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.5, P * 0.04); ctx.globalAlpha = 0.8;
+        ctx.setLineDash([P * 0.1, P * 0.08]); ctx.beginPath(); ctx.arc(0, 0, P * 0.68, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+      }
+    }
+    ctx.restore();
+    if (s.flash > 0) { ctx.globalAlpha = s.flash * 3; ctx.fillStyle = COL.paper; ctx.fillRect(x + 1, y + 1, P - 2, P - 2); ctx.globalAlpha = 1; }
+    // health bar above the cell (below it when this screen is turned round)
+    const by = viewFlip ? y + P * 1.08 : y - P * 0.2, bw = P * 0.9, bh = Math.max(3, P * 0.11);
+    ctx.fillStyle = COL.paper; ctx.fillRect(x + P * 0.05, by, bw, bh);
+    ctx.fillStyle = col; ctx.fillRect(x + P * 0.05, by, bw * s.hp / s.max, bh);
+    ctx.strokeStyle = COL.graphite; ctx.lineWidth = 1; ctx.strokeRect(x + P * 0.05, by, bw, bh);
+  }
+  for (const m of minions) {
+    const col = COL.pens[m.team];
+    ctx.save(); ctx.translate(m.x * P, m.y * P); ctx.rotate(m.angle);
+    ctx.fillStyle = m.hp === 1 ? COL.paper : col; ctx.strokeStyle = m.hp === 1 ? col : COL.graphite; ctx.lineWidth = Math.max(1, P * 0.03);
+    ctx.beginPath(); ctx.moveTo(P * C.MINION_R * 1.2, 0); ctx.lineTo(-P * C.MINION_R * 0.8, -P * C.MINION_R); ctx.lineTo(-P * C.MINION_R * 0.8, P * C.MINION_R); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+}
+function drawShells() {
+  for (const q of shells) {
+    ctx.fillStyle = COL.pens[q.team]; ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(1, P * 0.025);
+    ctx.beginPath(); ctx.arc(q.x * P, q.y * P, Math.max(2.5, C.SHELL_R * P), 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+}
+
 function drawPath(path) {
   ctx.beginPath(); ctx.moveTo(path[0].x * P, path[0].y * P);
   for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x * P, path[i].y * P);
@@ -2824,18 +3301,19 @@ function drawStrip(p, seat) {
   if (!single) {
     // score: mine first, in my colour
     const other = penOf(1 - p);
-    label(String(scores[p]), LW / 2 - gap, CY0, fs, col, FONT_D, 1, 'right');
+    label(String(hudScore(sideOf(seat))), LW / 2 - gap, CY0, fs, col, FONT_D, 1, 'right');
     label(':', LW / 2, CY0 - fs * 0.04, fs * 0.8, COL.graphite, FONT_D, 0.7);
-    label(String(scores[1 - p]), LW / 2 + gap, CY0, fs * 0.72, other, FONT_D, 0.85, 'left');
+    label(String(hudScore(1 - sideOf(seat))), LW / 2 + gap, CY0, fs * 0.72, other, FONT_D, 0.85, 'left');
+    if (settings.game === 'base' && state !== 'title') label('bases · ' + clock(), LW / 2, CY0 + fs * 0.62, fs * 0.26, COL.graphite, FONT_B, 0.7);
   } else if (land) {
     // landscape: my score at the top of the fire side, everyone's on the stick side
     const f2 = Math.min(S * 0.32, LH * 0.14, 56);
-    label(String(scores[sideOf(seat)] | 0), FX0, LH * 0.13, f2, col, FONT_D);
-    label('of ' + target(), FX0, LH * 0.13 + f2 * 0.62, f2 * 0.34, COL.graphite, FONT_B, 0.7);
+    label(String(hudScore(sideOf(seat))), FX0, LH * 0.13, f2, col, FONT_D);
+    label(hudOf(), FX0, LH * 0.13 + f2 * 0.62, f2 * 0.34, COL.graphite, FONT_B, 0.7);
   } else {
     // online the whole table is along the top; here just my own score and the target
-    label(String(scores[sideOf(seat)] | 0), LW / 2, CY0 - fs * 0.12, fs, col, FONT_D);
-    label('of ' + target(), LW / 2, CY0 + fs * 0.55, fs * 0.32, COL.graphite, FONT_B, 0.7);
+    label(String(hudScore(sideOf(seat))), LW / 2, CY0 - fs * 0.12, fs, col, FONT_D);
+    label(hudOf(), LW / 2, CY0 + fs * 0.55, fs * 0.32, COL.graphite, FONT_B, 0.7);
   }
   edgeSwitches();
 }
@@ -2883,9 +3361,9 @@ function drawTopBoard() {
     let y = yy + step * 0.5;
     if (teamsOn()) {
       const f = step * 1.25;
-      label(String(scores[0] | 0), cx - f * 0.35, y + f * 0.2, f, COL.pens[0], FONT_D, 1, 'right');
+      label(String(hudScore(0)), cx - f * 0.35, y + f * 0.2, f, COL.pens[0], FONT_D, 1, 'right');
       label(':', cx, y + f * 0.16, f * 0.8, COL.graphite, FONT_D, 0.7);
-      label(String(scores[1] | 0), cx + f * 0.35, y + f * 0.2, f, COL.pens[1], FONT_D, 1, 'left');
+      label(String(hudScore(1)), cx + f * 0.35, y + f * 0.2, f, COL.pens[1], FONT_D, 1, 'left');
       y += f * 1.25;
     }
     for (let i = 0; i < NP; i++, y += step) {
@@ -2900,9 +3378,9 @@ function drawTopBoard() {
   const rowY = Math.max(yy + S * 0.14, S * 0.56);
   if (teamsOn()) {
     const f = Math.min(S * 0.34, 44), mine = mySeat >= 0 ? teamOf[mySeat] : -1;
-    label(String(scores[0] | 0), cx - f * 0.4, rowY, f, COL.pens[0], FONT_D, 1, 'right');
+    label(String(hudScore(0)), cx - f * 0.4, rowY, f, COL.pens[0], FONT_D, 1, 'right');
     label(':', cx, rowY - f * 0.04, f * 0.8, COL.graphite, FONT_D, 0.7);
-    label(String(scores[1] | 0), cx + f * 0.4, rowY, f, COL.pens[1], FONT_D, 1, 'left');
+    label(String(hudScore(1)), cx + f * 0.4, rowY, f, COL.pens[1], FONT_D, 1, 'left');
     [0, 1].forEach(k => label(TEAM_NAME[k] + (mine === k ? ' (you)' : ''), cx + (k ? 1 : -1) * f * 2.6, rowY, f * 0.36, COL.pens[k], FONT_B, 0.9));
     return;
   }
@@ -2929,7 +3407,7 @@ const nameChip = yy => { const w = U * 3.9, h = U * 0.54; return { kind: 'name',
 // the screen allows. Returns null when the screen is upright or the single column is just as large.
 function lobbyFrames() {
   if (!land || !inLobby()) return null;
-  const ctl = lobbyCtl(), l = ctl ? [0.3, 5.85] : [0.5, 5.05], r = ctl ? [5.3, 11.0] : [5.4, 9.6];
+  const ctl = lobbyCtl(), l = ctl ? [0.3, 5.85] : [0.5, 5.05], r = ctl ? [5.3, 11.7] : [5.4, 9.6];
   const top = 24, hh = LH - top - 28;
   const v = Math.min(hh / Math.max(l[1] - l[0], r[1] - r[0]), LW / 14.6);
   if (v <= U * 1.05) return null;
@@ -2937,7 +3415,7 @@ function lobbyFrames() {
   return { L: { u: v, cx: LW / 2 - v * 3.15, y: cy - v * (l[0] + l[1]) / 2 }, R: { u: v, cx: LW / 2 + v * 4.0, y: cy - v * (r[0] + r[1]) / 2 } };
 }
 function seatRows() {
-  const cx = mcx(), { y0, gap } = seatGeo(), list = lobbySeats(), tm = lobbyTeams(), nm = lobbyNames(), teams = settings.game === 'teams';
+  const cx = mcx(), { y0, gap } = seatGeo(), list = lobbySeats(), tm = lobbyTeams(), nm = lobbyNames(), teams = pickTeams();
   for (let i = 0; i < MAX_PLAYERS; i++) {
     const y = AY + U * (y0 + i * gap), has = i < list.length, id = list[i];
     const col = !has ? COL.graphite : teams ? COL.pens[tm[i] ? 1 : 0] : COL.pens[i];
@@ -2980,7 +3458,7 @@ function netItems() {
   } else if (inLobby()) {
     const ctl = lobbyCtl(), n = lobbySeats().length, fr = lobbyFrames();
     withFrame(fr && fr.L, () => {
-      if (settings.game === 'teams') for (let i = 0; i < n; i++) if (ctl || i === mySeat) items.push(teamChip(i));
+      if (pickTeams()) for (let i = 0; i < n; i++) if (ctl || i === mySeat) items.push(teamChip(i));
       if (!ctl) return;
       // one row: fewer / more computer tanks, and this player's name
       const h = U * 0.54, yy = y(4.85) - h / 2, bw = U * 1.75, g = U * 0.15, nw = U * 3.9, x0 = mcx() - (bw * 2 + nw + g * 2) / 2;
@@ -3000,7 +3478,7 @@ function netItems() {
   return items;
 }
 function drawNetScreen() {
-  const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite, accent = COL.pens[mode === 'guest' && mySeat >= 0 && settings.game !== 'teams' ? mySeat : 0] || COL.pens[0];
+  const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite, accent = COL.pens[mode === 'guest' && mySeat >= 0 && !pickTeams() ? mySeat : 0] || COL.pens[0];
   const line = (t, v, size, col, font, alpha) => label(t, mcx(), y(v), U * size, col || ink, font || FONT_B, alpha == null ? 1 : alpha);
   const lobby = inLobby(), fr = lobbyFrames();
   if (fr) label(netInfo().filter(Boolean).join(' · '), cx, 13, Math.min(15, LH * 0.04), ink, FONT_B, 0.7);
@@ -3087,28 +3565,30 @@ const hitRate = v => v && v.s ? Math.min(100, Math.round(100 * v.h / v.s)) + '%'
 // the end of a match: who won, and what every tank did
 function drawMatchEnd(p, seat) {
   const cx = LW / 2, ink = COL.graphite;
-  const ch = champion(), won = seat >= 0 && ch === sideOf(seat);
-  const chCol = teamsOn() ? COL.pens[ch ? 1 : 0] : penOf(ch);
-  const chName = teamsOn() ? TEAM_NAME[ch ? 1 : 0] + ' team' : nameOf(ch);
+  const ch = champion(), won = seat >= 0 && ch >= 0 && ch === sideOf(seat), drawn = ch < 0;
+  const chCol = drawn ? ink : teamsOn() ? COL.pens[ch ? 1 : 0] : penOf(ch);
+  const chName = drawn ? '' : teamsOn() ? TEAM_NAME[ch ? 1 : 0] + ' team' : nameOf(ch);
   if (twoSided()) {
     const top = AY + AH / 2, h = AH / 2, v = stats[seat];
-    label(won ? 'YOU WIN!' : 'YOU LOSE', cx, top + h * 0.26, U * (won ? 1.6 : 1.3), won ? penOf(seat) : ink, FONT_D);
-    label(`${scores[p]} : ${scores[1 - p]}`, cx, top + h * 0.48, U * 0.75, ink, FONT_D, 0.8);
+    label(drawn ? 'DRAW' : won ? 'YOU WIN!' : 'YOU LOSE', cx, top + h * 0.26, U * (won ? 1.6 : 1.3), won ? penOf(seat) : ink, FONT_D);
+    label(`${hudScore(sideOf(seat))} : ${hudScore(1 - sideOf(seat))}`, cx, top + h * 0.48, U * 0.75, ink, FONT_D, 0.8);
     if (v) label(`${v.k} hit${v.k === 1 ? '' : 's'} on them · ${v.d} taken · ${hitRate(v)} of shots landed`, cx, top + h * 0.64, U * 0.27, ink, FONT_B, 0.85);
     return;
   }
   const y = v => AY + U * v;
-  label(won ? 'YOU WIN!' : `${chName} wins`, cx, y(1.2), U * (won ? 1.3 : 1.0), chCol, FONT_D);
+  label(drawn ? 'DRAW' : won ? 'YOU WIN!' : `${chName} wins`, cx, y(1.2), U * (won ? 1.3 : 1.0), chCol, FONT_D);
+  if (settings.game === 'base') label(drawn ? 'Time is up and both sides are level.' : coreOf(1 - ch) && coreOf(1 - ch).hp <= 0 ? 'The base is down.' : 'Time is up: more of their base is left.', cx, y(1.75), U * 0.28, ink, FONT_B, 0.8);
   let ty = 2.35;
   if (teamsOn()) {
-    label(String(scores[0] | 0), cx - U * 0.4, y(2.2), U * 0.7, COL.pens[0], FONT_D, 1, 'right');
+    if (settings.game === 'base') label('bases', cx, y(2.62), U * 0.22, ink, FONT_B, 0.6);
+    label(String(hudScore(0)), cx - U * 0.4, y(2.2), U * 0.7, COL.pens[0], FONT_D, 1, 'right');
     label(':', cx, y(2.17), U * 0.55, ink, FONT_D, 0.7);
-    label(String(scores[1] | 0), cx + U * 0.4, y(2.2), U * 0.7, COL.pens[1], FONT_D, 1, 'left');
+    label(String(hudScore(1)), cx + U * 0.4, y(2.2), U * 0.7, COL.pens[1], FONT_D, 1, 'left');
     ty = 3.0;
   }
   // table: one row per tank, best first
   const scoreHead = teamsOn() ? '' : settings.game === 'dm' ? 'Points' : settings.game === 'hill' ? 'Seconds' : 'Rounds';
-  const cols = [[scoreHead, 1.0], ['Kills', 2.2], ['Lost', 3.3], ['Hit %', 4.4]];
+  const base = settings.game === 'base', cols = [[scoreHead, 1.0], ['Kills', 2.2], ['Lost', 3.3], [base ? 'Damage' : 'Hit %', 4.4]];
   for (const [t, dx] of cols) if (t) label(t, cx + U * dx, y(ty), U * 0.24, ink, FONT_B, 0.65);
   const order = tanks.map(t => t.id).sort((a, b) => teamsOn() ? (teamOf[a] - teamOf[b]) || ((stats[b] || {}).k | 0) - ((stats[a] || {}).k | 0) : (scores[b] | 0) - (scores[a] | 0));
   order.forEach((i, k) => {
@@ -3118,7 +3598,7 @@ function drawMatchEnd(p, seat) {
     label(nameOf(i) + (i === seat && names[i] && names[i] !== 'You' ? ' (you)' : ''), cx - U * 4.25, yy, U * 0.33, col, FONT_D, 1, 'left');
     const cell = (t, dx) => label(String(t), cx + U * dx, yy, U * 0.34, ink, FONT_D, 0.9);
     if (!teamsOn()) cell(scores[i] | 0, 1.0);
-    cell(v.k, 2.2); cell(v.d, 3.3); cell(hitRate(v), 4.4);
+    cell(v.k, 2.2); cell(v.d, 3.3); cell(base ? v.b | 0 : hitRate(v), 4.4);
   });
   if (mode === 'guest' && !isLeader) label(dedicatedGame ? 'Waiting for the player who made the game…' : 'Waiting for the host…', cx, y(ty + 0.58 * (NP + 1) + 0.25), U * 0.28, ink, FONT_B, 0.8);
 }
@@ -3204,6 +3684,7 @@ function render() {
     ctx.setLineDash([P * 0.26, P * 0.18]); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
   for (const m of marks) drawMark(m);
+  if (structs.length && matchOn) drawBase();
   for (const k of pickups) drawPickup(k);
   for (const mn of mines) drawMine(mn);
 
@@ -3254,6 +3735,7 @@ function render() {
     ctx.beginPath(); ctx.arc(t.x * P, t.y * P, P * (1.25 - 0.6 * k), 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
   }
   for (const m of missiles) drawMissile(m);
+  if (shells.length) drawShells();
 
   for (const b of beams) {
     const k = b.life / b.max;
@@ -3462,6 +3944,8 @@ window.__tank = {
   get soft() { return soft; }, get broken() { return broken; }, get hillHolder() { return hillHolder; }, get solo() { return soloMatch; },
   get NP() { return NP; }, get mode() { return mode; }, get land() { return land; }, get myName() { return myName; },
   setupLocal, beginFromMenu, applyMenu, breakWall, respawnTank, botInput, target, goalText, distField, mapPool, ROT4,
+  get structs() { return structs; }, get minions() { return minions; }, get shells() { return shells; }, get baseWinner() { return baseWinner; },
+  damageStruct, spawnWave, endBase, BASEMAPS, set roundTv(v) { roundT = v; },
   lobbyFrames, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
   lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };

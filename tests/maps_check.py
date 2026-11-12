@@ -6,7 +6,7 @@ JS = r"""
 () => {
   const T = window.__tank, out = [], terr = [];
   const base = T.settings();
-  for (const game of ['classic', 'teams', 'dm', 'hill']) for (const soft of [false, true]) for (const terrain of [false, true]) for (let np = 2; np <= 5; np++) {
+  for (const game of ['classic', 'teams', 'dm', 'hill', 'base']) for (const soft of [false, true]) for (const terrain of [false, true]) for (let np = 2; np <= 5; np++) {
     T.setSettings(Object.assign({}, base, { game, soft, terrain, cpu: Math.min(3, np - 1) }));
     T.setupLocal();
     if (T.NP !== np && np <= 4) { out.push(['np mismatch', game, np, T.NP]); continue; }
@@ -27,6 +27,14 @@ JS = r"""
       const keys = new Set(cells.map(x => x.join(',')));
       if (keys.size !== np) out.push(['spawns overlap', game, np, m]);
       if (game === 'hill' && d[(R >> 1) * C + (C >> 1)] < 0) out.push(['hill cut off', m]);
+      if (game === 'base') {
+        if (!T.BASEMAPS.has(m)) out.push(['not a base map', m]);
+        if (T.structs.length !== 6) out.push(['structures', m, T.structs.length]);
+        for (const st of T.structs) {
+          const near = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dc, dr]) => { const c = st.c + dc, r = st.r + dr; return c >= 0 && r >= 0 && c < C && r < R && !W[r][c] && d[r * C + c] >= 0; });
+          if (!near) out.push(['structure cut off', m, st.kind, st.team]);
+        }
+      } else if (T.BASEMAPS.has(m)) out.push(['base map in another mode', game, m]);
       // every open cell reachable (no sealed pockets a respawn could pick is guaranteed by distField, but report big pockets)
       let open = 0, reach = 0;
       for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) if (!W[r][c] && !T.water[r * C + c]) { open++; if (d[r * C + c] >= 0) reach++; }

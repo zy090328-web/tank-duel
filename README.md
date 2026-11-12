@@ -6,7 +6,7 @@ A tank game drawn on graph paper, for touch-screen tablets and phones.
 
 - **One tablet, two players:** each player holds one end of the tablet.
 - **One player against the computer:** on the title screen pick `1 + 1 CPU` … `1 + 3 CPU`.
-- **Online, 2–5 tanks on their own devices:** one player taps ONLINE → Create a game (or Same Wi-Fi game) and gets a 4-digit code; the others tap ONLINE → Join a game and type it. The creator picks the settings, can add computer tanks (`+ CPU`), and presses START. Each player can set a name; it is shown on the scoreboard.
+- **Online, 2–5 tanks on their own devices:** one player taps ONLINE → Create a game (or Direct game) and gets a 4-digit code; the others tap ONLINE → Join a game and type it. The creator picks the settings, can add computer tanks (`+ CPU`), and presses START. Each player can set a name; it is shown on the scoreboard.
 
 **Game modes**
 
@@ -28,7 +28,7 @@ Options for every mode: four ammo rules, power-ups (laser, homing and guided mis
 
 The game itself is `index.html`. `server.js` serves it and runs online rooms: each room is a copy of the same game script running on the server with drawing switched off, so every player is an equal guest (one network round trip each). Players' own tanks move at once on their device and are corrected toward the server.
 
-**Same Wi-Fi game** (on the game's server): one tablet hosts, and each guest opens a direct WebRTC link to it over the local network (offer/answer passed through the server, no outside STUN). Game data then never leaves the room. If a direct link can't form within the room's network, that guest keeps playing through the server.
+**Direct game** (on the game's server): one tablet hosts, and each guest opens a direct WebRTC link to it over the local network (offer/answer passed through the server, no outside STUN). Game data then never leaves the room. If a direct link can't form within the room's network, that guest keeps playing through the server.
 
 Served from anywhere else (no `server.js`), online play falls back to [PeerJS](https://peerjs.com/) with one tablet hosting.
 

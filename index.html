@@ -2308,18 +2308,23 @@ function onHostData(d) {
       reconcile(d.s);
 }
 
-/* ---------- same Wi-Fi: a direct link between a guest and the host tablet ----------
+/* ---------- direct game: a direct link between a guest and the host tablet ----------
    In a room hosted by a tablet on the game's server, the host offers each guest a WebRTC link.
    The offer and answer travel through the server; afterwards game data goes straight between
-   the two devices over the local network. No outside STUN server is used, so the link only
-   forms when both are on the same network; otherwise everything keeps going through the server. */
+   the two devices. On one Wi-Fi the link uses the local network. Between different networks the
+   STUN servers below let the two devices find each other's public address and connect straight
+   (home broadband usually works; some mobile networks block it). The list mixes servers that
+   answer inside mainland China with ones that answer elsewhere. When no link forms, everything
+   keeps going through the server as before. */
 const HAS_RTC = typeof RTCPeerConnection !== 'undefined';
+const ICE = { iceServers: [{ urls: ['stun:stun.miwifi.com:3478', 'stun:stun.qq.com:3478', 'stun:stun.chat.bilibili.com:3478'] },
+                           { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }] };
 let gpc = null, gU = null, gR = null, gPending = [];   // guest's side of the link
 const linkOpen = ch => !!ch && ch.readyState === 'open';
 function hostDirect(id, g) {
   if (!usingRelay || HEADLESS || !HAS_RTC) return;
   let pc;
-  try { pc = new RTCPeerConnection({ iceServers: [] }); } catch (e) { return; }
+  try { pc = new RTCPeerConnection(ICE); } catch (e) { return; }
   g.pc = pc; g.pending = [];
   const u = pc.createDataChannel('u', { ordered: false, maxRetransmits: 0 });   // snapshots: newest wins, never wait
   const r = pc.createDataChannel('r');                                           // the guest's input and requests
@@ -2343,7 +2348,7 @@ function guestSignal(sig) {
   if (!HAS_RTC) return;
   if (sig.d && sig.d.type === 'offer') {
     closeGuestLink();
-    try { gpc = new RTCPeerConnection({ iceServers: [] }); } catch (e) { gpc = null; return; }
+    try { gpc = new RTCPeerConnection(ICE); } catch (e) { gpc = null; return; }
     const pc = gpc;
     pc.ondatachannel = ev => {
       const ch = ev.channel;
@@ -3487,8 +3492,8 @@ const short = (str, n) => str.length > n ? str.slice(0, n - 1) + '…' : str;
 // online: the game code, this device's part in it, and how long its messages take
 function netInfo() {
   const nDirect = mode === 'host' ? [...guests.values()].filter(x => linkOpen(x.u)).length : 0;
-  const role = mode === 'host' ? 'hosting' + (usingRelay && guests.size ? ` · Wi-Fi direct ${nDirect}/${guests.size}` : '')
-    : mode === 'guest' ? 'joined' + (linkOpen(gU) ? ' · Wi-Fi direct' : '') : '';
+  const role = mode === 'host' ? 'hosting' + (usingRelay && guests.size ? ` · direct ${nDirect}/${guests.size}` : '')
+    : mode === 'guest' ? 'joined' + (linkOpen(gU) ? ' · direct' : '') : '';
   const ping = mode === 'guest' && rttMs ? `${Math.round(rttMs)} ms` + (netRttMs ? ` (net ${netRttMs})` : '') : '';
   return [netCode ? `game ${netCode}` : '', role, ping];
 }
@@ -3607,7 +3612,7 @@ function netItems() {
   if (state === 'online') {
     if (usingRelay) {
       btn('host', 'Create a game', 4.2, 6);
-      btn('lan', 'Same Wi-Fi game', 5.2, 6);
+      btn('lan', 'Direct game (fastest)', 5.2, 6);
       btn('join', 'Join a game', 6.2, 6);
     } else {
       btn('host', 'Host a game', 4.4, 5);
@@ -3660,7 +3665,7 @@ function drawNetScreen() {
     line('Each player uses their own tablet or phone.', 2.3, 0.3);
     line(usingRelay ? 'Players can be anywhere with internet.' : 'All tablets on the same Wi-Fi.', 2.75, 0.3);
     line(usingRelay ? 'One creates a game; the others join with its code.' : 'One hosts; the others join with its code.', 3.2, 0.3);
-    line(usingRelay ? 'Same Wi-Fi game: everyone in one place; this tablet runs it.' : '2 to 5 players', usingRelay ? 6.95 : 6.3, usingRelay ? 0.24 : 0.3, ink, FONT_B, 0.7);
+    line(usingRelay ? 'Direct game: this tablet runs it and players link straight to it, same Wi-Fi or not.' : '2 to 5 players', usingRelay ? 6.95 : 6.3, usingRelay ? 0.24 : 0.3, ink, FONT_B, 0.7);
     if (netMsg) line(netMsg, 7.35, 0.26, ink, FONT_B, 0.85);
     if (IS_TOUCH && LH > LW) line('Tip: turn the device sideways for the best controls.', 8.8, 0.27, accent, FONT_B);
   } else if (state === 'joinCode') {

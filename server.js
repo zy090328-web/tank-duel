@@ -1,4 +1,4 @@
-// Graph Paper Tank Duel - game server.
+// Ethan’s Tank Duel - game server.
 // Serves the game page and runs online rooms. For each room created with POST /create, the server
 // starts its own copy of the game script (the same code a host tablet runs, with drawing switched
 // off) in a sandbox. That copy is the room's host; every player is a guest, so nobody's tablet or

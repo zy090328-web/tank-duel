@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Graph Paper Tank Duel</title>
+<title>Ethan’s Tank Duel</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gochi+Hand&amp;family=Patrick+Hand&amp;display=swap" rel="stylesheet">
@@ -56,7 +56,7 @@ noscript { position: absolute; inset: 0; display: grid; place-items: center; pad
 </style>
 </head>
 <body>
-<canvas id="game" role="img" aria-label="Tank Duel: a two-player tank game played on one touch screen"></canvas>
+<canvas id="game" role="img" aria-label="Ethan’s Tank Duel: a tank game played on one touch screen"></canvas>
 <div id="namebox" hidden>
   <label for="nameinput">Your name</label>
   <input id="nameinput" type="text" maxlength="12" autocomplete="off" autocapitalize="words" spellcheck="false" enterkeyhint="done">
@@ -4276,9 +4276,9 @@ function drawOverlay(p, seat) {
   const mid = single ? AY + AH * 0.3 : top + h * 0.45;
   const me = tanks[seat];
   if (state === 'title') {
-    const head = menuStep === 'mode' ? 'Tank Duel' : menuStep === 'who' ? `${GAME_NAME[settings.game]}: who plays?` : menuStep === 'mut' ? 'Party rules' : `${GAME_NAME[settings.game]} · ${whoShort()}`;
+    const head = menuStep === 'mode' ? 'Ethan’s Tank Duel' : menuStep === 'who' ? `${GAME_NAME[settings.game]}: who plays?` : menuStep === 'mut' ? 'Party rules' : `${GAME_NAME[settings.game]} · ${whoShort()}`;
     const mt = menuTop();
-    label(head, cx, mt + U * 0.42, U * (menuStep === 'mode' ? 0.72 : 0.56), col, FONT_D);
+    label(head, cx - (menuStep === 'mode' ? U * 0.9 : 0), mt + U * 0.42, U * (menuStep === 'mode' ? 0.62 : 0.56), col, FONT_D);
     label(menuHintText(false), cx, mt + U * 0.95, U * 0.27, COL.graphite, FONT_B);
     drawItems(menuItems(), col);
   } else if (state === 'countdown') {

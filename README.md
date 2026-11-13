@@ -1,4 +1,4 @@
-# Graph Paper Tank Duel
+# Ethan’s Tank Duel
 
 A tank game drawn on graph paper, for touch-screen tablets and phones.
 

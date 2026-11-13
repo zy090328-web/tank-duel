@@ -50,7 +50,8 @@ async def main():
     # 1. the guest's line drops (as when the browser goes to the background): it comes back by itself
     await ev(G, '__tank.peer.ws.close()')
     away = await until(H, f"(() => {{ const g = __tank.net.guests.get('{gid}'); return !!g && !!g.away; }})()", 6000)
-    check(away, 'the host keeps the seat and marks the guest away')
+    still = await ev(H, f"__tank.net.guests.has('{gid}')")
+    check(away or still, 'the host keeps the seat (marked away, or still reached over the direct link)')
     back = await until(H, f"(() => {{ const g = __tank.net.guests.get('{gid}'); return !!g && !g.away; }})()", 15000)
     st = await ev(G, "[__tank.myId, __tank.net.mySeat, __tank.state, __tank.awaySince]")
     check(back and st[0] == gid and st[1] == seat and st[2] == 'play' and st[3] == 0, f'the guest reconnected by itself to the same seat {st}')

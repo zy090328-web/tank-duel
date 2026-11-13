@@ -118,7 +118,12 @@ const C = {
   MINE_ARM: 0.8,         // seconds before a mine can go off
   MINE_TRIGGER: 0.5,     // a tank this close (centre to centre) sets an armed mine off
   MINE_R: 0.15,
-  MINE_SEE: 1.3,         // an armed mine is hidden from the other side, except to a tank this close
+  MINE_SEE: 1.3,
+  BARREL_R: 0.3,         // explosive barrel: size,
+  BARREL_BLAST: 1.5,     // reach of its blast,
+  BARREL_CHAIN: 0.12,    // the delay before a barrel caught in another's blast goes off,
+  BARREL_BACK: 20,       // and (where tanks come back) how long until a new one stands there
+  PORTAL_R: 0.3,         // a tank, shot or missile whose centre comes this close to a portal's goes through         // an armed mine is hidden from the other side, except to a tank this close
   GAT_FIRST: 6,          // gatling: seconds into a round before it first appears on its spot,
   GAT_RESPAWN: 15,       // and before it comes back after being taken
   GAT_TIME: 2.2,         // one press fires a stream this long...
@@ -447,6 +452,74 @@ for (const m of [
     "#.............#",
     "######GGG######" ]
 ]) { SOCCERMAPS.add(MAPS.length); MAPS.push(m); }
+// Maps built round the gadgets: / and \ deflectors, O portals (each joined to the one the map turns it onto), B barrels.
+const GADGET_MAPS = new Set();
+for (const m of [
+  // Hall of mirrors
+  [ "...........",
+    "...........",
+    "..#.....#..",
+    "./...#...\\.",
+    "...#...#...",
+    "/.#.....#./",
+    "...#...#...",
+    ".\\...#.../.",
+    "..#.....#..",
+    ".....1.....",
+    "..........." ],
+  // Wormholes
+  [ "...##...##...",
+    ".............",
+    ".#.........#.",
+    "...#..#..#...",
+    "...#.....#...",
+    ".....#.#.....",
+    "..##.....##..",
+    ".....#.#.....",
+    ".O.#.....#...",
+    "...#..#..#.O.",
+    ".#.........#.",
+    "......1......",
+    "...##...##..." ],
+  // Powder keg
+  [ ".B.........B.",
+    ".............",
+    ".............",
+    "..###...###..",
+    "..#.B.#.B.#..",
+    "..#.......#..",
+    "B....#.#....B",
+    "..#.......#..",
+    "..#.B.#.B.#..",
+    "..###...###..",
+    ".............",
+    "......1......",
+    ".B.........B." ],
+  // Funhouse
+  [ ".............",
+    ".............",
+    ".....\\./.....",
+    ".##.......##.",
+    "....#...#..B.",
+    "..\\.......\\..",
+    "O...#...#...O",
+    "..\\.......\\..",
+    ".B..#...#....",
+    ".##.......##.",
+    "...../.\\.....",
+    "......1......",
+    "............." ],
+]) { GADGET_MAPS.add(MAPS.length); MAPS.push(m); }
+// Gadgets added to some of the older maps when Map extras include terrain (same notation; row, column, in the bottom half,
+// each repeated on the cell the map turns it onto)
+const GADGETS = {
+  1: [[7, 0, '/'], [7, 10, '\\']],
+  2: [[10, 0, 'O']],
+  4: [[12, 0, 'O'], [6, 0, 'O']],
+  6: [[10, 1, 'B'], [9, 10, 'B']],
+  7: [[12, 0, '\\'], [12, 12, '/'], [8, 2, 'B']],
+  8: [[10, 12, 'O'], [10, 0, 'O'], [6, 6, 'B']]
+};
 let COLS = 11, ROWS = 11;      // size of the map being played; set by loadMap
 const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const POWER_TYPES = ['laser', 'homing', 'guided', 'shield', 'spread', 'mine', 'pierce', 'bomb', 'gatling'];   // (gatling: only from its spot)
@@ -621,6 +694,9 @@ let soloMatch = false;      // one person on this screen against computer tanks
 let stats = [];             // per tank, this match: kills, deaths, shots, hits
 let soft = new Uint8Array(0), broken = [];     // breakable wall cells; the ones broken this round, in order
 let water = new Uint8Array(0), grass = new Uint8Array(0);   // terrain: water stops tanks but not shots; grass hides tanks
+// gadgets: deflector cells (1 '/', 2 '\'): a wall to tanks and missiles, a 45-degree mirror to shots and lasers;
+// portals { x, y, to }; barrels { x, y, alive, fuse (-1 unlit), by, back }; cells no tank or pickup starts on
+let mirror = new Int8Array(0), portals = [], barrels = [], noSpawn = new Uint8Array(0);
 // base mode: towers and bases (each fills one cell, which counts as a wall while it stands), minions, and the shots of both
 let structs = [], structCell = new Int16Array(0), minions = [], shells = [], waveT = 0, baseWinner = -1, baseAnchor = [];
 const baseOn = () => settings.game === 'base' && structs.length > 0;
@@ -675,7 +751,7 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, stunImm: 0, gat: 0, gatT: 0, vx: 0, vy: 0, dash: 0, dcool: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, stunImm: 0, gat: 0, gatT: 0, portLock: -1, vx: 0, vy: 0, dash: 0, dcool: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
 let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], particles = [], marks = [];
@@ -716,6 +792,7 @@ function loadMap(i) {
   }
   if (settings.soft && !pitch) markSoft(rot4);
   const keep = (rot4 ? four : two).slice();       // cells grass and water stay clear of
+  placeGadgets(m, keep, sc, sr);
   if (BASEMAPS.has(mapId)) {
     // towers and bases, one side drawn and the other turned 180 degrees
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
@@ -738,6 +815,98 @@ function loadMap(i) {
   else if (rot4 && NP === 4) spawn = four.map(at);
   else spawn = spreadSpawns(NP, sc, sr);
 }
+
+// Deflectors, portals and barrels: from the map's own letters, or (with terrain on) from GADGETS for an older map.
+// Each one drawn is repeated on the cell the map turns it onto (a deflector keeps its slant under a half turn);
+// a portal drawn there is joined to that copy.
+function placeGadgets(m, keep, sc, sr) {
+  mirror = new Int8Array(COLS * ROWS); noSpawn = new Uint8Array(COLS * ROWS); portals = []; barrels = [];
+  const N = ROWS - 1, M = COLS - 1, list = [];
+  if (GADGET_MAPS.has(mapId)) { for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if ('/\\OB'.includes(m[r][c])) list.push([r, c, m[r][c]]); }
+  else if (settings.terrain && GADGETS[mapId] && !ROT4.has(mapId) && !BASEMAPS.has(mapId) && !SOCCERMAPS.has(mapId)) list.push(...GADGETS[mapId]);
+  const hill = settings.game === 'hill', taken = new Set();
+  for (const [r, c, ch] of list) {
+    const a = r * COLS + c, b = (N - r) * COLS + (M - c);
+    if (taken.has(a)) continue;
+    if (hill && Math.hypot(c + 0.5 - COLS / 2, r + 0.5 - ROWS / 2) < C.HILL_R + 0.6) continue;
+    if ((r === sr && c === sc) || (N - r === sr && M - c === sc)) continue;
+    taken.add(a); taken.add(b);
+    for (const i of a === b ? [a] : [a, b]) { walls[(i / COLS) | 0][i % COLS] = false; keep.push([(i / COLS) | 0, i % COLS]); }
+    if (ch === '/' || ch === '\\') { mirror[a] = mirror[b] = ch === '/' ? 1 : 2; }
+    else if (ch === 'O' && a !== b) {
+      const k = portals.length;
+      portals.push({ x: c + 0.5, y: r + 0.5, to: k + 1, hue: k >> 1 }, { x: M - c + 0.5, y: N - r + 0.5, to: k, hue: k >> 1 });
+      noSpawn[a] = noSpawn[b] = 1;
+    } else if (ch === 'B') {
+      for (const i of a === b ? [a] : [a, b]) barrels.push({ x: i % COLS + 0.5, y: ((i / COLS) | 0) + 0.5, alive: true, fuse: -1, by: -1, back: 0 });
+      noSpawn[a] = noSpawn[b] = 1;
+    }
+  }
+}
+// the portal whose middle is within `rad` of (x, y), or -1
+function portalNear(x, y, rad) {
+  for (let k = 0; k < portals.length; k++) if (Math.hypot(portals[k].x - x, portals[k].y - y) < rad) return k;
+  return -1;
+}
+// something that has come through a portal ignores it until it has moved off it
+function goThrough(o, rad) {
+  if (!portals.length) return false;
+  if (o.portLock >= 0) { const p = portals[o.portLock]; if (p && Math.hypot(p.x - o.x, p.y - o.y) < rad + 0.25) return false; o.portLock = -1; }
+  const k = portalNear(o.x, o.y, C.PORTAL_R);
+  if (k < 0) return false;
+  const out = portals[portals[k].to];
+  if (walls[Math.floor(out.y)][Math.floor(out.x)]) return false;      // the far side has been walled in (sudden death)
+  o.x = out.x; o.y = out.y; o.portLock = portals[k].to;
+  return true;
+}
+function portalFx(x, y, hue) {
+  const col = PORTAL_COL[hue % PORTAL_COL.length];
+  rings.push({ x, y, r: 0.6, life: 0.3, max: 0.3, col });
+}
+// a shot crossing a deflector's line goes back to where it was and turns 90 degrees
+function mirrorBounce(b, px, py) {
+  for (const [x, y] of [[b.x, b.y], [px, py]]) {
+    const c = Math.floor(x), r = Math.floor(y);
+    if (c < 0 || r < 0 || c >= COLS || r >= ROWS || walls[r][c]) continue;
+    const k = mirror[r * COLS + c];
+    if (!k) continue;
+    const side = (u, v) => k === 1 ? (u - c) + (v - r) - 1 : (u - c) - (v - r);
+    const s0 = side(px, py), s1 = side(b.x, b.y);
+    if (s0 === 0 || s1 === 0 || Math.sign(s0) === Math.sign(s1)) continue;
+    b.x = px; b.y = py;
+    const vx = b.vx, vy = b.vy;
+    if (k === 1) { b.vx = -vy; b.vy = -vx; } else { b.vx = vy; b.vy = vx; }
+    return true;
+  }
+  return false;
+}
+// a barrel is lit by a shot or a blast; it goes off a moment later
+function lightBarrel(br, by, delay) {
+  if (!br.alive || br.fuse >= 0) return;
+  br.fuse = delay; br.by = by;
+}
+function barrelStep(dt) {
+  for (const br of barrels) {
+    if (br.alive && br.fuse >= 0 && (br.fuse -= dt) < 0) {
+      br.alive = false; br.fuse = -1; br.back = respawnMode() ? C.BARREL_BACK : 0;
+      blast({ x: br.x, y: br.y, owner: br.by, type: 'barrel', age: 9, col: COL.pens[3] });
+    } else if (!br.alive && br.back > 0 && (br.back -= dt) <= 0) {
+      if (tanks.some(t => t.alive && Math.hypot(t.x - br.x, t.y - br.y) < 1.2)) br.back = 1;
+      else { br.alive = true; br.fuse = -1; rings.push({ x: br.x, y: br.y, r: 0.6, life: 0.3, max: 0.3, col: COL.pens[3] }); }
+    }
+  }
+}
+// tanks bump into barrels as into a post
+function pushOffBarrels(o, R) {
+  for (const br of barrels) {
+    if (!br.alive) continue;
+    const dx = o.x - br.x, dy = o.y - br.y, d = Math.hypot(dx, dy), min = R + C.BARREL_R;
+    if (d >= min) continue;
+    if (d < 1e-6) { o.x += min; continue; }
+    o.x = br.x + dx / d * min; o.y = br.y + dy / d * min;
+  }
+}
+const barrelAt = (x, y, rad) => barrels.find(br => br.alive && Math.hypot(br.x - x, br.y - y) < C.BARREL_R + rad);
 
 // Hill: the circle in the middle is cleared of walls, and a way in is opened if the map had none.
 function carveHill(sc, sr) {
@@ -857,7 +1026,7 @@ function crack(b) {
 // Teams start together: each team's tanks take the open cells nearest its end of the arena, the two ends mirrored.
 function teamSpawns(sc, sr) {
   const d = distField(sc, sr), N = ROWS - 1, M = COLS - 1, cells = [], picks = [];
-  for (let i = 0; i < d.length; i++) if (d[i] >= 0) cells.push(i);
+  for (let i = 0; i < d.length; i++) if (d[i] >= 0 && !noSpawn[i]) cells.push(i);
   cells.sort((p, q) => d[p] - d[q] || p - q);
   for (const i of cells) {
     const c = i % COLS, r = (i / COLS) | 0;
@@ -882,7 +1051,7 @@ function spreadSpawns(n, sc, sr) {
     const tx = cx + Math.cos(a) * R, ty = cy + Math.sin(a) * R;
     let best = null, bd = Infinity;
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-      if (walls[r][c] || reach[r * COLS + c] < 0) continue;
+      if (walls[r][c] || reach[r * COLS + c] < 0 || noSpawn[r * COLS + c]) continue;
       if (used.some(u => Math.abs(u.c - c) + Math.abs(u.r - r) < 3)) continue;
       const d = Math.hypot(c + 0.5 - tx, r + 0.5 - ty);
       if (d < bd) { bd = d; best = { c, r }; }
@@ -893,13 +1062,13 @@ function spreadSpawns(n, sc, sr) {
   return out;
 }
 
-// `wet`: water counts as a wall too (for tanks)
-function circleHitsWall(x, y, rad, wet = false) {
+// `wet`: water counts as a wall too (for tanks); `shot`: deflectors do not (a shot is turned by its line instead)
+function circleHitsWall(x, y, rad, wet = false, shot = false) {
   if (x - rad < 0 || y - rad < 0 || x + rad > COLS || y + rad > ROWS) return true;
   const c0 = Math.floor(x - rad), c1 = Math.min(COLS - 1, Math.floor(x + rad));
   const r0 = Math.floor(y - rad), r1 = Math.min(ROWS - 1, Math.floor(y + rad));
   for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-    if (!walls[r][c] && !(wet && water[r * COLS + c])) continue;
+    if (!walls[r][c] && !(wet && water[r * COLS + c]) && !(!shot && mirror[r * COLS + c])) continue;
     const dx = x - clamp(x, c, c + 1), dy = y - clamp(y, r, r + 1);
     if (dx * dx + dy * dy < rad * rad) return true;
   }
@@ -913,7 +1082,7 @@ function resolveCircle(o, R, wet = false) {
     const c0 = Math.floor(o.x - R), c1 = Math.min(COLS - 1, Math.floor(o.x + R));
     const r0 = Math.floor(o.y - R), r1 = Math.min(ROWS - 1, Math.floor(o.y + R));
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-      if (!walls[r][c] && !(wet && water[r * COLS + c])) continue;
+      if (!walls[r][c] && !(wet && water[r * COLS + c]) && !mirror[r * COLS + c]) continue;
       const dx = o.x - clamp(o.x, c, c + 1), dy = o.y - clamp(o.y, r, r + 1);
       const d2 = dx * dx + dy * dy;
       if (d2 >= R * R || d2 < 1e-12) continue;
@@ -942,6 +1111,17 @@ function castRay(x, y, dx, dy, maxLen) {
     if (tmx < tmy) { t = tmx; tmx += tdx; cx += sx; axis = 'x'; } else { t = tmy; tmy += tdy; cy += sy; axis = 'y'; }
     if (t >= maxLen) break;
     if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS || walls[cy][cx]) return { x: x + dx * t, y: y + dy * t, dist: t, wall: true, axis };
+    const k = mirror[cy * COLS + cx];
+    if (k) {
+      // where the ray meets the deflector's line inside this cell
+      const den = k === 1 ? dx + dy : dx - dy;
+      if (Math.abs(den) > 1e-9) {
+        const tm = k === 1 ? (1 - (x - cx) - (y - cy)) / den : ((y - cy) - (x - cx)) / den;
+        const hx = x + dx * tm, hy = y + dy * tm;
+        if (tm >= t - 1e-9 && tm < maxLen && hx >= cx - 1e-6 && hx <= cx + 1 + 1e-6 && hy >= cy - 1e-6 && hy <= cy + 1 + 1e-6)
+          return { x: hx, y: hy, dist: tm, wall: true, mirror: k };
+      }
+    }
   }
   return { x: x + dx * maxLen, y: y + dy * maxLen, dist: maxLen, wall: false, axis: 'x' };
 }
@@ -954,6 +1134,7 @@ function tracePath(x, y, angle) {
     if (!h.wall) break;
     left -= h.dist; if (left <= 0.01) break;
     x = h.x - dx * 1e-4; y = h.y - dy * 1e-4;        // step back into the free cell, then reflect
+    if (h.mirror) { const ox = dx; if (h.mirror === 1) { dx = -dy; dy = -ox; } else { dx = dy; dy = ox; } continue; }
     if (h.axis === 'x') dx = -dx; else dy = -dy;
     const cx = Math.floor(x), cy = Math.floor(y);
     if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS || walls[cy][cx]) break;
@@ -975,7 +1156,7 @@ function distField(tc, tr, wet = true) {
     const i = q[h], c = i % COLS, r = (i / COLS) | 0;
     for (const [dc, dr] of DIRS4) {
       const nc = c + dc, nr = r + dr;
-      if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS || walls[nr][nc] || (wet && water[nr * COLS + nc])) continue;
+      if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS || walls[nr][nc] || (wet && water[nr * COLS + nc]) || mirror[nr * COLS + nc]) continue;
       const j = nr * COLS + nc;
       if (d[j] >= 0) continue;
       d[j] = d[i] + 1; q.push(j);
@@ -1015,7 +1196,7 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0;
-    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.gat = 0; t.gatT = 0; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0;
+    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0;
   });
   ball = null; goalBy = -1;
   pot = { holder: -1, fuse: 0, wait: C.POT_WAIT, cd: 0, back: 0, from: -1, passT: 0, beep: 0 };
@@ -1127,7 +1308,7 @@ function respawnTank(t) {
     }
   }
   if (!best) for (let i = 0; i < d.length; i++) {
-    if (d[i] < 0) continue;
+    if (d[i] < 0 || noSpawn[i]) continue;
     const x = i % COLS + 0.5, y = ((i / COLS) | 0) + 0.5;
     if (settings.game === 'hill' && Math.hypot(x - cx, y - cy) < C.HILL_R + 1.5) continue;
     let near = 8;
@@ -1139,7 +1320,7 @@ function respawnTank(t) {
   if (!best) best = spawn[t.id] || spawn[0];
   t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
   t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.fireQ = 0;
-  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.ai = null;
+  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.ai = null; t.portLock = -1;
   if (isZed(t.id)) { t.inv = 0; t.hp = C.ZED_HP; t.stun = 0.3; t.dash = 0; t.dcool = 0; }
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
   sfx.spawn(); netEv('spawn', t.id, r2(t.x), r2(t.y));
@@ -1479,6 +1660,7 @@ function fireLaser(t) {
     if (m.owner !== t.id && pathDist(path, m.x, m.y) < C.MISSILE_R + 0.06) { removeMissile(i); if (m.type === 'bomb') blast(m); else puff(m.x, m.y, m.owner); }
   }
   for (const mn of mines) if (pathDist(path, mn.x, mn.y) < C.MINE_R + 0.05) mn.boom = true;
+  for (const br of barrels) if (br.alive && pathDist(path, br.x, br.y) < C.BARREL_R + 0.05) lightBarrel(br, t.id, 0);
   if (ball && pathDist(path, ball.x, ball.y) < C.BALL_R + 0.05) {
     // the ball goes the way the beam was going where it met it
     let bi = 1, bd = Infinity;
@@ -1527,17 +1709,19 @@ function puff(x, y, owner) {
   netEv('puff', r2(x), r2(y), owner);
 }
 function blast(m) {
-  const R = m.type === 'bomb' ? C.BOMB_BLAST : C.GUIDED_BLAST;
+  const R = m.type === 'bomb' ? C.BOMB_BLAST : m.type === 'barrel' ? C.BARREL_BLAST : C.GUIDED_BLAST;
   const spare = m.type === 'bomb' && m.age < C.BOMB_ARM ? m.owner : -1;
-  rings.push({ x: m.x, y: m.y, r: R, life: 0.4, max: 0.4, col: penOf(m.owner) });
+  const pen = m.col || penOf(m.owner);
+  rings.push({ x: m.x, y: m.y, r: R, life: 0.4, max: 0.4, col: pen });
   for (let i = 0; i < (R > 1 ? 30 : 22); i++) {
     const a = Math.random() * Math.PI * 2, s = 1 + Math.random() * 4, life = 0.25 + Math.random() * 0.4;
-    particles.push({ x: m.x, y: m.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 3 ? penOf(m.owner) : COL.graphite, size: 0.04 + Math.random() * 0.05 });
+    particles.push({ x: m.x, y: m.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 3 ? pen : COL.graphite, size: 0.04 + Math.random() * 0.05 });
   }
-  shake = Math.max(shake, 0.25);
+  shake = Math.max(shake, m.type === 'barrel' ? 0.35 : 0.25);
   sfx.boom();
-  netEv('blast', r2(m.x), r2(m.y), m.owner, R);
+  netEv('blast', r2(m.x), r2(m.y), m.type === 'barrel' ? -2 : m.owner, R);
   for (const mn of mines) if (Math.hypot(mn.x - m.x, mn.y - m.y) < R) mn.boom = true;     // a blast sets off mines inside it
+  for (const br of barrels) if (Math.hypot(br.x - m.x, br.y - m.y) < R + C.BARREL_R) lightBarrel(br, m.owner, C.BARREL_CHAIN);   // ...and barrels
   if (ball) {                                                                              // ...and throws the ball
     const dx = ball.x - m.x, dy = ball.y - m.y, d = Math.hypot(dx, dy) || 0.01;
     if (d < R + 0.6) { const k = 1 + 6 * (1 - d / (R + 0.6)); ball.vx += dx / d * k; ball.vy += dy / d * k; ball.last = m.owner; ball.touchT = rec.t; }
@@ -1771,7 +1955,7 @@ function spawnPickups() {
   const far = q => tanks.every(t => !t.alive || Math.hypot(t.x - q.x, t.y - q.y) > 2) && pickups.every(k => Math.hypot(k.x - q.x, k.y - q.y) > 1.2);
   for (let tries = 0; tries < 80; tries++) {
     const c = (Math.random() * COLS) | 0, r = (Math.random() * ROWS) | 0;
-    if (walls[r][c] || water[r * COLS + c]) continue;
+    if (walls[r][c] || water[r * COLS + c] || mirror[r * COLS + c] || noSpawn[r * COLS + c]) continue;
     if (sdOn() && ringOf(c, r) <= sdClosed) continue;     // not in a ring that is closed or about to close
     const a = { x: c + 0.5, y: r + 0.5 }, b = { x: COLS - c - 0.5, y: ROWS - r - 0.5 };
     if (!far(a) || !far(b)) continue;
@@ -1839,6 +2023,15 @@ function getInput(seat) {
   if (seat === mySeat) return myInput();
   return remoteInput(seat);
 }
+// would a shot from t towards (x, y) set off a barrel close enough to catch t in the blast?
+function barrelInWay(t, x, y) {
+  for (const br of barrels) {
+    if (!br.alive) continue;
+    if (Math.hypot(br.x - t.x, br.y - t.y) > C.BARREL_BLAST + 0.6) continue;
+    if (distToSeg(br.x, br.y, t.x, t.y, t.x + (x - t.x) * 3, t.y + (y - t.y) * 3) < C.BARREL_R + C.BULLET_R + 0.05) return true;
+  }
+  return false;
+}
 function pressFire(seat) {
   if (state !== 'play' && state !== 'ending' && state !== 'result') return;
   const t = tanks[seat];
@@ -1864,6 +2057,8 @@ function botInput(seat) {
   const ai = t.ai || (t.ai = { replan: 0, wp: null, react: 0.4 + Math.random() * 0.5, dodge: 0, da: 0, wander: 0, wa: 0, chk: 0.6, px: t.x, py: t.y });
   if (isZed(seat)) return zedBot(seat, t, ai);
   if (soccerOn()) return soccerBot(seat, t, ai);
+  const keg = barrelShot(seat, t, ai);
+  if (keg) return keg;
   if (potatoOn() && pot.holder === seat) return chaseBot(seat, t, ai, o => !(o.id === pot.from && pot.back > 0), false);
   let fi = -1, fd = Infinity;
   for (const o of tanks) {
@@ -1947,7 +2142,7 @@ function botInput(seat) {
 
   if (hasFoe && los) {
     const off = Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle));
-    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0 && !(foe.inv > 0) && !(t.power === 'bomb' && dFoe > C.BOMB_SPEED * C.BOMB_LIFE + 0.5)) { pressFire(seat); ai.react = infOn() ? 0.1 + Math.random() * 0.2 : 0.3 + Math.random() * 0.55; }
+    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0 && !(foe.inv > 0) && !(t.power === 'bomb' && dFoe > C.BOMB_SPEED * C.BOMB_LIFE + 0.5) && !barrelInWay(t, foe.x, foe.y)) { pressFire(seat); ai.react = infOn() ? 0.1 + Math.random() * 0.2 : 0.3 + Math.random() * 0.55; }
   } else if (hasFoe && ai.react <= 0 && (t.power === 'homing' || t.power === 'guided' || t.power === 'mine')) {
     pressFire(seat); ai.react = 0.6;                         // missiles and mines do not need a clear line
   }
@@ -1968,6 +2163,10 @@ function botInput(seat) {
     }
     goal = ai.flee; fight = false;
     if (!goal) return IDLE;
+  }
+  if (fight && los && barrels.length && barrelInWay(t, foe.x, foe.y)) {          // a barrel close by in the line of fire: step aside first
+    const sd = seat % 2 ? 1 : -1, dx = foe.x - t.x, dy = foe.y - t.y, d = Math.hypot(dx, dy) || 1;
+    return unitTo(-dy / d * sd - dx / d * 0.3, dx / d * sd - dy / d * 0.3, 1);
   }
   if (fight && los) return unitTo(foe.x - t.x, foe.y - t.y, dFoe > 3 ? 1 : 0.04);
 
@@ -1999,7 +2198,7 @@ function chaseBot(seat, t, ai, isPrey, dash) {
   const clear = foe && lineClear(t.x, t.y, foe.x, foe.y, C.TANK_R * 0.9);
   ai.react -= dt;
   if (dash && clear && fd < 2.3 && t.dcool <= 0 && ai.react <= 0) { pressFire(seat); ai.react = 0.4; }
-  if (!dash && clear && fd < 5 && ai.react <= 0 && t.cool <= 0 && !(foe.stunImm > 0) && Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle)) < 0.15) { pressFire(seat); ai.react = 0.5; }
+  if (!dash && clear && fd < 5 && ai.react <= 0 && t.cool <= 0 && !(foe.stunImm > 0) && !barrelInWay(t, foe.x, foe.y) && Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle)) < 0.15) { pressFire(seat); ai.react = 0.5; }
   if (clear) return unitTo(foe.x - t.x, foe.y - t.y, 1);
   let goal = foe || ai.last;
   if (!goal) {
@@ -2021,6 +2220,23 @@ function chaseBot(seat, t, ai, isPrey, dash) {
   if (ai.wander > 0) { ai.wander -= dt; return { x: Math.cos(ai.wa), y: Math.sin(ai.wa), mag: 1 }; }
   if (!ai.wp) return IDLE;
   return unitTo(ai.wp.x - t.x, ai.wp.y - t.y, 1);
+}
+// a lit barrel beside an enemy, well away from us, that we can see: turn to it and fire
+function barrelShot(seat, t, ai) {
+  if (!barrels.length || !t.alive || t.stun > 0 || t.power) return null;
+  for (const br of barrels) {
+    if (!br.alive || br.fuse >= 0) continue;
+    const dMe = Math.hypot(br.x - t.x, br.y - t.y);
+    if (dMe < C.BARREL_BLAST + 0.7 || dMe > 7) continue;
+    if (tanks.some(o => o.alive && friendOf(o.id, seat) && Math.hypot(o.x - br.x, o.y - br.y) < C.BARREL_BLAST)) continue;
+    if (!tanks.some(o => o.alive && !friendOf(o.id, seat) && seenBy(seat, o) && Math.hypot(o.x - br.x, o.y - br.y) < C.BARREL_BLAST - 0.2)) continue;
+    if (!lineClear(t.x, t.y, br.x, br.y, C.BULLET_R)) continue;
+    const off = Math.abs(wrapAngle(Math.atan2(br.y - t.y, br.x - t.x) - t.angle));
+    ai.react -= C.STEP;
+    if (off < 0.1 && ai.react <= 0 && t.cool <= 0) { pressFire(seat); ai.react = 0.4; }
+    return unitTo(br.x - t.x, br.y - t.y, 0.04);
+  }
+  return null;
 }
 // soccer: get behind the ball (seen from the goal to score in) and drive through it, or shoot it when it lines up;
 // with a team-mate nearer the ball, stand in front of our own goal instead
@@ -2144,6 +2360,8 @@ function stepPhysics(dt, lethal, control) {
       t.y += Math.sin(t.angle) * speed * dt;
     }
     resolveCircle(t, C.TANK_R, true);
+    if (barrels.length) { pushOffBarrels(t, C.TANK_R); resolveCircle(t, C.TANK_R, true); }
+    if (goThrough(t, C.TANK_R)) { const p = portals[t.portLock]; portalFx(p.x, p.y, p.hue); sfx.warp(); netEv('warp', r2(p.x), r2(p.y), p.hue); }
     t.vx = (t.x - px) / dt; t.vy = (t.y - py) / dt;
     if (t.fireQ > 0 && isZed(t.id)) {
       // a zombie cannot shoot: its button is a dash
@@ -2193,6 +2411,7 @@ function stepPhysics(dt, lethal, control) {
     }
   }
   if (lethal && ball) ballStep(dt);
+  if (lethal && barrels.length) barrelStep(dt);
 
   // bullets
   const hitR = C.TANK_R * 0.92 + C.BULLET_R;
@@ -2207,11 +2426,15 @@ function stepPhysics(dt, lethal, control) {
       if (strike(b)) { bullets.splice(i, 1); continue; }
     } else {
       // move on each axis separately: hitting a wall while moving in x flips vx, in y flips vy
+      const px = b.x, py = b.y;
       b.x += b.vx * dt;
-      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { if (strike(b) || crack(b)) { bullets.splice(i, 1); continue; } b.x -= b.vx * dt; b.vx = -b.vx; b.bounces++; bounceFx(b); }
+      if (circleHitsWall(b.x, b.y, C.BULLET_R, false, true)) { if (strike(b) || crack(b)) { bullets.splice(i, 1); continue; } b.x -= b.vx * dt; b.vx = -b.vx; b.bounces++; bounceFx(b); }
       b.y += b.vy * dt;
-      if (circleHitsWall(b.x, b.y, C.BULLET_R)) { if (strike(b) || crack(b)) { bullets.splice(i, 1); continue; } b.y -= b.vy * dt; b.vy = -b.vy; b.bounces++; bounceFx(b); }
+      if (circleHitsWall(b.x, b.y, C.BULLET_R, false, true)) { if (strike(b) || crack(b)) { bullets.splice(i, 1); continue; } b.y -= b.vy * dt; b.vy = -b.vy; b.bounces++; bounceFx(b); }
+      if (mirror.length && mirrorBounce(b, px, py)) { b.bounces++; bounceFx(b); }
     }
+    if (portals.length && goThrough(b, C.BULLET_R)) { b.trail = []; const p = portals[b.portLock]; portalFx(p.x, p.y, p.hue); }
+    if (barrels.length) { const br = barrelAt(b.x, b.y, C.BULLET_R); if (br) { lightBarrel(br, b.owner, 0); bullets.splice(i, 1); continue; } }
     if (++b.tick % 2 === 0) { b.trail.push(b.x, b.y); if (b.trail.length > 22) b.trail.splice(0, 2); }
     if (b.age > (b.life || C.BULLET_LIFE) || b.bounces > (b.maxB ?? C.MAX_BOUNCES)) { bullets.splice(i, 1); continue; }
     // any shot sets off a mine it touches
@@ -2291,6 +2514,8 @@ function stepPhysics(dt, lethal, control) {
     let onMine = false;
     for (const mn of mines) if (!mn.boom && Math.hypot(m.x - mn.x, m.y - mn.y) < C.MINE_R + C.MISSILE_R) { mn.boom = true; onMine = true; }
     if (onMine) { removeMissile(i); if (m.type !== 'homing') blast(m); else puff(m.x, m.y, m.owner); continue; }
+    if (portals.length && goThrough(m, C.MISSILE_R)) { m.wp = null; const p = portals[m.portLock]; portalFx(p.x, p.y, p.hue); }
+    if (barrels.length) { const br = barrelAt(m.x, m.y, C.MISSILE_R); if (br) { lightBarrel(br, m.owner, 0); removeMissile(i); if (m.type !== 'homing') blast(m); else puff(m.x, m.y, m.owner); continue; } }
     if (ball && lethal && Math.hypot(m.x - ball.x, m.y - ball.y) < C.MISSILE_R + C.BALL_R) {
       removeMissile(i);
       if (m.type !== 'homing') blast(m);
@@ -2422,7 +2647,7 @@ function recFrame() {
     M: missiles.map(m => [m.id, m.x, m.y, m.angle, m.owner, m.type]),
     N: mines.map(n => [n.x, n.y, n.owner, n.armed ? 1 : 0]),
     L: beams.map(b => [b.path, penOf(b.owner), b.life / b.max]),
-    K: marks.length, O: ball ? [ball.x, ball.y, ball.rot] : null, H: pot.holder });
+    K: marks.length, O: ball ? [ball.x, ball.y, ball.rot] : null, H: pot.holder, X: barrels.length ? barrels.map(br => br.alive ? 1 : 0) : null });
   while (rec.frames.length > 2 && rec.t - rec.frames[0].t > 6) rec.frames.shift();
 }
 // host and one screen: the clock runs through play and the moment after the kill
@@ -2487,10 +2712,11 @@ function stepReplay(dt) {
 function enterReplayWorld() {
   const now = rpNow(), { a, b, k } = framePair(now);
   if (!a) return null;
-  const saved = { tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells, ball };
+  const saved = { tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells, ball, barrels };
+  if (a.X) barrels = saved.barrels.map((br, i) => Object.assign({}, br, { alive: !!a.X[i], fuse: -1 }));
   ball = a.O ? { x: a.O[0] + ((b.O || a.O)[0] - a.O[0]) * k, y: a.O[1] + ((b.O || a.O)[1] - a.O[1]) * k, rot: a.O[2] || 0 } : null;
   rpHold = a.H == null ? -1 : a.H;
-  const lerp = (p, q) => p + (q - p) * k, lerpA = (p, q) => wrapAngle(p + wrapAngle(q - p) * k);
+  const lerp = (p, q) => Math.abs(q - p) > 1.5 ? q : p + (q - p) * k, lerpA = (p, q) => wrapAngle(p + wrapAngle(q - p) * k);
   tanks = a.T.map((q, i) => {
     const r = b.T[i] || q, o = makeTank(i);
     o.x = lerp(q[0], r[0]); o.y = lerp(q[1], r[1]); o.angle = lerpA(q[2], r[2]);
@@ -2502,7 +2728,7 @@ function enterReplayWorld() {
   const f = rec.frames, idx = framePair(now).i;
   bullets = b.B.filter(q => byA.has(q[0])).map(q => {
     const p = byA.get(q[0]), trail = [];
-    for (let j = idx; j >= 0 && now - f[j].t < 0.4; j--) { const e = f[j].B.find(x => x[0] === q[0]); if (!e) break; trail.unshift(e[1], e[2]); }
+    for (let j = idx; j >= 0 && now - f[j].t < 0.4; j--) { const e = f[j].B.find(x => x[0] === q[0]); if (!e || (trail.length && Math.hypot(trail[0] - e[1], trail[1] - e[2]) > 1.5)) break; trail.unshift(e[1], e[2]); }
     return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), owner: 0, pen: q[3], pierce: !!q[4], age: 0, life: 99, trail };
   });
   const mA = new Map(a.M.map(q => [q[0], q]));
@@ -2514,7 +2740,7 @@ function enterReplayWorld() {
   return saved;
 }
 function leaveReplayWorld(sv) {
-  ({ tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells, ball } = sv);
+  ({ tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells, ball, barrels } = sv);
   replayView = false;
 }
 // the path the killing shot took, drawn faintly behind it as it flies
@@ -2533,7 +2759,10 @@ function drawShotPath() {
   ctx.save(); ctx.strokeStyle = pen; ctx.globalAlpha = 0.45; ctx.lineWidth = Math.max(1.5, P * 0.045);
   ctx.setLineDash([P * 0.12, P * 0.1]); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.beginPath(); ctx.moveTo(pts[0] * P, pts[1] * P);
-  for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i] * P, pts[i + 1] * P);
+  for (let i = 2; i < pts.length; i += 2) {
+    const jump = Math.hypot(pts[i] - pts[i - 2], pts[i + 1] - pts[i - 1]) > 1.5;      // through a portal
+    ctx[jump ? 'moveTo' : 'lineTo'](pts[i] * P, pts[i + 1] * P);
+  }
   ctx.stroke(); ctx.restore();
 }
 // what the replay shows, in words
@@ -2964,6 +3193,7 @@ function buildSnap() {
     Q: play && structs.length ? shells.map(q => [q.id, r2(q.x), r2(q.y), q.team]) : null,
     E: netEvents.map(e => e.e),
     aw: seats.map(id => guests.has(id) && guests.get(id).away ? 1 : 0),
+    bx: barrels.length ? barrels.map(br => br.alive ? (br.fuse >= 0 ? 2 : 1) : 0) : null,
     PE: seats.map(id => { const g = guests.get(id); return g && g.echo != null ? g.echo : -1; })
   };
 }
@@ -3227,7 +3457,7 @@ function predictStep(dt) {
   if (!pred.active) {             // take over from where the host has the tank
     const last = snaps.length && snaps[snaps.length - 1].g.T && snaps[snaps.length - 1].g.T[mySeat];
     if (!Array.isArray(last)) return;
-    pred.x = last[0]; pred.y = last[1]; pred.angle = last[2]; pred.hist = []; pred.active = true;
+    pred.x = last[0]; pred.y = last[1]; pred.angle = last[2]; pred.hist = []; pred.active = true; pred.portLock = portalNear(pred.x, pred.y, C.PORTAL_R + 0.3);
   }
   const locked = t.charge > 0 || !!t.guided || t.stun > 0;
   const inp = locked ? IDLE : myInput();
@@ -3243,6 +3473,9 @@ function predictStep(dt) {
     pred.y += Math.sin(pred.angle) * speed * dt;
   }
   resolveCircle(pred, C.TANK_R, true);
+  if (barrels.length) { pushOffBarrels(pred, C.TANK_R); resolveCircle(pred, C.TANK_R, true); }
+  if (pred.portLock === undefined) pred.portLock = -1;
+  goThrough(pred, C.TANK_R);                 // through a portal at once, as the host will
   const now = performance.now();
   pred.hist.push({ at: now, x: pred.x, y: pred.y, a: pred.angle });
   while (pred.hist.length && now - pred.hist[0].at > 2000) pred.hist.shift();
@@ -3260,7 +3493,7 @@ function reconcile(g) {
   for (let i = pred.hist.length - 1; i >= 0; i--) if (pred.hist[i].at <= back) { h = pred.hist[i]; break; }
   if (!h) h = pred.hist[0] || { x: pred.x, y: pred.y, a: pred.angle };
   const ex = q[0] - h.x, ey = q[1] - h.y, ea = wrapAngle(q[2] - h.a);
-  if (Math.hypot(ex, ey) > 1.2) { pred.x = q[0]; pred.y = q[1]; pred.angle = q[2]; pred.hist = []; return; }
+  if (Math.hypot(ex, ey) > 1.2) { pred.x = q[0]; pred.y = q[1]; pred.angle = q[2]; pred.hist = []; pred.portLock = portalNear(pred.x, pred.y, C.PORTAL_R + 0.3); return; }
   const f = 0.25;
   pred.x += ex * f; pred.y += ey * f; pred.angle = wrapAngle(pred.angle + ea * f);
   for (const e of pred.hist) { e.x += ex * f; e.y += ey * f; e.a = wrapAngle(e.a + ea * f); }
@@ -3292,6 +3525,7 @@ function applyDiscrete(g, dt) {
   hl = Array.isArray(g.hl) ? { t: +g.hl[0] || 0, age: +g.hl[1] || 0, v: g.hl[2] | 0, k: g.hl[3] | 0, b: g.hl[4] | 0, n: g.hl[5] | 0, touch: !!g.hl[6], goal: typeof g.hl[7] === 'number' ? g.hl[7] : -1 } : null;
   if (Array.isArray(g.pt)) { pot.holder = g.pt[0] | 0; if (Math.abs((+g.pt[1] || 0) - pot.fuse) > 0.3) pot.fuse = +g.pt[1] || 0; } else pot.holder = -1;
   goalBy = typeof g.gb === 'number' ? g.gb : -1;
+  if (Array.isArray(g.bx)) g.bx.forEach((v, i) => { if (barrels[i]) { barrels[i].alive = v > 0; barrels[i].fuse = v === 2 ? 0.1 : -1; } });
   if (g.st === 'replay' && Array.isArray(g.rp)) {
     if (state !== 'replay') { rpT = +g.t || 0; rpPrev = -1; rpParts = []; rpRings = []; }
     rp = { from: +g.rp[0] || 0, to: +g.rp[1] || 0, dur: Math.max(0.5, +g.rp[2] || 1) }; rp.speed = (rp.to - rp.from) / rp.dur;
@@ -3388,12 +3622,18 @@ function playEvent(e) {
     beams.push({ path: tracePath(e[3], e[4], e[5]), owner: e[2], life: 0.32, max: 0.32 });
     sfx.zap(); if (!REDUCED) shake = Math.max(shake, 0.12);
   } else if (kind === 'puff') { burst(e[2], e[3], 8, pen(e[4]), 1.4, 0.3, 0.04); sfx.pop(); }
-  else if (kind === 'blast') {
+  else if (kind === 'blast' && e[4] === -2) {
+    const R = e[5] || C.BARREL_BLAST;
+    rings.push({ x: e[2], y: e[3], r: R, life: 0.4, max: 0.4, col: COL.pens[3] });
+    burst(e[2], e[3], 30, COL.pens[3], 4, 0.5, 0.07); shake = Math.max(shake, 0.35); sfx.boom();
+  } else if (kind === 'blast') {
     rings.push({ x: e[2], y: e[3], r: e[5] || C.GUIDED_BLAST, life: 0.4, max: 0.4, col: pen(e[4]) });
     burst(e[2], e[3], (e[5] || 0) > 1 ? 30 : 22, pen(e[4]), 3, 0.45, 0.06); shake = Math.max(shake, 0.25); sfx.boom();
   } else if (kind === 'kill') {
     marks.push({ x: e[3], y: e[4], col: pen(e[2]), seed: e[5] | 0 });
     burst(e[3], e[4], 30, pen(e[2]), 3.2, 0.6, 0.07); shake = 0.35; sfx.boom();
+  } else if (kind === 'warp') {
+    portalFx(e[2], e[3], e[4] | 0); sfx.warp();
   } else if (kind === 'pass') {
     const t = tanks[e[2]];
     if (t) rings.push({ x: t.x, y: t.y, r: e[3] < 0 ? 1 : 0.8, life: 0.4, max: 0.4, col: COL.pens[0] });
@@ -3425,7 +3665,7 @@ function playEvent(e) {
 }
 
 function applyEntities(a, b, k, dt) {
-  const lerp = (p, q) => p + (q - p) * k;
+  const lerp = (p, q) => Math.abs(q - p) > 1.5 ? q : p + (q - p) * k;      // a jump (a portal) is not slid across the map
   const lerpA = (p, q) => wrapAngle(p + wrapAngle(q - p) * k);
   const now = performance.now();
   if (!Array.isArray(b.T)) return;
@@ -3450,6 +3690,8 @@ function applyEntities(a, b, k, dt) {
     const x = lerp(p[1], q[1]), y = lerp(p[2], q[2]);
     let tr = trails.get(q[0]);
     if (!tr) { tr = { pts: [], tick: 0 }; trails.set(q[0], tr); }
+    const n = tr.pts.length;
+    if (n && Math.hypot(tr.pts[n - 2] - x, tr.pts[n - 1] - y) > 1.5) tr.pts.length = 0;
     if (++tr.tick % 2 === 0) { tr.pts.push(x, y); if (tr.pts.length > 22) tr.pts.splice(0, 2); }
     live.add(q[0]);
     bullets.push({ id: q[0], x, y, owner: q[3], pierce: q[4] === 2, extra: q[4] === 1, life: q[5] || 0, age: age('b' + q[0]), trail: tr.pts });
@@ -3533,6 +3775,7 @@ const sfx = {
   slam: () => { noise(0.22, 0.2); tone(90, 0.18, 'sawtooth', 0.08, 50); },
   crack: () => { noise(0.1, 0.13); tone(170, 0.09, 'triangle', 0.06, 80); },
   spin: () => tone(120, 0.35, 'sawtooth', 0.05, 900),
+  warp: () => { tone(300, 0.18, 'sine', 0.06, 1200); tone(900, 0.18, 'sine', 0.03, 200); },
   rattle: () => { const now = performance.now(); if (now - (sfx.lastRattle || 0) < 60) return; sfx.lastRattle = now; tone(700, 0.04, 'square', 0.035, 300); noise(0.04, 0.05); }
 };
 
@@ -3803,7 +4046,7 @@ function menuHintText(lobby) {
     'Plain map: every wall stops every shot.',
     'Lightly drawn walls break when a shot hits them.',
     !lobby && !settings.cpu ? 'Water stops tanks, not shots. Grass hides only when each player has a screen.' : 'Grass hides tanks from enemies; water stops tanks but not shots.',
-    'Breakable walls, grass to hide in, and water to shoot across.'][featIdx()];
+    'Breakable walls, grass to hide in, and water to shoot across.'][featIdx()] + (settings.terrain ? ' Some maps add deflectors, portals and barrels.' : '');
   if (k === 'maps') return settings.maps === 'all' ? 'Small and large maps, shuffled.' : settings.maps === 'classic' ? 'Small 11 by 11 maps. (3+ tanks always get large ones.)' : 'Large 13 by 13 maps with more cover.';
   if (k === 'win' && settings.game === 'base') return `After ${target() / 60} minutes the side with more of its base left wins.`;
   if (k === 'win' && gunOn()) return 'Weapons in order: ' + gunLadder().map(weaponName).join(' → ') + '.';
@@ -3971,6 +4214,26 @@ function buildStatic() {
     if (sf) g.setLineDash([P * 0.17, P * 0.11]);
     g.strokeRect(x + 1, y + 1, P - 2, P - 2);
     g.setLineDash([]);
+  }
+
+  // deflectors: a heavy ink bar along the cell's diagonal, with short hatching on both faces; the cell outlined faintly
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const k = mirror[r * COLS + c];
+    if (!k || (walls[r] && walls[r][c])) continue;
+    const x = AX + (viewFlip ? COLS - 1 - c : c) * P, y = AY + (viewFlip ? ROWS - 1 - r : r) * P;
+    const [x0, y0, x1, y1] = k === 1 ? [x, y + P, x + P, y] : [x, y, x + P, y + P];
+    g.globalAlpha = 0.35; g.strokeStyle = COL.graphite; g.lineWidth = Math.max(1, P * 0.025); g.setLineDash([P * 0.08, P * 0.08]);
+    g.strokeRect(x + 2, y + 2, P - 4, P - 4); g.setLineDash([]);
+    g.globalAlpha = 0.5; g.lineWidth = Math.max(1, P * 0.025); g.beginPath();
+    const len = Math.hypot(x1 - x0, y1 - y0), ux = (x1 - x0) / len, uy = (y1 - y0) / len;
+    for (let d = P * 0.12; d < len - P * 0.08; d += P * 0.14) {
+      const mx = x0 + ux * d, my = y0 + uy * d;
+      g.moveTo(mx - uy * P * 0.09, my + ux * P * 0.09); g.lineTo(mx + uy * P * 0.09, my - ux * P * 0.09);
+    }
+    g.stroke();
+    g.globalAlpha = 1; g.lineCap = 'round'; g.lineWidth = Math.max(3, P * 0.11); g.beginPath(); g.moveTo(x0 + ux * P * 0.06, y0 + uy * P * 0.06); g.lineTo(x1 - ux * P * 0.06, y1 - uy * P * 0.06); g.stroke();
+    g.strokeStyle = COL.paper; g.lineWidth = Math.max(1, P * 0.025); g.beginPath(); g.moveTo(x0 + ux * P * 0.15, y0 + uy * P * 0.15); g.lineTo(x1 - ux * P * 0.15, y1 - uy * P * 0.15); g.stroke();
+    g.lineCap = 'butt';
   }
 
   // water: a pale wash with pencil ripples
@@ -4224,6 +4487,32 @@ function drawTank(t) {
   }
 }
 
+// a portal: two turning dashed rings and a soft wash in its pair's colour
+const PORTAL_COL = ['#7a4fd0', '#1aa39a', '#c0388a'];
+function drawPortal(p) {
+  const x = p.x * P, y = p.y * P, col = PORTAL_COL[p.hue % PORTAL_COL.length], t = REDUCED ? 0 : performance.now() / 1000;
+  ctx.save(); ctx.translate(x, y);
+  ctx.globalAlpha = 0.16; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, 0, P * 0.42, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 0.9; ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.5, P * 0.05);
+  for (const [r, sp, dash] of [[0.4, 1.2, 0.16], [0.26, -1.9, 0.1]]) {
+    ctx.save(); ctx.rotate(t * sp); ctx.setLineDash([P * dash, P * dash * 0.7]);
+    ctx.beginPath(); ctx.arc(0, 0, P * r, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+  }
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, 0, P * 0.07, 0, Math.PI * 2); ctx.fill();
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+// an explosive barrel seen from above: an orange drum with a lid and a warning mark; it flashes once lit
+function drawBarrel(br) {
+  const x = br.x * P, y = br.y * P, r = C.BARREL_R * P, lit = br.fuse >= 0 && Math.floor(performance.now() / 60) % 2 === 0;
+  ctx.save(); ctx.translate(x, y);
+  ctx.globalAlpha = 0.18; ctx.fillStyle = COL.graphite; ctx.beginPath(); ctx.arc(r * 0.12, r * 0.15, r, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1; ctx.fillStyle = lit ? COL.paper : COL.pens[3]; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(1.5, P * 0.045); ctx.stroke();
+  ctx.lineWidth = Math.max(1, P * 0.025); ctx.beginPath(); ctx.arc(0, 0, r * 0.68, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = COL.graphite; ctx.beginPath(); ctx.moveTo(0, -r * 0.42); ctx.lineTo(r * 0.38, r * 0.3); ctx.lineTo(-r * 0.38, r * 0.3); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = lit ? COL.pens[3] : COL.paper; ctx.fillRect(-r * 0.05, -r * 0.18, r * 0.1, r * 0.26); ctx.fillRect(-r * 0.05, r * 0.14, r * 0.1, r * 0.09);
+  ctx.restore();
+}
 // the soccer ball: a paper ball with ink patches that turn as it rolls
 function drawBall(b) {
   const x = b.x * P, y = b.y * P, r = C.BALL_R * P;
@@ -4924,6 +5213,7 @@ function render() {
     ctx.beginPath(); ctx.arc(0, 0, P * 0.34, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     drawGlyph('gatling', P * 0.22, COL.graphite); ctx.restore(); ctx.globalAlpha = 1;
   }
+  if (matchOn) { for (const p of portals) drawPortal(p); for (const br of barrels) if (br.alive) drawBarrel(br); }
   for (const k of pickups) drawPickup(k);
   for (const mn of mines) { const a = mineAlpha(mn); if (a > 0) drawMine(mn, a); }
   if (rsv) drawShotPath();
@@ -5211,6 +5501,7 @@ window.__tank = {
   damageStruct, spawnWave, endBase, BASEMAPS, set roundTv(v) { roundT = v; },
   get zed() { return zed; }, get infWin() { return infWin; }, infect, matchDone, get rec() { return rec; }, get hl() { return hl; }, get rp() { return rp; }, get rpT() { return rpT; },
   replayPlan, skipReplay, replayText, replayItems, drawModeIcon, get lastHuman() { return lastHuman; },
+  get mirror() { return mirror; }, get portals() { return portals; }, get barrels() { return barrels; }, get noSpawn() { return noSpawn; }, GADGET_MAPS, GADGETS, mirrorBounce, lightBarrel, portalNear,
   gatPad, mineAlpha, get gatT() { return gatT; }, set gatT(v) { gatT = v; }, GATLING_MAPS,
   get myKey() { return myKey; }, get awaySince() { return awaySince; }, get lastGame() { return lastGame; }, guestReconnect, get peer() { return peer; }, get myId() { return myId; },
   get pot() { return pot; }, get ball() { return ball; }, get goalBy() { return goalBy; }, get goalCell() { return goalCell; }, SOCCERMAPS, gunWeapon, gunLadder, potatoBoom, scoreGoal,

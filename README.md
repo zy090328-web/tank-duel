@@ -4,6 +4,8 @@ A tank game drawn on graph paper, for touch-screen tablets and phones.
 
 **Who plays**
 
+The title menu goes one step at a time (mode → who plays → rules → START). On a tablet held wide it is laid out wide; a two-player match on one tablet then turns to the two ends of the tablet, while a match against the computer and online play stay wide.
+
 - **One tablet, two players:** each player holds one end of the tablet.
 - **One player against the computer:** on the title screen pick `1 + 1 CPU` … `1 + 3 CPU`.
 - **Online, 2–5 tanks on their own devices:** one player taps ONLINE → Create a game (or Direct game) and gets a 4-digit code; the others tap ONLINE → Join a game and type it. The creator picks the settings, can add computer tanks (`+ CPU`), and presses START. Each player can set a name; it is shown on the scoreboard.
@@ -16,9 +18,12 @@ A tank game drawn on graph paper, for touch-screen tablets and phones.
 | Teams | Red against Blue; shots pass through your own side. Needs 3+ tanks; teams are picked in the waiting room. | first to 3 / 5 / 7 rounds |
 | Deathmatch | Destroyed tanks come back after 2 s, untouchable for 2 s (until they fire). A kill is +1, destroying yourself −1. | 5 / 10 / 15 kills |
 | Hill | Tanks come back; a tank alone in the circle in the middle scores a point a second. | 20 / 30 / 45 seconds |
+| Infection | One tank starts as a zombie (each round a different one). A zombie has no gun: it drives faster, its FIRE button is a short dash, and touching a survivor turns that tank into a zombie on the spot. Survivors shoot; a zombie takes two shots and comes back after 3 s. A survivor destroyed by its own shot comes back as a zombie. When time is up (30 s with 2 tanks, 40 with 3, 50 with 4–5) every survivor scores; if everyone is caught, the last one caught scores. | first to 3 / 5 / 7 points |
 | Base | Two teams, each with a base and two towers on maps of their own (15×15 up to 3 tanks, 17×17 for more). Towers fire slow, non-bouncing shots at enemies within 5 cells; a base can only be hurt once one of its towers is down. Minion waves march every 20 s (two per lane, more as time goes on); they fight minions and buildings and leave tanks alone. Tanks come back at home, the wait growing with time. A base falling ends it; when time is up the side with more of its base left wins. | 4 / 6 / 8 minutes |
 
 **Terrain** (on by default; the map-extras chip switches it): **grass** hides a tank from enemies unless one is within 1.6 cells or it has just fired; **water** stops tanks but not shots. On a screen shared by two players grass hides no one. Computer tanks see only what a player on their side would see.
+
+**Replay**: in Classic, Teams, Deathmatch and Infection, the kill that ended a round is shown again in slow motion (about half speed, at most 4 s), with the path the shot took. Every device replays what it recorded itself; the host only sends the time of the kill and when the replay runs. Anyone can tap Skip.
 
 **Party rules** (Rules → Party rule): Off, Random (a different one every round) or one of eight: Super bounce, Turbo, Big tanks, Rapid fire, Pickup storm, Slow shots, Bank shots (a shot hurts only after a bounce), Fog. A rule only changes tuning values for the round; guests get the round's rule with the snapshot.
 
@@ -34,4 +39,4 @@ Served from anywhere else (no `server.js`), online play falls back to [PeerJS](h
 
 Deploy: Railway builds `server.js` on push. `deploy/setup-server.sh` sets it up on a plain Ubuntu server instead.
 
-`tests/`: Playwright tests for game modes, computer tanks, teams and names (`modes.py`, needs the server on port 8790), map checks (`maps_check.py`), base mode (`base.py`), party rules (`party.py`), the leaderboard (`board.py`, starts its own server), the bomb (`bomb.py`), coming back protected (`respawn.py`), grass and water (`terrain.py`), server-run rooms (`dedicated.py`, `dedicated_end.py`), tablet-hosted rooms (`run_test.py`, with `mockpeer.js` standing in for PeerJS), landscape controls (`land.py`), and latency/smoothness under simulated lag (`compare.py`, `smooth.py`, using the server's `TEST_LAG_MS` / `TEST_SPIKE`).
+`tests/`: Playwright tests for game modes, computer tanks, teams and names (`modes.py`, needs the server on port 8790), Infection, replays and the mode cards (`infect_replay.py`), map checks (`maps_check.py`), base mode (`base.py`), party rules (`party.py`), the leaderboard (`board.py`, starts its own server), the bomb (`bomb.py`), coming back protected (`respawn.py`), grass and water (`terrain.py`), server-run rooms (`dedicated.py`, `dedicated_end.py`), tablet-hosted rooms (`run_test.py`, with `mockpeer.js` standing in for PeerJS), landscape controls (`land.py`), and latency/smoothness under simulated lag (`compare.py`, `smooth.py`, using the server's `TEST_LAG_MS` / `TEST_SPIKE`).

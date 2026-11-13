@@ -22,6 +22,7 @@
   --violet-pen: #7b3ab4;
   --grass-pen: #5f8f2f;
   --water-ink: #3f93c9;
+  --zombie-ink: #5f6873;
   --font-display: "Gochi Hand", "Marker Felt", "Chalkboard SE", "Comic Sans MS", cursive;
   --font-body: "Patrick Hand", "Chalkboard SE", "Comic Sans MS", cursive;
   color-scheme: light;
@@ -128,6 +129,20 @@ const C = {
   RESPAWN_TIME: 2,       // deathmatch and hill: seconds before a destroyed tank comes back
   SPAWN_INV: 2,          // ...and for how long nothing can hurt it when it does (ends early once it fires)
   HILL_R: 1.5,           // hill: radius of the circle in the middle
+
+  // infection
+  INF_TIME: 50,          // seconds the survivors have to last (with 4 or 5 tanks; 40 with 3, 30 with 2)
+  ZED_SPEED: 1.12,       // a zombie drives this much faster than a tank,
+  ZED_HP: 2,             // takes two shots,
+  ZED_RESPAWN: 3,        // and comes back after this long, far from the others
+  ZED_WAKE: 1.5,         // the first zombie stands still this long when the round starts...
+  ZED_TURN: 0.8,         // ...and a tank that has just been turned, this long
+  DASH_TIME: 0.3,        // a zombie's fire button: a short burst of speed
+  DASH_SPEED: 1.9,
+  DASH_COOL: 3,
+
+  // replay of the last kill of a round
+  REPLAY_MAX: 4,         // real seconds at most
 
   // base mode
   TOWER_HP: 10,          // hits a tower takes
@@ -399,7 +414,7 @@ const COL = {
   paper: tok('--paper'), grid: tok('--grid'), margin: tok('--margin-line'),
   graphite: tok('--graphite'),
   pens: [tok('--red-pen'), tok('--blue-pen'), tok('--green-pen'), tok('--orange-pen'), tok('--violet-pen')],
-  grass: tok('--grass-pen') || '#5f8f2f', water: tok('--water-ink') || '#3f93c9'
+  grass: tok('--grass-pen') || '#5f8f2f', water: tok('--water-ink') || '#3f93c9', zombie: tok('--zombie-ink') || '#5f6873'
 };
 const PEN_NAMES = ['Red', 'Blue', 'Green', 'Orange', 'Violet'];
 /* ---------- party rules: one twist for a round, by changing the tuning above ---------- */
@@ -447,10 +462,11 @@ const AMMO_MODES = ['unlimited', 'reload', 'limited', 'single'];
 const MAP_POOLS = ['all', 'classic', 'complex'], WIN_SCORES = [3, 5, 7];
 // classic: last tank standing takes the round. teams: the same, two sides. dm: destroyed tanks come back
 // and kills are counted. hill: tanks come back, and holding the circle in the middle scores.
-const GAME_MODES = ['classic', 'teams', 'dm', 'hill', 'base'];
-const GAME_NAME = { classic: 'Classic', teams: 'Teams', dm: 'Deathmatch', hill: 'Hill', base: 'Base' };
+const GAME_MODES = ['classic', 'dm', 'hill', 'zombie', 'teams', 'base'];
+const GAME_NAME = { classic: 'Classic', teams: 'Teams', dm: 'Deathmatch', hill: 'Hill', base: 'Base', zombie: 'Infection' };
 const GAME_TEXT = {
   classic: 'Last tank standing wins the round.',
+  zombie: 'One tank starts as a zombie; anyone it touches turns. Last to survive scores.',
   teams: 'Two teams; your side cannot hit you. Needs 3 or more tanks.',
   dm: 'Destroyed tanks come back. Every kill is a point.',
   hill: 'Stand alone in the circle in the middle to score.',
@@ -547,9 +563,17 @@ const towersUp = k => structs.filter(s => s.kind === 'tower' && s.team === k && 
 const coreOpen = k => towersUp(k) < 2;                    // a base can be hurt once one of its towers is down
 // what the score shows: in base mode the health of each side's base
 const hudScore = k => settings.game === 'base' ? (coreOf(k) ? coreOf(k).hp : 0) : (scores[k] | 0);
-const hudOf = () => settings.game === 'base' ? 'base · ' + clock() : 'of ' + target();
+const hudOf = () => settings.game === 'base' ? 'base · ' + clock() : infOn() && state !== 'title' ? `of ${target()} · ${infClock()}` : 'of ' + target();
 let hillHolder = -1, hillT = [];               // hill: who holds the circle (-1 nobody, -2 contested); seconds held per tank
+// infection: which tanks are zombies (1); who scored the last round; the last tank to be caught; whose turn to start as the zombie
+let zed = [], infWin = [], lastHuman = -1, zedFirst = 0;
+const infOn = () => settings.game === 'zombie';
+const isZed = i => infOn() && zed[i] === 1;
+const infTime = () => NP <= 2 ? C.INF_TIME - 20 : NP === 3 ? C.INF_TIME - 10 : C.INF_TIME;
+const infClock = () => { const t = Math.max(0, Math.ceil(infTime() - roundT)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 const respawnMode = () => settings.game === 'dm' || settings.game === 'hill' || settings.game === 'base';
+// the match is over once someone reaches the goal (infection: one player alone at the top)
+const matchDone = () => { const top = Math.max(...scores); return top >= target() && (!infOn() || scores.filter(v => v === top).length === 1); };
 const teamsOn = () => (settings.game === 'teams' && NP > 2) || settings.game === 'base';
 const pickTeams = () => settings.game === 'teams' || settings.game === 'base';      // the waiting room shows team choices
 const target = () => settings.game === 'dm' ? KILL_GOAL[settings.winScore] : settings.game === 'hill' ? HILL_GOAL[settings.winScore]
@@ -557,10 +581,11 @@ const target = () => settings.game === 'dm' ? KILL_GOAL[settings.winScore] : set
 // base mode: time left, as m:ss
 const clock = () => { const t = Math.max(0, Math.ceil(target() - roundT)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 const goalText = () => settings.game === 'dm' ? `first to ${target()} kills` : settings.game === 'hill' ? `hold it for ${target()} s`
-  : settings.game === 'base' ? `${clock()} left` : `first to ${target()}`;
-const penOf = i => teamsOn() ? COL.pens[(teamOf[i] ?? i % 2) ? 1 : 0] : (COL.pens[i] || COL.graphite);
+  : settings.game === 'base' ? `${clock()} left` : infOn() && state !== 'title' && !NET_SCREENS.includes(state) ? `first to ${target()} · ${infClock()} left` : `first to ${target()}`;
+const basePen = i => teamsOn() ? COL.pens[(teamOf[i] ?? i % 2) ? 1 : 0] : (COL.pens[i] || COL.graphite);
+const penOf = i => isZed(i) && state !== 'matchEnd' ? COL.zombie : basePen(i);
 const sideOf = i => teamsOn() ? (teamOf[i] ? 1 : 0) : i;          // what scores[] is counted by: team or tank
-const canHurt = (owner, t) => owner === t.id || !teamsOn() || teamOf[owner] !== teamOf[t.id];
+const canHurt = (owner, t) => owner === t.id || (infOn() ? zed[owner] !== zed[t.id] : !teamsOn() || teamOf[owner] !== teamOf[t.id]);
 const champion = () => { if (settings.game === 'base') return baseWinner; let b = 0; scores.forEach((v, i) => { if (v > scores[b]) b = i; }); return b; };
 const cleanName = v => String(v == null ? '' : v).replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 12);
 const nameOf = i => names[i] || (bots.has(i) ? 'CPU' : teamsOn() ? 'Player ' + (i + 1) : PEN_NAMES[i]);
@@ -571,7 +596,7 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, dash: 0, dcool: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
 let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], particles = [], marks = [];
@@ -690,10 +715,10 @@ function addTerrain(rot4, starts) {
 const grassAt = (x, y) => { const c = Math.floor(x), r = Math.floor(y); return c >= 0 && r >= 0 && c < COLS && r < ROWS && grass[r * COLS + c] === 1; };
 // in grass and not given away by a recent shot
 const concealed = t => settings.terrain && t.alive && !(t.reveal > 0) && grassAt(t.x, t.y);
-const friendOf = (a, b) => a === b || (teamsOn() && teamOf[a] === teamOf[b]);
+const friendOf = (a, b) => a === b || (infOn() ? (zed[a] | 0) === (zed[b] | 0) : teamsOn() && teamOf[a] === teamOf[b]);
 // can the side of seat `viewer` see tank t? A concealed tank shows only to its own side and to enemies right beside it.
 function seenBy(viewer, t) {
-  if (viewer < 0 || friendOf(viewer, t.id)) return true;
+  if (replayView || viewer < 0 || friendOf(viewer, t.id)) return true;
   // grass hides a tank but for enemies right beside it; fog (a party rule) hides it but for enemies a few cells away
   const range = concealed(t) ? C.GRASS_SEE : mutNow === 'fog' && t.alive && !(t.reveal > 0) ? C.FOG_SEE : 0;
   if (!range) return true;
@@ -904,8 +929,9 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0;
-    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0;
+    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.hp = 0; t.stun = 0; t.dash = 0; t.dcool = 0;
   });
+  rec.frames = []; rec.t = 0; rec.tick = 0; hl = null; rp = null; shotNow = null;
   hillHolder = -1;
   minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
   bullets = []; missiles = []; mines = []; pickups = []; beams = []; rings = []; particles = []; marks = [];
@@ -927,6 +953,7 @@ function reportResult() {
 }
 function startMatch() {
   matchId = Math.random().toString(36).slice(2, 12);
+  zedFirst = (Math.random() * NP) | 0;
   // teams need both sides manned
   teamOf = tanks.map(t => teamOf[t.id] ? 1 : 0);
   if (NP > 2 || settings.game === 'base') for (const k of [0, 1]) if (!teamOf.includes(k)) teamOf[NP - 1] = k;
@@ -944,6 +971,12 @@ function startRound() {
   applyMut(pickMut());
   loadMap(mapOrder[mapIdx % mapOrder.length]);
   resetEntities();
+  zed = tanks.map(() => 0); infWin = []; lastHuman = -1;
+  if (infOn()) {
+    let k = (zedFirst + mapIdx) % NP;
+    for (let n = 0; n < NP && tanks[k].gone; n++) k = (k + 1) % NP;
+    zed[k] = 1; tanks[k].hp = C.ZED_HP; tanks[k].stun = C.ZED_WAKE;
+  }
   roundId++;
   state = 'countdown'; stateT = 0; lastCount = 0; winner = -1; drawReason = '';
   layout();
@@ -961,14 +994,21 @@ function goMenu() {
   if (mode !== 'local') netLeave();
   applyMut('');
   state = 'title'; stateT = 0; resumeMatch = false; mapIdx = 0; quitArm = 0; menuStep = 'mode'; menuFocus = ''; lobbyPane = '';
-  soloMatch = false; bots = new Set(); teamOf = []; names = []; stats = [];
+  soloMatch = false; bots = new Set(); teamOf = []; names = []; stats = []; zed = []; infWin = [];
   setTankCount(2); scores = [0, 0]; viewFlip = false;
   loadMap(0); resetEntities(); layout();
 }
 function finishRound() {
-  drawReason = '';
+  drawReason = ''; rp = null;
   if (respawnMode()) winner = champion();                 // the match is over: whoever reached the goal
-  else {
+  else if (infOn()) {
+    // infection: everyone still not caught scores; if all were caught, the last one to go does
+    const left = tanks.filter(o => !o.gone && !zed[o.id]).map(o => o.id);
+    infWin = left.length ? left : lastHuman >= 0 ? [lastHuman] : [];
+    for (const i of infWin) scores[i]++;
+    winner = infWin.length === 1 ? infWin[0] : infWin.length ? -3 : -1;
+    if (infWin.length) sfx.point();
+  } else {
     const sides = new Set(tanks.filter(t => t.alive).map(t => sideOf(t.id)));
     winner = sides.size === 1 ? [...sides][0] : -1;
     if (winner >= 0) { scores[winner]++; sfx.point(); }
@@ -1008,6 +1048,7 @@ function respawnTank(t) {
   t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
   t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.fireQ = 0;
   t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.ai = null;
+  if (isZed(t.id)) { t.inv = 0; t.hp = C.ZED_HP; t.stun = 0.3; t.dash = 0; t.dcool = 0; }
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
   sfx.spawn(); netEv('spawn', t.id, r2(t.x), r2(t.y));
 }
@@ -1230,7 +1271,7 @@ function muzzle(t, rad) {
 }
 
 function fire(t) {
-  if (!t.alive) return false;
+  if (!t.alive || isZed(t.id)) return false;             // zombies have no gun
   if (t.guided) {                                      // second press: set the guided missile off
     if (t.guided.age < C.GUIDED_ARM) return false;
     t.guided.detonate = true; return true;
@@ -1306,6 +1347,12 @@ function usePower(t) {
 // Every hit goes through here: a shield takes one hit in the tank's place.
 function hit(t, by = -1) {
   if (t.inv > 0) return false;                           // just came back: untouchable
+  if (isZed(t.id) && t.hp > 1) {                         // a zombie shrugs off the first shot, staggered
+    t.hp--; t.stun = Math.max(t.stun, 0.3);
+    rings.push({ x: t.x, y: t.y, r: 0.7, life: 0.3, max: 0.3, col: COL.zombie });
+    sfx.crack(); netEv('block', t.id, r2(t.x), r2(t.y));
+    return false;
+  }
   if (t.shield > 0) {
     t.shield = 0;
     rings.push({ x: t.x, y: t.y, r: 0.75, life: 0.3, max: 0.3, col: penOf(t.id) });
@@ -1338,14 +1385,16 @@ function fireLaser(t) {
     }
     for (let j = minions.length - 1; j >= 0; j--) if (minions[j].team !== ot && pathDist(path, minions[j].x, minions[j].y) < C.MINION_R + 0.05) killMinion(j);
   }
+  shotNow = { age: C.LASER_CHARGE, id: -1, n: path.length - 2 };
   for (const o of tanks) if (o !== t && o.alive && canHurt(t.id, o) && pathDist(path, o.x, o.y) < C.TANK_R * 0.92 + 0.04) hit(o, t.id);
+  shotNow = null;
 }
 
 // the closest living tank on another side than `id` (falls back to `id` itself when nobody is left)
 function nearestEnemy(id, x, y) {
   let best = id, bd = Infinity;
   for (const o of tanks) {
-    if (o.id === id || !o.alive || (teamsOn() && teamOf[o.id] === teamOf[id])) continue;
+    if (o.id === id || !o.alive || friendOf(o.id, id)) continue;
     const d = Math.hypot(o.x - x, o.y - y);
     if (d < bd) { bd = d; best = o.id; }
   }
@@ -1388,10 +1437,13 @@ function blast(m) {
     for (const s of structs) if (s.team !== ot && s.hp > 0 && Math.hypot(s.x - m.x, s.y - m.y) < R + 0.6) damageStruct(s, m.type === 'bomb' ? 3 : 2, m.owner);
     for (let j = minions.length - 1; j >= 0; j--) if (minions[j].team !== ot && Math.hypot(minions[j].x - m.x, minions[j].y - m.y) < R + C.MINION_R) killMinion(j);
   }
+  const was = shotNow; shotNow = { age: m.age || 0, id: -1, n: 0 };
   for (const t of tanks) if (t.alive && t.id !== spare && canHurt(m.owner, t) && Math.hypot(t.x - m.x, t.y - m.y) < R) hit(t, m.owner);
+  shotNow = was;
 }
 
 function kill(t, by = -1) {
+  if (state === 'play' || state === 'ending') noteKill(t.id, by);
   t.alive = false; t.charge = 0;
   const seed = (Math.random() * 1e9) | 0;
   marks.push({ x: t.x, y: t.y, col: penOf(t.id), seed });
@@ -1404,6 +1456,12 @@ function kill(t, by = -1) {
   sfx.boom();
   if (stats[t.id]) stats[t.id].d++;
   if (by >= 0 && by !== t.id && stats[by]) stats[by].k++;
+  if (infOn()) {
+    // a zombie comes back; a survivor who is destroyed (by a stray shot of its own) comes back as one
+    if (!zed[t.id]) { zed[t.id] = 1; purgeOwned(t.id); humanGone(t.id); }
+    t.respawn = C.ZED_RESPAWN;
+    return;
+  }
   if (respawnMode()) {
     t.respawn = C.RESPAWN_TIME + (settings.game === 'base' ? roundT * C.RESPAWN_GROW : 0);
     if (settings.game === 'dm' && state === 'play') {
@@ -1414,6 +1472,51 @@ function kill(t, by = -1) {
     return;
   }
   if (state === 'play' && roundOver()) { state = 'ending'; stateT = 0; }
+}
+
+/* ---------- infection ---------- */
+// a tank that changes sides takes nothing of its own along: its shots, missiles and mines go
+// (the lists are cleared at the end of the physics step, as this can happen while they are being walked)
+let purgeIds = [];
+function purgeOwned(id) {
+  const t = tanks[id];
+  purgeIds.push(id);
+  if (t) { t.guided = null; t.power = null; t.charge = 0; t.laserPath = null; t.shield = 0; }
+}
+function purgeNow() {
+  if (!purgeIds.length) return;
+  const ids = new Set(purgeIds); purgeIds = [];
+  bullets = bullets.filter(b => !ids.has(b.owner));
+  missiles = missiles.filter(m => !ids.has(m.owner));
+  mines = mines.filter(m => !ids.has(m.owner));
+}
+// a zombie touched a survivor: it turns where it stands, and waits a moment before it can move
+function infect(t, by) {
+  if (zed[t.id] || !t.alive) return;
+  if (state === 'play' || state === 'ending') noteKill(t.id, by, true);
+  zed[t.id] = 1; purgeOwned(t.id);
+  t.hp = C.ZED_HP; t.stun = C.ZED_TURN; t.inv = 0; t.reveal = 0; t.dash = 0; t.dcool = C.DASH_COOL * 0.5; t.ai = null;
+  if (stats[t.id]) stats[t.id].d++;
+  if (by >= 0 && stats[by]) stats[by].k++;
+  rings.push({ x: t.x, y: t.y, r: 0.9, life: 0.45, max: 0.45, col: COL.zombie });
+  for (let i = 0; i < 18; i++) {
+    const a = Math.random() * Math.PI * 2, s = 0.8 + Math.random() * 2.5, life = 0.3 + Math.random() * 0.4;
+    particles.push({ x: t.x, y: t.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 2 ? COL.zombie : basePen(t.id), size: 0.04 + Math.random() * 0.04 });
+  }
+  shake = Math.max(shake, 0.2); sfx.crack(); sfx.boom();
+  netEv('infect', t.id, r2(t.x), r2(t.y));
+  humanGone(t.id);
+}
+// a survivor is gone: once nobody is left, the round ends (the last one caught scores)
+function humanGone(id) {
+  if (tanks.some(o => !o.gone && !zed[o.id])) return;
+  lastHuman = id;
+  if (state === 'play') { state = 'ending'; stateT = 0; }
+}
+// how fast a tank drives: zombies are quicker, and quicker still in a dash; a stunned one stands
+function driveSpeed(t) {
+  if (t.stun > 0) return 0;
+  return C.TANK_SPEED * (isZed(t.id) ? C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) : 1);
 }
 
 let lastBounceSound = 0;
@@ -1449,7 +1552,7 @@ function spawnPickups() {
 /* ---------- sudden death: the arena closes in, one ring of cells at a time ---------- */
 const ringOf = (c, r) => Math.min(c, r, COLS - 1 - c, ROWS - 1 - r);     // 0 = outer edge
 const ringCount = () => Math.ceil(Math.min(COLS, ROWS) / 2);
-const sdOn = () => C.SUDDEN_DEATH_TIME > 0 && !respawnMode() && roundT >= C.SUDDEN_DEATH_TIME;
+const sdOn = () => C.SUDDEN_DEATH_TIME > 0 && !respawnMode() && !infOn() && roundT >= C.SUDDEN_DEATH_TIME;
 function closeRing(k) {
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
     if (ringOf(c, r) === k && !walls[r][c]) { walls[r][c] = true; crushed[r * COLS + c] = 1; water[r * COLS + c] = grass[r * COLS + c] = 0; }
@@ -1523,6 +1626,7 @@ function botInput(seat) {
   const t = tanks[seat], dt = C.STEP;
   if (!t || (state !== 'play' && state !== 'ending')) return IDLE;
   const ai = t.ai || (t.ai = { replan: 0, wp: null, react: 0.4 + Math.random() * 0.5, dodge: 0, da: 0, wander: 0, wa: 0, chk: 0.6, px: t.x, py: t.y });
+  if (isZed(seat)) return zedBot(seat, t, ai);
   let fi = -1, fd = Infinity;
   for (const o of tanks) {
     if (!o.alive || friendOf(seat, o.id) || !seenBy(seat, o)) continue;
@@ -1587,7 +1691,7 @@ function botInput(seat) {
     for (const k of pickups) { const d = Math.hypot(k.x - t.x, k.y - t.y); if (d < bd) { bd = d; bk = k; } }
     if (bk) { goal = bk; fight = false; }
   }
-  if (!goal) goal = ai.last;
+  if (!goal && !infOn()) goal = ai.last;                     // (a survivor does not go looking for a zombie)
   if (!goal) {                                               // nobody in sight: roam to somewhere else on the map
     if (!ai.roam || (ai.roam.t -= dt) <= 0 || Math.hypot(ai.roam.x - t.x, ai.roam.y - t.y) < 0.8) {
       ai.roam = null;
@@ -1600,9 +1704,27 @@ function botInput(seat) {
 
   if (hasFoe && los) {
     const off = Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle));
-    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0 && !(foe.inv > 0) && !(t.power === 'bomb' && dFoe > C.BOMB_SPEED * C.BOMB_LIFE + 0.5)) { pressFire(seat); ai.react = 0.3 + Math.random() * 0.55; }
+    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0 && !(foe.inv > 0) && !(t.power === 'bomb' && dFoe > C.BOMB_SPEED * C.BOMB_LIFE + 0.5)) { pressFire(seat); ai.react = infOn() ? 0.1 + Math.random() * 0.2 : 0.3 + Math.random() * 0.55; }
   } else if (hasFoe && ai.react <= 0 && (t.power === 'homing' || t.power === 'guided' || t.power === 'mine')) {
     pressFire(seat); ai.react = 0.6;                         // missiles and mines do not need a clear line
+  }
+  if (infOn() && hasFoe) {
+    // a survivor keeps its distance from a zombie: shoots it from afar, backs off when it comes close
+    if (dFoe < 1.7) return unitTo(t.x - foe.x, t.y - foe.y, 1);
+    if (los) return unitTo(foe.x - t.x, foe.y - t.y, 0.04);
+    if (!ai.flee || (ai.flee.t -= dt) <= 0 || Math.hypot(ai.flee.x - t.x, ai.flee.y - t.y) < 0.8) {
+      ai.flee = null;                                          // somewhere reachable, away from it
+      const d = distField(Math.floor(t.x), Math.floor(t.y));
+      let best = -1;
+      for (let k = 0; k < 40; k++) {
+        const i = (Math.random() * d.length) | 0;
+        if (d[i] < 2 || d[i] > 9) continue;
+        const x = i % COLS + 0.5, y = ((i / COLS) | 0) + 0.5, v = Math.hypot(x - foe.x, y - foe.y) - Math.hypot(x - t.x, y - t.y) * 0.3;
+        if (v > best) { best = v; ai.flee = { x, y, t: 2.5 }; }
+      }
+    }
+    goal = ai.flee; fight = false;
+    if (!goal) return IDLE;
   }
   if (fight && los) return unitTo(foe.x - t.x, foe.y - t.y, dFoe > 3 ? 1 : 0.04);
 
@@ -1617,6 +1739,43 @@ function botInput(seat) {
   return unitTo(ai.wp.x - t.x, ai.wp.y - t.y, 1);
 }
 
+// infection: a computer zombie goes for the nearest survivor it can find, and dashes at it when it is close
+function zedBot(seat, t, ai) {
+  const dt = C.STEP;
+  if (!t.alive || t.stun > 0) return IDLE;
+  let foe = null, fd = Infinity;
+  for (const o of tanks) {
+    if (!o.alive || o.gone || zed[o.id] || o.inv > 0) continue;
+    const d = Math.hypot(o.x - t.x, o.y - t.y);
+    if (d < fd && (seenBy(seat, o) || d < 2.5)) { fd = d; foe = o; }
+  }
+  if (foe) ai.last = { x: foe.x, y: foe.y, t: 3 };
+  else if (ai.last && ((ai.last.t -= dt) <= 0 || Math.hypot(ai.last.x - t.x, ai.last.y - t.y) < 0.6)) ai.last = null;
+  const clear = foe && lineClear(t.x, t.y, foe.x, foe.y, C.TANK_R * 0.9);
+  ai.react -= dt;
+  if (clear && fd < 2.3 && t.dcool <= 0 && ai.react <= 0) { pressFire(seat); ai.react = 0.4; }
+  if (clear) return unitTo(foe.x - t.x, foe.y - t.y, 1);
+  let goal = foe || ai.last;
+  if (!goal) {
+    if (!ai.roam || (ai.roam.t -= dt) <= 0 || Math.hypot(ai.roam.x - t.x, ai.roam.y - t.y) < 0.8) {
+      ai.roam = null;
+      const d = distField(Math.floor(t.x), Math.floor(t.y));
+      for (let k = 0; k < 30 && !ai.roam; k++) { const i = (Math.random() * d.length) | 0; if (d[i] > 3) ai.roam = { x: i % COLS + 0.5, y: ((i / COLS) | 0) + 0.5, t: 5 }; }
+    }
+    goal = ai.roam;
+  }
+  if (!goal) return IDLE;
+  ai.replan -= dt;
+  if (ai.replan <= 0 || !ai.wp) { ai.replan = 0.2; ai.wp = planWaypoint(t, goal, C.TANK_R + 0.04, true); }
+  ai.chk -= dt;
+  if (ai.chk <= 0) {
+    if (Math.hypot(t.x - ai.px, t.y - ai.py) < 0.1) { ai.wander = 0.45; ai.wa = Math.random() * Math.PI * 2; ai.wp = null; }
+    ai.chk = 0.6; ai.px = t.x; ai.py = t.y;
+  }
+  if (ai.wander > 0) { ai.wander -= dt; return { x: Math.cos(ai.wa), y: Math.sin(ai.wa), mag: 1 }; }
+  if (!ai.wp) return IDLE;
+  return unitTo(ai.wp.x - t.x, ai.wp.y - t.y, 1);
+}
 // base mode: where a computer tank goes, and what it aims at on the way ({x, y} to drive to; ax, ay to shoot at)
 function baseGoal(seat, t) {
   const team = teamOf[seat] ? 1 : 0;
@@ -1667,7 +1826,7 @@ function stepPhysics(dt, lethal, control) {
   LETHAL = lethal;
   for (const t of tanks) {
     if (!t.alive) {
-      if (lethal && respawnMode() && !t.gone && t.respawn > 0 && (t.respawn -= dt) <= 0) respawnTank(t);
+      if (lethal && (respawnMode() || isZed(t.id)) && !t.gone && t.respawn > 0 && (t.respawn -= dt) <= 0) respawnTank(t);
       continue;
     }
     t.cool = Math.max(0, t.cool - dt);
@@ -1675,8 +1834,9 @@ function stepPhysics(dt, lethal, control) {
     t.shield = Math.max(0, t.shield - dt);
     t.reveal = Math.max(0, t.reveal - dt);
     t.inv = Math.max(0, t.inv - dt);
+    t.stun = Math.max(0, t.stun - dt); t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt);
     if (t.reload > 0) { t.reload -= dt; if (t.reload <= 0) { t.reload = 0; t.ammo = clipSize(); sfx.reloaded(); netEv('sfx', 'reloaded', t.id); } }
-    const locked = t.charge > 0 || t.guided !== null;      // charging a laser or steering a missile: the tank stands still
+    const locked = t.charge > 0 || t.guided !== null || t.stun > 0;   // charging a laser, steering a missile or stunned: the tank stands still
     if (t.charge > 0) {
       t.charge -= dt;
       t.laserPath = tracePath(t.x, t.y, t.angle);
@@ -1686,16 +1846,20 @@ function stepPhysics(dt, lethal, control) {
     if (inp.mag > 0) {
       // the stick sets a target heading; the tank turns toward it at a limited rate
       const diff = wrapAngle(Math.atan2(inp.y, inp.x) - t.angle);
-      const maxTurn = C.TURN_RATE * dt;
+      const maxTurn = C.TURN_RATE * (isZed(t.id) ? 1.2 : 1) * dt;
       t.angle = wrapAngle(t.angle + clamp(diff, -maxTurn, maxTurn));
       // drive forward only as far as the tank already points the right way (pivot first, then go)
-      const speed = C.TANK_SPEED * inp.mag * Math.max(0, Math.cos(diff));
+      const speed = driveSpeed(t) * inp.mag * Math.max(0, Math.cos(diff));
       t.x += Math.cos(t.angle) * speed * dt;
       t.y += Math.sin(t.angle) * speed * dt;
     }
     resolveCircle(t, C.TANK_R, true);
-    if (t.fireQ > 0) { if (control && fire(t)) { t.fireQ = 0; t.reveal = C.GRASS_REVEAL; t.inv = 0; } else t.fireQ -= dt; }
-    if (!t.power && !t.guided && t.charge <= 0) {
+    if (t.fireQ > 0 && isZed(t.id)) {
+      // a zombie cannot shoot: its button is a dash
+      if (control && t.dcool <= 0 && t.stun <= 0) { t.dash = C.DASH_TIME; t.dcool = C.DASH_COOL; t.fireQ = 0; t.reveal = C.GRASS_REVEAL; sfx.launch(); netEv('sfx', 'launch'); }
+      else t.fireQ -= dt;
+    } else if (t.fireQ > 0) { if (control && fire(t)) { t.fireQ = 0; t.reveal = C.GRASS_REVEAL; t.inv = 0; } else t.fireQ -= dt; }
+    if (!t.power && !t.guided && t.charge <= 0 && !isZed(t.id)) {
       for (let i = pickups.length - 1; i >= 0; i--) {
         const k = pickups[i];
         if (Math.hypot(k.x - t.x, k.y - t.y) < C.TANK_R + 0.24) { t.power = k.type; pickups.splice(i, 1); sfx.pickup(); netEv('sfx', 'pickup', t.id); break; }
@@ -1711,6 +1875,17 @@ function stepPhysics(dt, lethal, control) {
       const push = (min - d) / 2;
       a.x -= dx / d * push; a.y -= dy / d * push; b2.x += dx / d * push; b2.y += dy / d * push;
       resolveCircle(a, C.TANK_R, true); resolveCircle(b2, C.TANK_R, true);
+    }
+  }
+
+  // infection: a zombie that touches a survivor turns it (a shield stops one touch)
+  if (lethal && infOn()) for (const z of tanks) {
+    if (!z.alive || !zed[z.id] || z.stun > 0) continue;
+    for (const h of tanks) {
+      if (!h.alive || h.gone || zed[h.id] || h.inv > 0) continue;
+      if (Math.hypot(h.x - z.x, h.y - z.y) > C.TANK_R * 2 + 0.07) continue;
+      if (h.shield > 0) { hit(h, z.id); z.stun = 0.5; continue; }
+      infect(h, z.id);
     }
   }
 
@@ -1759,7 +1934,8 @@ function stepPhysics(dt, lethal, control) {
       const dx = b.x - t.x, dy = b.y - t.y;
       if (dx * dx + dy * dy < hitR * hitR) {
         if (b.owner !== t.id && !b.extra && stats[b.owner]) stats[b.owner].h++;
-        hit(t, b.owner); bullets.splice(i, 1); break;
+        shotNow = { age: b.age, id: b.id, n: b.bounces };
+        hit(t, b.owner); shotNow = null; bullets.splice(i, 1); break;
       }
     }
   }
@@ -1812,7 +1988,7 @@ function stepPhysics(dt, lethal, control) {
       if (Math.hypot(t.x - m.x, t.y - m.y) >= mHit) continue;
       removeMissile(i);
       if (m.type !== 'homing') blast(m);
-      else if (lethal) hit(t, m.owner);
+      else if (lethal) { shotNow = { age: m.age, id: -1, n: 0 }; hit(t, m.owner); shotNow = null; }
       else puff(m.x, m.y, m.owner);
       break;
     }
@@ -1827,6 +2003,7 @@ function stepPhysics(dt, lethal, control) {
     if (mn.armed && lethal && !mn.boom) for (const t of tanks) if (t.alive && !(t.inv > 0) && canHurt(mn.owner, t) && Math.hypot(t.x - mn.x, t.y - mn.y) < C.MINE_TRIGGER) mn.boom = true;
     if (mn.boom) { mines.splice(i, 1); blast(mn); }
   }
+  purgeNow();
 }
 
 function update(dt) {
@@ -1843,6 +2020,7 @@ function update(dt) {
   for (let i = rings.length - 1; i >= 0; i--) { rings[i].life -= dt; if (rings[i].life <= 0) rings.splice(i, 1); }
   for (const k of pickups) k.age += dt;
   for (const st of structs) st.flash = Math.max(0, st.flash - dt);
+  if (state === 'replay') stepReplay(dt); else if (rpPrev >= 0) { rpPrev = -1; rpParts = []; rpRings = []; rpT = 0; }
   if (mode === 'guest') { guestStep(dt); return; }
   if (mode === 'host') hostStep(dt);
 
@@ -1855,8 +2033,10 @@ function update(dt) {
     }
     case 'play':
       stepPhysics(dt, true, true);
+      recStep(dt);
       if (state !== 'play') break;
       roundT += dt;
+      if (infOn() && roundT >= infTime()) { finishRound(); break; }
       if (settings.game === 'hill') { hillStep(dt); if (state !== 'play') break; }
       if (baseOn()) { baseStep(dt); if (state !== 'play') break; }
       if (sdOn()) {
@@ -1880,18 +2060,171 @@ function update(dt) {
       break;
     case 'ending':
       stepPhysics(dt, true, true);
-      if (stateT >= C.DRAW_WINDOW) finishRound();
+      recStep(dt);
+      if (stateT >= C.DRAW_WINDOW) {
+        // the last kill again, slowly, if it is what ended the round
+        const p = replayPlan();
+        if (p) { rp = p; state = 'replay'; stateT = 0; } else finishRound();
+      }
+      break;
+    case 'replay':
+      if (!rp || stateT >= rp.dur + 0.4) finishRound();
       break;
     case 'result':
       stepPhysics(dt, false, true);
       if (stateT >= (respawnMode() ? 0.4 : 1.6)) {
-        if (respawnMode() || scores.some(n => n >= target())) { state = 'matchEnd'; stateT = 0; sfx.win(); reportResult(); }
+        if (respawnMode() || matchDone()) { state = 'matchEnd'; stateT = 0; sfx.win(); reportResult(); }
         else { mapIdx++; startRound(); }
       }
       break;
     case 'matchEnd': stepPhysics(dt, false, false); break;
   }
 }
+
+/* ---------- replay: the last few seconds of a round are kept, and the kill that ended it is shown again slowly ----------
+   Every device records what it shows (60 times a second), so the replay needs nothing extra from the network
+   but the time of the kill; the host decides when the replay runs and how long it takes. */
+const rec = { frames: [], t: 0, tick: 0 };   // t: seconds of play this round (the replay's clock)
+let hl = null;          // the round's last kill: { t, age: how long the shot had been flying, v: victim, k: killer, b: bullet id or -1, n: bounces, touch }
+let rp = null;          // the replay being shown: { from, to, dur, speed }
+let rpT = 0, rpPrev = -1, rpParts = [], rpRings = [], replayView = false;
+let shotNow = null;     // the shot that is hitting a tank right now
+function noteKill(v, by, touch) {
+  const s = shotNow || { age: 1.2, id: -1, n: 0 };
+  hl = { t: rec.t, age: s.age, v, k: by, b: touch ? -1 : s.id, n: touch ? 0 : s.n, touch: !!touch };
+}
+function recFrame() {
+  rec.frames.push({ t: rec.t,
+    T: tanks.map(o => [o.x, o.y, o.angle, (o.alive ? 1 : 0) | (o.shield > 0 ? 2 : 0) | (o.power ? 4 : 0) | (o.gone ? 8 : 0), penOf(o.id)]),
+    B: bullets.map(b => [b.id, b.x, b.y, penOf(b.owner), b.pierce ? 1 : 0]),
+    M: missiles.map(m => [m.id, m.x, m.y, m.angle, m.owner, m.type]),
+    N: mines.map(n => [n.x, n.y, n.owner, n.armed ? 1 : 0]),
+    L: beams.map(b => [b.path, penOf(b.owner), b.life / b.max]),
+    K: marks.length });
+  while (rec.frames.length > 2 && rec.t - rec.frames[0].t > 6) rec.frames.shift();
+}
+// host and one screen: the clock runs through play and the moment after the kill
+function recStep(dt) {
+  rec.t += dt;
+  if (!HEADLESS && (++rec.tick & 1) === 0) recFrame();
+}
+// from a little before the killing shot was fired to a little after it struck, at about half speed
+function replayPlan() {
+  if (!hl || rec.t - hl.t > 2) return null;
+  if (settings.game === 'hill' || settings.game === 'base') return null;   // those end by holding or by buildings, not by a kill
+  if (!HEADLESS && rec.frames.length < 10) return null;
+  const from = Math.max(0, hl.t - clamp(hl.age + 0.45, 0.9, 3.2)), to = Math.min(rec.t, hl.t + 0.75);
+  const span = to - from, dur = clamp(span / 0.5, 1.6, C.REPLAY_MAX);
+  return { from: r2(from), to: r2(to), dur: r2(dur), speed: span / dur };
+}
+const rpNow = () => rp ? rp.from + Math.min(rpT, rp.dur) * rp.speed : 0;
+// the two recorded frames around replay time t
+function framePair(t) {
+  const f = rec.frames;
+  let i = 0;
+  while (i < f.length - 2 && f[i + 1].t <= t) i++;
+  const a = f[i], b = f[Math.min(i + 1, f.length - 1)];
+  return { a, b, k: b === a || b.t <= a.t ? 0 : clamp((t - a.t) / (b.t - a.t), 0, 1), i };
+}
+function skipReplay() {
+  if (state !== 'replay') return;
+  if (mode === 'guest') { sendCmd('skip'); return; }
+  finishRound();
+}
+// the replay's own sparks: a burst where a tank went down, slowed like everything else
+function stepReplay(dt) {
+  if (mode !== 'guest') rpT = stateT; else rpT += dt;
+  if (!rp || !rec.frames.length) return;
+  const now = rpNow(), sd = dt * rp.speed;
+  if (rpPrev >= 0 && now > rpPrev) {
+    const A = framePair(rpPrev).a, B = framePair(now).b;
+    if (A && B) A.T.forEach((q, i) => {
+      const r = B.T[i];
+      if (!r) return;
+      if ((q[3] & 1) && !(r[3] & 1)) {           // destroyed
+        for (let n = 0; n < 34; n++) {
+          const a = Math.random() * Math.PI * 2, s = 1 + Math.random() * 4.5, life = 0.5 + Math.random() * 0.7;
+          rpParts.push({ x: q[0], y: q[1], vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: n % 3 ? q[4] : COL.graphite, size: 0.04 + Math.random() * 0.06 });
+        }
+        rpRings.push({ x: q[0], y: q[1], r: 1.1, life: 0.7, max: 0.7, col: q[4] });
+        sfx.boom();
+      } else if (q[4] !== r[4] && (r[3] & 1)) {   // turned (infection)
+        rpRings.push({ x: r[0], y: r[1], r: 1.0, life: 0.7, max: 0.7, col: r[4] }); sfx.crack();
+      }
+    });
+  }
+  rpPrev = now;
+  for (let i = rpParts.length - 1; i >= 0; i--) {
+    const p = rpParts[i];
+    p.life -= sd; if (p.life <= 0) { rpParts.splice(i, 1); continue; }
+    p.x += p.vx * sd; p.y += p.vy * sd; const drag = 1 - 3.2 * sd; p.vx *= drag; p.vy *= drag;
+  }
+  for (let i = rpRings.length - 1; i >= 0; i--) { rpRings[i].life -= sd; if (rpRings[i].life <= 0) rpRings.splice(i, 1); }
+}
+// swap the live world for the recorded one while it is drawn (and back afterwards)
+function enterReplayWorld() {
+  const now = rpNow(), { a, b, k } = framePair(now);
+  if (!a) return null;
+  const saved = { tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells };
+  const lerp = (p, q) => p + (q - p) * k, lerpA = (p, q) => wrapAngle(p + wrapAngle(q - p) * k);
+  tanks = a.T.map((q, i) => {
+    const r = b.T[i] || q, o = makeTank(i);
+    o.x = lerp(q[0], r[0]); o.y = lerp(q[1], r[1]); o.angle = lerpA(q[2], r[2]);
+    o.alive = !!(q[3] & 1) && !(q[3] & 8); o.shield = q[3] & 2 ? 1 : 0; o.power = q[3] & 4 ? 'laser' : null; o.pen = q[4];
+    return o;
+  });
+  // bullets, with trails from the frames before
+  const byA = new Map(a.B.map(q => [q[0], q]));
+  const f = rec.frames, idx = framePair(now).i;
+  bullets = b.B.filter(q => byA.has(q[0])).map(q => {
+    const p = byA.get(q[0]), trail = [];
+    for (let j = idx; j >= 0 && now - f[j].t < 0.4; j--) { const e = f[j].B.find(x => x[0] === q[0]); if (!e) break; trail.unshift(e[1], e[2]); }
+    return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), owner: 0, pen: q[3], pierce: !!q[4], age: 0, life: 99, trail };
+  });
+  const mA = new Map(a.M.map(q => [q[0], q]));
+  missiles = b.M.filter(q => mA.has(q[0])).map(q => { const p = mA.get(q[0]); return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), angle: lerpA(p[3], q[3]), owner: q[4], type: q[5], target: -1, age: 1 }; });
+  mines = a.N.map(q => ({ x: q[0], y: q[1], owner: q[2], armed: !!q[3], age: 2 }));
+  beams = a.L.map(q => ({ path: q[0], owner: 0, pen: q[1], life: q[2], max: 1 }));
+  particles = rpParts; rings = rpRings; marks = saved.marks.slice(0, a.K); pickups = []; minions = []; shells = [];
+  replayView = true;
+  return saved;
+}
+function leaveReplayWorld(sv) {
+  ({ tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells } = sv);
+  replayView = false;
+}
+// the path the killing shot took, drawn faintly behind it as it flies
+function drawShotPath() {
+  if (!hl || hl.b < 0) return;
+  const now = rpNow(), pts = [];
+  let pen = COL.graphite;
+  for (const fr of rec.frames) {
+    if (fr.t < rp.from) continue;
+    if (fr.t > now) break;
+    const e = fr.B.find(x => x[0] === hl.b);
+    if (e) { pts.push(e[1], e[2]); pen = e[3]; }
+  }
+  if (pts.length < 4) return;
+  ctx.save(); ctx.strokeStyle = pen; ctx.globalAlpha = 0.45; ctx.lineWidth = Math.max(1.5, P * 0.045);
+  ctx.setLineDash([P * 0.12, P * 0.1]); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(pts[0] * P, pts[1] * P);
+  for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i] * P, pts[i + 1] * P);
+  ctx.stroke(); ctx.restore();
+}
+// what the replay shows, in words
+function replayText() {
+  if (!hl) return '';
+  const v = nameOf(hl.v), k = hl.k >= 0 ? nameOf(hl.k) : '';
+  if (hl.touch) return `${k} caught ${v}`;
+  const b = hl.n > 0 ? ` · ${hl.n} bounce${hl.n > 1 ? 's' : ''}` : '';
+  if (hl.k < 0) return `${v} went down`;
+  if (hl.k === hl.v) return `${v} hit by their own shot${b}`;
+  return `${k} got ${v}${b}`;
+}
+const replayItems = () => {
+  const single = !twoSided(), w = U * 2.0, h = U * 0.55;
+  return [{ kind: 'skip', text: 'Skip ›', x: LW / 2 + U * 2.6 - w / 2, y: (single ? AY + AH - U * 0.45 : AY + AH - U * 0.5) - h / 2, w, h }];
+};
 
 /* ============================================================
    ONLINE PLAY. One tablet hosts: it runs the whole game exactly as
@@ -1931,6 +2264,7 @@ let clockOff = 0, clockInit = false;
 let rttMs = 0, lastEcho = -1, netRttMs = 0;
 // the guest's own tank is moved on the guest at once and gently pulled toward what the host says
 const pred = { x: 0, y: 0, angle: 0, active: false, hist: [] };
+let predDash = 0;               // a zombie's dash, started here at once rather than when the host says so
 let localShots = 0, lastLocalShot = 0;
 const PEERJS_URLS = [
   'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
@@ -2150,6 +2484,7 @@ function hostData(id, d) {
     if (state === 'hostWait') { const k = seats.indexOf(id); if (k >= 0) toggleTeam(k); }
     return;
   }
+  if (d.c === 'skip') { g.lastAt = performance.now(); if (state === 'replay') finishRound(); return; }   // anyone may skip a replay
   if (typeof d.c === 'string') {
     // room commands are only taken from the player who leads a server-run room
     if (!HEADLESS || leaderId() !== id) return;
@@ -2236,8 +2571,11 @@ function buildSnap() {
     tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel),
     hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h, v.b | 0]) : null,
     bw: baseWinner,
-    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0),
-      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0]) : [],
+    zd: play && infOn() ? zed : null, iw: infWin, rc: r2(rec.t),
+    hl: hl ? [r2(hl.t), r2(hl.age), hl.v, hl.k, hl.b, hl.n, hl.touch ? 1 : 0] : null,
+    rp: state === 'replay' && rp ? [rp.from, rp.to, rp.dur] : null,
+    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0),
+      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0, t.dcool > 0 ? r1(t.dcool) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
@@ -2405,6 +2743,7 @@ function guestFire() {
   myFire++;
   sendInput(true);
   const t = tanks[mySeat], now = performance.now();
+  if (isZed(mySeat)) { if (t && t.alive && !(t.dcool > 0) && !(t.stun > 0) && state === 'play') predDash = C.DASH_TIME; return; }
   if (!t || !t.alive || t.power || t.guided || t.charge > 0 || t.shield > 0) return;
   if (state !== 'play' && state !== 'ending' && state !== 'result') return;
   if (shotsLeft(t) <= 0) { if (state === 'play') sfx.empty(); return; }
@@ -2446,6 +2785,12 @@ function guestStep(dt) {
   applyDiscrete(b.g, dt);
   if (b.ts <= rt) applySnapEvents(b.g);
   applyEntities(a.g, b.g, k, dt);
+  // record what is shown (before this player's own tank is moved ahead of it), for the replay
+  if (state === 'play' || state === 'ending') {
+    const ra = +a.g.rc || 0, rb = +b.g.rc || 0;
+    rec.t = rb >= ra ? ra + (rb - ra) * k : rb;
+    if ((++rec.tick & 1) === 0) recFrame();
+  } else if (state === 'replay') { /* keep what was recorded */ }
   predictStep(dt);
 }
 
@@ -2462,13 +2807,16 @@ function predictStep(dt) {
     if (!Array.isArray(last)) return;
     pred.x = last[0]; pred.y = last[1]; pred.angle = last[2]; pred.hist = []; pred.active = true;
   }
-  const locked = t.charge > 0 || !!t.guided;
+  const locked = t.charge > 0 || !!t.guided || t.stun > 0;
   const inp = locked ? IDLE : myInput();
+  predDash = Math.max(0, predDash - dt);
   if (inp.mag > 0) {
     const diff = wrapAngle(Math.atan2(inp.y, inp.x) - pred.angle);
-    const maxTurn = C.TURN_RATE * dt;
+    const maxTurn = C.TURN_RATE * (isZed(mySeat) ? 1.2 : 1) * dt;
     pred.angle = wrapAngle(pred.angle + clamp(diff, -maxTurn, maxTurn));
-    const speed = C.TANK_SPEED * inp.mag * Math.max(0, Math.cos(diff));
+    const sp0 = t.dash; if (predDash > 0) t.dash = 1;
+    const speed = driveSpeed(t) * inp.mag * Math.max(0, Math.cos(diff));
+    t.dash = sp0;
     pred.x += Math.cos(pred.angle) * speed * dt;
     pred.y += Math.sin(pred.angle) * speed * dt;
   }
@@ -2517,6 +2865,13 @@ function applyDiscrete(g, dt) {
   hillHolder = typeof g.hz === 'number' ? g.hz : -1;
   if (Array.isArray(g.S)) stats = g.S.map(a => Array.isArray(a) ? { k: a[0] | 0, d: a[1] | 0, s: a[2] | 0, h: a[3] | 0, b: a[4] | 0 } : { k: 0, d: 0, s: 0, h: 0, b: 0 });
   if (typeof g.bw === 'number') baseWinner = g.bw;
+  zed = Array.isArray(g.zd) ? g.zd.map(v => v ? 1 : 0) : [];
+  infWin = Array.isArray(g.iw) ? g.iw.filter(v => Number.isInteger(v)) : [];
+  hl = Array.isArray(g.hl) ? { t: +g.hl[0] || 0, age: +g.hl[1] || 0, v: g.hl[2] | 0, k: g.hl[3] | 0, b: g.hl[4] | 0, n: g.hl[5] | 0, touch: !!g.hl[6] } : null;
+  if (g.st === 'replay' && Array.isArray(g.rp)) {
+    if (state !== 'replay') { rpT = +g.t || 0; rpPrev = -1; rpParts = []; rpRings = []; }
+    rp = { from: +g.rp[0] || 0, to: +g.rp[1] || 0, dur: Math.max(0.5, +g.rp[2] || 1) }; rp.speed = (rp.to - rp.from) / rp.dur;
+  }
   if (Array.isArray(g.sc)) scores = g.sc.map(v => v | 0);
   winner = typeof g.w === 'number' ? g.w : -1; drawReason = g.dr || '';
   const st = g.st === 'hostWait' ? 'guestWait' : g.st;
@@ -2524,6 +2879,7 @@ function applyDiscrete(g, dt) {
     lastRound = g.r; lastMap = g.m;
     loadMap(g.m | 0);
     marks = []; particles = []; beams = []; rings = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
+    rec.frames = []; rec.tick = 0; rp = null;
     const me = Array.isArray(g.T) && g.T[mySeat];
     viewFlip = !!me && me[1] < ROWS / 2;
     layout();
@@ -2531,7 +2887,7 @@ function applyDiscrete(g, dt) {
   // sounds a guest works out for itself from the state
   if (st !== prevNetState) {
     if (st === 'play' && prevNetState === 'countdown') sfx.go();
-    if (st === 'result' && winner >= 0) sfx.point();
+    if (st === 'result' && (winner >= 0 || winner === -3)) sfx.point();
     if (st === 'matchEnd') sfx.win();
     if (st === 'countdown') lastCount = 0;
     prevNetState = st;
@@ -2613,6 +2969,9 @@ function playEvent(e) {
   } else if (kind === 'kill') {
     marks.push({ x: e[3], y: e[4], col: pen(e[2]), seed: e[5] | 0 });
     burst(e[3], e[4], 30, pen(e[2]), 3.2, 0.6, 0.07); shake = 0.35; sfx.boom();
+  } else if (kind === 'infect') {
+    rings.push({ x: e[3], y: e[4], r: 0.9, life: 0.45, max: 0.45, col: COL.zombie });
+    burst(e[3], e[4], 18, COL.zombie, 2.4, 0.5, 0.06); shake = Math.max(shake, 0.2); sfx.crack(); sfx.boom();
   } else if (kind === 'shit' || kind === 'sblock') {
     const s = structs[e[2]];
     if (s) { s.flash = 0.22; if (kind === 'sblock') sfx.block(); else sfx.crack(); }
@@ -2646,6 +3005,7 @@ function applyEntities(a, b, k, dt) {
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
     t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0; t.inv = +q[11] || 0;
+    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0;
     t.laserPath = t.charge > 0 ? tracePath(t.x, t.y, t.angle) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -2746,7 +3106,7 @@ let JR = 50, FR = 50, JX0 = 0, FX0 = 0, CY0 = 0;
 // Online, one person holds each device, so a wide screen stays wide: stick on the left, arena in
 // the middle, fire on the right. On one screen two players sit at the short ends instead.
 let land = false, layoutKey = '';
-const onlineLayout = () => mode !== 'local' || NET_SCREENS.includes(state) || (soloMatch && state !== 'title');
+const onlineLayout = () => mode !== 'local' || NET_SCREENS.includes(state) || state === 'title' || soloMatch;
 const twoSided = () => !onlineLayout();          // two people at the two ends of one tablet
 const wantKey = () => `${window.innerWidth}x${window.innerHeight}|${onlineLayout()}`;
 function resize() {
@@ -2816,9 +3176,41 @@ const goalChip = () => settings.game === 'dm' ? `First to ${target()} kills` : s
 // Online, the waiting room opens the same mode and rules pages from two buttons.
 let menuStep = 'mode', lobbyPane = '';
 const GAME_SHORT = {
-  classic: 'Last tank standing wins the round', teams: 'Two sides; your team cannot hit you', dm: 'Tanks come back; every kill counts',
-  hill: 'Hold the circle in the middle', base: 'Towers, minions: take their base'
+  classic: 'Last tank standing wins the round', teams: 'Two sides; team-mates can\'t hit you', dm: 'Tanks come back; every kill scores',
+  hill: 'Hold the circle in the middle', base: 'Towers and minions: take their base', zombie: 'Run from the zombie, or become one'
 };
+const TEAM_MODES = new Set(['teams', 'base']);
+const modeCards = (top, h = U * 0.92, gy = U * 0.12) =>
+  cardGrid(GAME_MODES.map(m => ({ kind: 'game', v: m, text: GAME_NAME[m], sub: GAME_SHORT[m], on: settings.game === m, icon: m })), top, h, gy);
+// a small picture for each mode, centred on x, y, about s across
+function drawModeIcon(m, x, y, s, col) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = Math.max(1.5, s * 0.07) / s; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const fillSoft = () => { ctx.globalAlpha = 0.2; ctx.fill(); ctx.globalAlpha = 1; ctx.stroke(); };
+  if (m === 'classic') {                                   // a crown: last one standing
+    ctx.beginPath(); ctx.moveTo(-0.4, 0.28); ctx.lineTo(-0.4, -0.18); ctx.lineTo(-0.2, 0.04); ctx.lineTo(0, -0.32); ctx.lineTo(0.2, 0.04); ctx.lineTo(0.4, -0.18); ctx.lineTo(0.4, 0.28); ctx.closePath(); fillSoft();
+  } else if (m === 'dm') {                                 // cross-hairs: every kill
+    ctx.beginPath(); ctx.arc(0, 0, 0.3, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(dx * 0.14, dy * 0.14); ctx.lineTo(dx * 0.44, dy * 0.44); } ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, 0.05, 0, Math.PI * 2); ctx.fill();
+  } else if (m === 'hill') {                               // a flag in a circle
+    ctx.setLineDash([0.1, 0.08]); ctx.beginPath(); ctx.ellipse(0, 0.22, 0.42, 0.16, 0, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(-0.05, 0.22); ctx.lineTo(-0.05, -0.4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-0.05, -0.4); ctx.lineTo(0.3, -0.28); ctx.lineTo(-0.05, -0.16); ctx.closePath(); ctx.fill();
+  } else if (m === 'zombie') {                             // a zombie face: crossed-out eyes, jagged mouth
+    ctx.beginPath(); ctx.arc(0, 0, 0.38, 0, Math.PI * 2); fillSoft();
+    ctx.beginPath(); for (const ex of [-0.14, 0.14]) { ctx.moveTo(ex - 0.07, -0.13); ctx.lineTo(ex + 0.07, -0.01); ctx.moveTo(ex + 0.07, -0.13); ctx.lineTo(ex - 0.07, -0.01); } ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-0.18, 0.15); for (let i = 1; i <= 6; i++) ctx.lineTo(-0.18 + i * 0.06, i % 2 ? 0.22 : 0.13); ctx.stroke();
+  } else if (m === 'teams') {                              // two sides
+    ctx.lineWidth = ctx.lineWidth * 0.8;
+    for (const [dx, c] of [[-0.17, COL.pens[0]], [0.17, COL.pens[1]]]) { ctx.fillStyle = c; ctx.strokeStyle = c; ctx.beginPath(); ctx.arc(dx, 0, 0.24, 0, Math.PI * 2); ctx.globalAlpha = 0.35; ctx.fill(); ctx.globalAlpha = 1; ctx.stroke(); }
+  } else if (m === 'base') {                               // a tower
+    ctx.beginPath(); ctx.moveTo(-0.24, 0.4); ctx.lineTo(-0.24, -0.3); ctx.lineTo(-0.12, -0.3); ctx.lineTo(-0.12, -0.18); ctx.lineTo(-0.06, -0.18); ctx.lineTo(-0.06, -0.3);
+    ctx.lineTo(0.06, -0.3); ctx.lineTo(0.06, -0.18); ctx.lineTo(0.12, -0.18); ctx.lineTo(0.12, -0.3); ctx.lineTo(0.24, -0.3); ctx.lineTo(0.24, 0.4); ctx.closePath(); fillSoft();
+    ctx.beginPath(); ctx.arc(0, 0.06, 0.07, Math.PI, 0); ctx.lineTo(0.07, 0.2); ctx.lineTo(-0.07, 0.2); ctx.closePath(); ctx.stroke();
+  }
+  ctx.restore();
+}
 const FEAT_SHORT = ['Plain', 'Breakable', 'Grass & water', 'All'];
 const MAP_SHORT = { all: 'All', classic: 'Small', complex: 'Large' };
 const winText = v => settings.game === 'dm' ? `${KILL_GOAL[v]} kills` : settings.game === 'hill' ? `${HILL_GOAL[v]} s` : settings.game === 'base' ? `${BASE_TIME[v] / 60} min` : `First to ${v}`;
@@ -2865,7 +3257,9 @@ function ruleRows(top) {
 }
 const button = (kind, text, cx, cy, w, v) => ({ kind, v, text, x: cx - w / 2, y: cy - U * 0.35, w, h: U * 0.7 });
 // the title menu (one half of the screen when two share it); in the waiting room, its two buttons and START
-function menuItems(top = AY + AH / 2, buttons = null, lobby = false) {
+// where the title menu starts: the lower half when two share the screen, else centred in the arena
+const menuTop = () => twoSided() ? AY + AH / 2 : AY + AH / 2 - U * 2.75;
+function menuItems(top = menuTop(), buttons = null, lobby = false) {
   const cx = mcx();
   if (lobby) {
     const w = U * 5.6;
@@ -2875,36 +3269,57 @@ function menuItems(top = AY + AH / 2, buttons = null, lobby = false) {
   }
   const y0 = top + U * 1.3;
   if (menuStep === 'mut') return [...mutCards(y0, 'rules'), Object.assign(button('step', '‹', cx - U * 4.6, top + U * 0.42, U * 1.0, 'rules'), { h: U * 0.6, y: top + U * 0.12 })];
-  if (menuStep === 'mode') return [...cardGrid([
-    ...GAME_MODES.map(m => ({ kind: 'game', v: m, text: GAME_NAME[m], sub: GAME_SHORT[m], on: settings.game === m })),
-    { kind: 'online', text: 'Online', sub: 'Each player on their own device' }], y0),
-    Object.assign(button('board', 'Leaderboard', cx + U * 4.0, top + U * 0.42, U * 2.3), { h: U * 0.5, y: top + U * 0.17 })];
+  if (menuStep === 'mode') {
+    // the modes, then (apart from them, as it is not a mode) playing online
+    const ow = U * 9.65, oy = y0 + 3 * U * 1.04 + U * 0.1;
+    return [...modeCards(y0),
+      { kind: 'online', bar: true, text: 'Play online', sub: 'each player on their own device', x: cx - ow / 2, y: oy, w: ow, h: U * 0.62 },
+      Object.assign(button('board', 'Leaderboard', cx + U * 4.0, top + U * 0.42, U * 2.3), { h: U * 0.5, y: top + U * 0.17 })];
+  }
   if (menuStep === 'who') return [
     ...cardGrid([0, 1, 2, 3].map(n => ({ kind: 'cpu', v: n, text: n ? `You + ${n} CPU` : '2 players', sub: whoText(n), on: settings.cpu === n })), y0),
     button('step', '‹ Back', cx, top + U * 4.75, U * 2.6, 'mode')];
   const r = ruleRows(y0);
   return [...r.items,
-    button('step', '‹ Back', cx - U * 2.9, top + U * 5.08, U * 2.4, 'who'),
-    button('start', resumeMatch ? 'CONTINUE' : 'START', cx + U * 1.3, top + U * 5.08, U * 4.6)];
+    button('step', '‹ Back', cx - U * 2.9, top + U * (twoSided() ? 5.08 : 5.4), U * 2.4, 'who'),
+    button('start', resumeMatch ? 'CONTINUE' : 'START', cx + U * 1.3, top + U * (twoSided() ? 5.08 : 5.4), U * 4.6)];
 }
 // the waiting room's mode and rules pages (for whoever sets the game up)
 function paneItems() {
   const cx = mcx(), top = AY + U * 1.7;
   if (lobbyPane === 'mut') return [...mutCards(top), button('done', '‹ Back', cx, top + U * 4.15, U * 2.6)];
-  if (lobbyPane === 'mode') return [
-    ...cardGrid(GAME_MODES.map(m => ({ kind: 'game', v: m, text: GAME_NAME[m], sub: GAME_SHORT[m], on: settings.game === m })), top),
-    button('done', '‹ Back', cx, top + U * 4.2, U * 2.6)];
+  if (lobbyPane === 'mode') return [...modeCards(top), button('done', '‹ Back', cx, top + U * 3.85, U * 2.6)];
   const r = ruleRows(top);
   return [...r.items, button('done', 'Done', cx, r.end + U * 0.55, U * 3.2)];
 }
 // draw a list of menu items: cards, labels, choices and buttons
 function drawItems(items, col) {
   for (const it of items) {
-    if (it.card) {
+    if (it.bar) {
+      // playing online: a wide button of its own under the modes
+      rrect(it.x, it.y, it.w, it.h, it.h * 0.3);
+      ctx.fillStyle = COL.paper; ctx.fill(); ctx.lineWidth = Math.max(1.5, U * 0.05); ctx.strokeStyle = col; ctx.globalAlpha = 0.9; ctx.stroke(); ctx.globalAlpha = 1;
+      ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+      ctx.font = `${Math.max(8, U * 0.34)}px ${FONT_D}`; const w1 = ctx.measureText(it.text).width;
+      ctx.font = `${Math.max(8, U * 0.22)}px ${FONT_B}`; const sub = ' · ' + it.sub + '  ›', w2 = ctx.measureText(sub).width;
+      const x0 = it.x + (it.w - w1 - w2) / 2, yy = it.y + it.h / 2 + it.h * 0.03;
+      ctx.font = `${Math.max(8, U * 0.34)}px ${FONT_D}`; ctx.fillStyle = col; ctx.fillText(it.text, x0, yy);
+      ctx.font = `${Math.max(8, U * 0.22)}px ${FONT_B}`; ctx.fillStyle = COL.graphite; ctx.fillText(sub, x0 + w1, yy);
+    } else if (it.card) {
       rrect(it.x, it.y, it.w, it.h, U * 0.16);
       ctx.globalAlpha = 1; ctx.fillStyle = COL.paper; ctx.fill();
       if (it.on) { ctx.globalAlpha = 0.14; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
       ctx.lineWidth = Math.max(1.5, U * (it.on ? 0.07 : 0.04)); ctx.strokeStyle = it.on ? col : COL.graphite; ctx.globalAlpha = it.on ? 1 : 0.6; ctx.stroke(); ctx.globalAlpha = 1;
+      if (it.icon) {
+        // a mode: its picture on the left, name and one line on the right; team modes carry a red and a blue dot
+        const ink = it.on ? col : COL.graphite, tx = it.x + it.h * 0.98;
+        drawModeIcon(it.icon, it.x + it.h * 0.52, it.y + it.h / 2, it.h * 0.62, ink);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.font = `${Math.max(8, U * 0.4)}px ${FONT_D}`; ctx.fillStyle = ink; ctx.fillText(it.text, tx, it.y + it.h * 0.37);
+        ctx.font = `${Math.max(8, U * 0.2)}px ${FONT_B}`; ctx.fillStyle = COL.graphite; ctx.fillText(it.sub || '', tx, it.y + it.h * 0.73);
+        if (TEAM_MODES.has(it.icon)) [0, 1].forEach(k => { ctx.fillStyle = COL.pens[k]; ctx.beginPath(); ctx.arc(it.x + it.w - U * (0.42 - k * 0.2), it.y + U * 0.22, U * 0.07, 0, Math.PI * 2); ctx.fill(); });
+        continue;
+      }
       plain(it.text, it.x + it.w / 2, it.y + it.h * 0.38, U * (it.kind === 'mut' ? 0.36 : 0.42), it.on || it.kind === 'online' ? col : COL.graphite, FONT_D);
       plain(it.sub || '', it.x + it.w / 2, it.y + it.h * 0.74, U * (it.kind === 'mut' ? 0.19 : 0.22), COL.graphite, FONT_B);
     } else if (it.kind === 'label') {
@@ -3241,7 +3656,7 @@ function drawPickup(k) {
 }
 
 function drawTank(t) {
-  const col = penOf(t.id);
+  const col = t.pen || penOf(t.id), zom = t.pen ? t.pen === COL.zombie : isZed(t.id);
   if (t.inv > 0) {
     const a = REDUCED ? 0 : performance.now() / 300;
     ctx.save(); ctx.translate(t.x * P, t.y * P); ctx.rotate(a);
@@ -3273,6 +3688,28 @@ function drawTank(t) {
   // hull
   ctx.fillStyle = COL.paper;
   rrect(-L / 2 + P * 0.03, -W / 2 + W * 0.2, L - P * 0.06, W * 0.6, P * 0.05); ctx.fill(); ctx.stroke();
+  if (zom) {
+    // a zombie has no gun: a row of teeth across its front, crossed-out eyes, cracks when it has been hit once
+    ctx.beginPath(); ctx.moveTo(L / 2 - P * 0.02, -W * 0.36);
+    for (let i = 1; i <= 6; i++) ctx.lineTo(L / 2 + (i % 2 ? P * 0.1 : -P * 0.02), -W * 0.36 + i * W * 0.12);
+    ctx.stroke();
+    const a = P * 0.045;
+    for (const sy of [-1, 1]) { const ex = P * 0.17, ey = sy * P * 0.075; ctx.beginPath(); ctx.moveTo(ex - a, ey - a); ctx.lineTo(ex + a, ey + a); ctx.moveTo(ex + a, ey - a); ctx.lineTo(ex - a, ey + a); ctx.stroke(); }
+    if (t.hp === 1) { ctx.beginPath(); ctx.moveTo(-L * 0.4, -W * 0.15); ctx.lineTo(-L * 0.2, 0); ctx.lineTo(-L * 0.32, W * 0.05); ctx.lineTo(-L * 0.12, W * 0.18); ctx.stroke(); }
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(-P * 0.05, 0, P * 0.1, 0, Math.PI * 2); ctx.fill();
+    if (t.dash > 0) {                                    // a dash: speed lines behind
+      ctx.globalAlpha = 0.6;
+      for (const dy of [-0.14, 0, 0.14]) { ctx.beginPath(); ctx.moveTo(-L / 2 - P * 0.08, dy * P); ctx.lineTo(-L / 2 - P * 0.36, dy * P); ctx.stroke(); }
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+    if (t.stun > 0 && !REDUCED) {                        // stunned: dots going round
+      const r0 = performance.now() / 160;
+      ctx.fillStyle = col;
+      for (let i = 0; i < 3; i++) { const a2 = r0 + i * 2.09; ctx.beginPath(); ctx.arc(t.x * P + Math.cos(a2) * P * 0.42, t.y * P + Math.sin(a2) * P * 0.42, Math.max(1.5, P * 0.045), 0, Math.PI * 2); ctx.fill(); }
+    }
+    return;
+  }
   // barrel (kicks back when firing)
   const kick = t.recoil * P * 0.06;
   ctx.fillStyle = COL.paper;
@@ -3405,10 +3842,10 @@ function drawStrip(p, seat) {
     if (sp.quit) label(quitArm > 0 && performance.now() - quitArm < 2500 ? (online ? 'leave? tap again' : 'quit? tap again') : (online ? 'leave' : 'menu'), sp.quit.x, sp.quit.y, sp.size, COL.graphite, FONT_B, 0.65);
   };
   const t = tanks[seat];
-  if (!t || NET_SCREENS.includes(state)) {
-    // online and not driving a tank (waiting, or watching a match that started without us)
+  if (!t || NET_SCREENS.includes(state) || state === 'title') {
+    // online and not driving a tank (waiting, or watching a match that started without us), or in the title menu
     ctx.fillStyle = COL.graphite; ctx.globalAlpha = 0.5; ctx.fillRect(0, LH - 5, LW, 5); ctx.globalAlpha = 1;
-    if (!NET_SCREENS.includes(state)) label('watching', land ? FX0 : LW / 2, CY0, Math.min(S * 0.3, LW * 0.08, 40), COL.graphite, FONT_D, 0.7);
+    if (!NET_SCREENS.includes(state) && state !== 'title') label('watching', land ? FX0 : LW / 2, CY0, Math.min(S * 0.3, LW * 0.08, 40), COL.graphite, FONT_D, 0.7);
     edgeSwitches();
     return;
   }
@@ -3431,7 +3868,9 @@ function drawStrip(p, seat) {
   // fire button: its word says what the next press does
   const pressed = pl.fireId !== null, left = shotsLeft(t);
   let text = 'FIRE', fsz = FR * 0.56, hot = false, can = t.alive && left > 0;
-  if (t.guided) { text = 'BOOM'; hot = true; can = true; }
+  const zom = isZed(seat);
+  if (zom) { text = 'DASH'; fsz = FR * 0.48; can = t.alive && !(t.dcool > 0) && !(t.stun > 0); hot = can; }
+  else if (t.guided) { text = 'BOOM'; hot = true; can = true; }
   else if (t.charge > 0) { text = POWER_NAME.laser; fsz = FR * 0.42; hot = true; can = true; }
   else if (t.shield > 0) { text = POWER_NAME.shield; fsz = FR * 0.42; can = false; }
   else if (t.power) { text = POWER_NAME[t.power]; fsz = FR * 0.42; hot = true; can = t.alive; }
@@ -3447,8 +3886,10 @@ function drawStrip(p, seat) {
 
   // ammo dots, or an arc: reload progress filling up, or shield time running down
   const span = 0.36, n = settings.ammo === 'unlimited' ? C.MAX_BULLETS : clipSize();
-  const arc = t.shield > 0 ? t.shield / C.SHIELD_TIME : t.reload > 0 ? 1 - t.reload / reloadTime() : -1;
-  if (arc >= 0) {
+  const arc = zom ? (t.dcool > 0 ? 1 - t.dcool / C.DASH_COOL : -2) : t.shield > 0 ? t.shield / C.SHIELD_TIME : t.reload > 0 ? 1 - t.reload / reloadTime() : -1;
+  if (arc === -2) {
+    // a zombie has no ammo to show
+  } else if (arc >= 0) {
     const a0 = -Math.PI / 2 - span * 2, a1 = -Math.PI / 2 + span * 2, k = clamp(arc, 0, 1);
     ctx.lineCap = 'round'; ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(3, FR * 0.09);
     ctx.globalAlpha = 0.22; ctx.beginPath(); ctx.arc(FX0, CY0, FR + 11, a0, a1); ctx.stroke();
@@ -3475,6 +3916,7 @@ function drawStrip(p, seat) {
     label(':', LW / 2, CY0 - fs * 0.04, fs * 0.8, COL.graphite, FONT_D, 0.7);
     label(String(hudScore(1 - sideOf(seat))), LW / 2 + gap, CY0, fs * 0.72, other, FONT_D, 0.85, 'left');
     if (settings.game === 'base' && state !== 'title') label('bases · ' + clock(), LW / 2, CY0 + fs * 0.62, fs * 0.26, COL.graphite, FONT_B, 0.7);
+    if (infOn() && state !== 'title' && state !== 'matchEnd') label(infClock() + ' left', LW / 2, CY0 + fs * 0.62, fs * 0.26, COL.graphite, FONT_B, 0.7);
   } else if (land) {
     // landscape: my score at the top of the fire side, everyone's on the stick side
     const f2 = Math.min(S * 0.32, LH * 0.14, 56);
@@ -3719,7 +4161,7 @@ function drawNetScreen() {
   const items = netItems();
   withFrame(fr && fr.R, () => drawNetItems(items, accent));
 }
-const MODE_SHORT = { classic: 'Classic', teams: 'Teams', dm: 'Deathm.', hill: 'Hill', base: 'Base' };
+const MODE_SHORT = { classic: 'Classic', teams: 'Teams', dm: 'Deathm.', hill: 'Hill', base: 'Base', zombie: 'Infect.' };
 function drawBoard(accent) {
   const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite;
   label('Leaderboard', cx, y(0.7), U * 0.7, accent, FONT_D);
@@ -3835,8 +4277,9 @@ function drawOverlay(p, seat) {
   const me = tanks[seat];
   if (state === 'title') {
     const head = menuStep === 'mode' ? 'Tank Duel' : menuStep === 'who' ? `${GAME_NAME[settings.game]}: who plays?` : menuStep === 'mut' ? 'Party rules' : `${GAME_NAME[settings.game]} · ${whoShort()}`;
-    label(head, cx, top + U * 0.42, U * (menuStep === 'mode' ? 0.72 : 0.56), col, FONT_D);
-    label(menuHintText(false), cx, top + U * 0.95, U * 0.27, COL.graphite, FONT_B);
+    const mt = menuTop();
+    label(head, cx, mt + U * 0.42, U * (menuStep === 'mode' ? 0.72 : 0.56), col, FONT_D);
+    label(menuHintText(false), cx, mt + U * 0.95, U * 0.27, COL.graphite, FONT_B);
     drawItems(menuItems(), col);
   } else if (state === 'countdown') {
     const n = Math.max(1, 3 - Math.floor(stateT / 0.65)), f = (stateT % 0.65) / 0.65;
@@ -3846,17 +4289,35 @@ function drawOverlay(p, seat) {
       label('★ ' + MUTS[mutNow].name, cx, mid - U * (single ? 1.95 : 1.75), U * 0.55, COL.graphite, FONT_D);
       label(MUTS[mutNow].text, cx, mid - U * (single ? 1.45 : 1.27), U * 0.27, COL.graphite, FONT_B, 0.9);
     }
-    if (single && seat >= 0) label(teamsOn() ? `You are on the ${TEAM_NAME[teamOf[seat] ? 1 : 0]} team` : `You are ${PEN_NAMES[seat]}`, cx, mid + U * 1.6, U * 0.45, col, FONT_D, 0.9);
-    if (settings.game !== 'classic' && (single || mapIdx === 0))
+    if (infOn() && seat >= 0) {
+      label(isZed(seat) ? 'You are the ZOMBIE' : `You are ${PEN_NAMES[seat]}: survive!`, cx, mid + U * (single ? 1.6 : 1.05), U * 0.45, col, FONT_D, 0.9);
+      label(isZed(seat) ? 'Touch them to turn them. FIRE dashes.' : 'Keep away from the zombie. It takes 2 shots.', cx, mid + U * (single ? 2.2 : 1.55), U * 0.3, COL.graphite, FONT_B, 0.85);
+    } else if (single && seat >= 0) label(teamsOn() ? `You are on the ${TEAM_NAME[teamOf[seat] ? 1 : 0]} team` : `You are ${PEN_NAMES[seat]}`, cx, mid + U * 1.6, U * 0.45, col, FONT_D, 0.9);
+    if (settings.game !== 'classic' && !infOn() && (single || mapIdx === 0))
       label(`${GAME_NAME[settings.game === 'teams' && !teamsOn() ? 'classic' : settings.game]} · ${goalText()}`, cx, mid + U * (single ? 2.2 : 1.5), U * 0.32, COL.graphite, FONT_B, 0.85);
   } else if (state === 'play' && stateT < 0.5) {
     label('GO!', cx, mid, U * 2, col, FONT_D, 1 - stateT / 0.5);
-  } else if (state === 'play' && me && !me.alive && !me.gone && respawnMode()) {
+  } else if (state === 'play' && me && !me.alive && !me.gone && (respawnMode() || isZed(seat))) {
     label('Back in ' + Math.max(1, Math.ceil(me.respawn || 0)), cx, mid, U * 0.9, col, FONT_D, 0.85);
+  } else if (state === 'play' && me && me.alive && isZed(seat) && me.stun > 0.25) {
+    label('ZOMBIE!', cx, mid, U * 1.3, COL.zombie, FONT_D, 0.85);
   } else if (state === 'play' && sdOn() && roundT - C.SUDDEN_DEATH_TIME < 1.8) {
     const a = Math.min(1, (1.8 - (roundT - C.SUDDEN_DEATH_TIME)) / 0.4);
     label('SUDDEN DEATH', cx, single ? mid : top + h * 0.4, U * 1.05, COL.graphite, FONT_D, a);
     label('The walls close in. Get to the middle.', cx, single ? mid + U * 0.9 : top + h * 0.6, U * 0.36, COL.graphite, FONT_B, a);
+  } else if (state === 'replay') {
+    const yT = single ? AY + U * 0.6 : AY + AH - U * 1.2, yB = single ? AY + U * 1.15 : AY + AH - U * 0.5;
+    label('REPLAY', single ? cx : cx - U * 1.6, single ? yT : yB, U * (single ? 0.55 : 0.45), COL.graphite, FONT_D, 0.9);
+    label(replayText(), cx, single ? yB : yT, U * 0.32, hl && hl.k >= 0 ? basePen(hl.k) : COL.graphite, FONT_B, 0.95);
+    for (const it of replayItems()) drawChip(it, false, col);
+  } else if (state === 'result' && infOn()) {
+    const a = Math.min(1, stateT / 0.15), caught = infWin.length > 0 && infWin.every(i => zed[i]);
+    if (!infWin.length) label('ZOMBIES WIN', cx, mid, U * 1.2, COL.zombie, FONT_D, a);
+    else if (seat >= 0 && infWin.includes(seat)) label(caught ? 'LAST ONE +1' : 'SURVIVED +1', cx, mid, U * 1.25, basePen(seat), FONT_D, a);
+    else if (single) label(infWin.length === 1 ? `${nameOf(infWin[0]).toUpperCase()} +1` : `${infWin.length} SURVIVED`, cx, mid, U * 1.1, infWin.length === 1 ? basePen(infWin[0]) : COL.graphite, FONT_D, a);
+    else label('CAUGHT', cx, mid, U * 1.4, COL.zombie, FONT_D, a);
+    const sub = caught ? 'Everyone was caught: the last one scores.' : infWin.length ? 'Time is up: every survivor scores.' : '';
+    if (sub) label(sub, cx, mid + U * (single ? 1.0 : 0.95), U * 0.32, COL.graphite, FONT_B, a * 0.85);
   } else if (state === 'result' && !respawnMode()) {
     const a = Math.min(1, stateT / 0.15);
     if (winner < 0) {
@@ -3895,6 +4356,7 @@ function render() {
     ctx.globalAlpha = 1;
   }
   const matchOn = state !== 'title' && !NET_SCREENS.includes(state);
+  const rsv = state === 'replay' && rp && rec.frames.length ? enterReplayWorld() : null;
   if (settings.game === 'hill' && matchOn) {
     // the hill: tinted in the colour of the tank holding it; grey and blinking while it is fought over
     const hx = COLS / 2 * P, hy = ROWS / 2 * P, hr = C.HILL_R * P, held = hillHolder >= 0;
@@ -3909,6 +4371,7 @@ function render() {
   if (structs.length && matchOn) drawBase();
   for (const k of pickups) drawPickup(k);
   for (const mn of mines) drawMine(mn);
+  if (rsv) drawShotPath();
 
   // laser charge-up: the line the beam will take, bounces included
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -3925,7 +4388,7 @@ function render() {
     const life = b.life || C.BULLET_LIFE, fw = Math.min(0.6, life * 0.3);
     const fade = b.age > life - fw ? Math.max(0.15, (life - b.age) / fw) : 1;
     const tr = b.trail, n = tr.length / 2;
-    ctx.strokeStyle = penOf(b.owner); ctx.lineWidth = C.BULLET_R * P * 1.1;
+    ctx.strokeStyle = b.pen || penOf(b.owner); ctx.lineWidth = C.BULLET_R * P * 1.1;
     for (let i = 1; i < n; i++) {
       ctx.globalAlpha = 0.55 * (i / n) * fade;
       ctx.beginPath(); ctx.moveTo(tr[i * 2 - 2] * P, tr[i * 2 - 1] * P); ctx.lineTo(tr[i * 2] * P, tr[i * 2 + 1] * P); ctx.stroke();
@@ -3933,7 +4396,7 @@ function render() {
     ctx.globalAlpha = fade; ctx.fillStyle = COL.graphite;
     ctx.beginPath(); ctx.arc(b.x * P, b.y * P, Math.max(2.5, C.BULLET_R * P), 0, Math.PI * 2); ctx.fill();
     if (b.pierce) {                                      // a piercing shot wears a ring, so it reads as different from a bullet
-      ctx.strokeStyle = penOf(b.owner); ctx.lineWidth = Math.max(1.5, P * 0.04);
+      ctx.strokeStyle = b.pen || penOf(b.owner); ctx.lineWidth = Math.max(1.5, P * 0.04);
       ctx.beginPath(); ctx.arc(b.x * P, b.y * P, C.BULLET_R * P * 2.2, 0, Math.PI * 2); ctx.stroke();
     }
   }
@@ -3949,7 +4412,7 @@ function render() {
     ctx.setLineDash([P * 0.14, P * 0.1]); ctx.beginPath(); ctx.arc(tg.x * P, tg.y * P, P * (0.5 + pulse), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     ctx.globalAlpha = 1;
   }
-  if (!NET_SCREENS.includes(state)) for (const t of tanks) if (t.alive && seenBy(eye, t)) { drawTank(t); if (settings.terrain) grassOver(t); }
+  if (!NET_SCREENS.includes(state)) for (const t of tanks) if (t.alive && seenBy(eye, t)) { drawTank(t); if (settings.terrain && !replayView) grassOver(t); }
   if (state === 'countdown' && !twoSided() && tanks[mySeat]) {
     // which tank is mine: a ring closes in on it while the round counts down
     const t = tanks[mySeat], k = REDUCED ? 0.5 : (stateT % 0.65) / 0.65;
@@ -3961,7 +4424,7 @@ function render() {
 
   for (const b of beams) {
     const k = b.life / b.max;
-    ctx.globalAlpha = k; ctx.strokeStyle = penOf(b.owner); ctx.lineWidth = P * 0.18 * (0.5 + 0.5 * k); drawPath(b.path);
+    ctx.globalAlpha = k; ctx.strokeStyle = b.pen || penOf(b.owner); ctx.lineWidth = P * 0.18 * (0.5 + 0.5 * k); drawPath(b.path);
     ctx.strokeStyle = COL.paper; ctx.lineWidth = P * 0.05; drawPath(b.path);
   }
   for (const r of rings) {
@@ -3975,7 +4438,15 @@ function render() {
     ctx.beginPath(); ctx.arc(p.x * P, p.y * P, Math.max(1, p.size * P), 0, Math.PI * 2); ctx.fill();
   }
   ctx.globalAlpha = 1;
+  if (rsv) leaveReplayWorld(rsv);
   ctx.restore();
+  if (state === 'replay') {
+    // a replay: a dashed frame round the arena, and a bar showing how far through it is
+    ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(2, U * 0.06); ctx.globalAlpha = 0.7;
+    ctx.setLineDash([U * 0.3, U * 0.2]); ctx.strokeRect(AX + 3, AY + 3, AW - 6, AH - 6); ctx.setLineDash([]);
+    if (rp) { ctx.globalAlpha = 0.5; ctx.fillStyle = COL.graphite; ctx.fillRect(AX + 3, AY + 3, (AW - 6) * clamp(rpT / rp.dur, 0, 1), Math.max(3, U * 0.07)); }
+    ctx.globalAlpha = 1;
+  }
 
   const menuish = state === 'title' || NET_SCREENS.includes(state), wide = !!lobbyFrames();
   if (wide) { ctx.globalAlpha = 0.93; ctx.fillStyle = COL.paper; ctx.fillRect(0, 0, LW, LH); ctx.globalAlpha = 1; }
@@ -4039,6 +4510,7 @@ canvas.addEventListener('pointerdown', e => {
   }
   if (state === 'title') { const it = hitItem(menuItems(), f); if (it) applyMenu(it); return; }
   if (state === 'matchEnd') { if (stateT > 1.2) { const it = hitItem(endItems(), f); if (it) applyMenu(it); } return; }
+  if (state === 'replay') { if (hitItem(replayItems(), f)) { sfx.tick(); skipReplay(); } return; }
   const pl = players[p];
   if (f.x < LW / 2) {
     if (pl.stickId !== null) return;
@@ -4115,6 +4587,7 @@ addEventListener('keydown', e => {
     if (stateT > 1.2 && (k === ' ' || k === 'enter')) { if (mode === 'host') hostStart(); else if (mode === 'guest') { if (isLeader) sendCmd('rematch'); } else startMatch(); }
     return;
   }
+  if (state === 'replay') { if (k === 'enter' || k === 's') skipReplay(); return; }
   if (mode !== 'local' || soloMatch) { if ([' ', 'enter', 'f', 'm', '/'].includes(k)) pressFireFrom(0); return; }
   if (k === 'enter' || k === '/' || k === 'm') pressFire(0);
   if (k === ' ' || k === 'f') pressFire(1);
@@ -4169,6 +4642,8 @@ window.__tank = {
   setupLocal, beginFromMenu, applyMenu, breakWall, respawnTank, botInput, target, goalText, distField, mapPool, ROT4,
   get structs() { return structs; }, get minions() { return minions; }, get shells() { return shells; }, get baseWinner() { return baseWinner; },
   damageStruct, spawnWave, endBase, BASEMAPS, set roundTv(v) { roundT = v; },
+  get zed() { return zed; }, get infWin() { return infWin; }, infect, matchDone, get rec() { return rec; }, get hl() { return hl; }, get rp() { return rp; }, get rpT() { return rpT; },
+  replayPlan, skipReplay, replayText, replayItems, drawModeIcon, get lastHuman() { return lastHuman; },
   lobbyFrames, paneItems, applyMut, openBoard, reportResult, get boardData() { return boardData; }, get mutNow() { return mutNow; }, MUTS, get menuStep() { return menuStep; }, set menuStep(v) { menuStep = v; }, get lobbyPane() { return lobbyPane; }, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
   lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };

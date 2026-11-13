@@ -38,7 +38,7 @@ function saveBoard() {
     catch (e) { console.error('leaderboard not saved:', e.message); }
   }, 1500);
 }
-const MODES = ['classic', 'teams', 'dm', 'hill', 'base'];
+const MODES = ['classic', 'teams', 'dm', 'hill', 'base', 'zombie'];
 const seenIds = new Map();                 // match ids already recorded (a result can arrive twice)
 const cleanName = v => String(v || '').replace(/[<>]/g, '').trim().slice(0, 12);
 const count = v => Math.max(0, Math.min(999, v | 0));

@@ -75,7 +75,9 @@ async def main():
         sc = await ev(L, '__tank.scores'); check(sc[1] >= 1 and sc[0] == 0 and await ev(L, '__tank.hillHolder') == 1, f'holding the hill scores {sc}')
         await L.screenshot(path=OUT + 'local_hill.png')
       else:
-        await ev(L, "__tank.kill(__tank.tanksNow[1], 0)"); await L.wait_for_timeout(2600)
+        await ev(L, "__tank.kill(__tank.tanksNow[1], 0)"); await L.wait_for_timeout(1500)
+        if await ev(L, '__tank.state') == 'replay': await ev(L, '__tank.skipReplay()')   # the replay of the kill comes first
+        await L.wait_for_timeout(300)
         check(await ev(L, '__tank.scores[0]') == 1, 'teams with 2 tanks plays as classic')
       await L.close()
 

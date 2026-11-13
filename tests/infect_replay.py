@@ -35,7 +35,7 @@ async def main():
     await ev(L, "__tank.goMenu()"); await L.wait_for_timeout(300)
     items = await ev(L, "__tank.menuItems().map(i => [i.kind, i.v || i.text])")
     games = [v for k, v in items if k == 'game']
-    check(games == ['classic', 'dm', 'hill', 'zombie', 'teams', 'base'], f'six mode cards {games}')
+    check(games == ['classic', 'dm', 'hill', 'zombie', 'potato', 'gun', 'teams', 'soccer', 'base'], f'nine mode cards {games}')
     check(['online', 'Play online'] in items, 'playing online is its own button, not a mode card')
     geo = await ev(L, "(() => { const it = __tank.menuItems(), L = __tank.layout; const o = it.find(i => i.kind === 'online'); return [o.y + o.h, L.AY + L.AH, Math.max(...it.filter(i => i.kind === 'game').map(i => i.y + i.h)), o.y]; })()")
     check(geo[0] <= geo[1] - 2 and geo[2] < geo[3], f'cards and the online button fit in the half screen {geo}')
@@ -147,7 +147,7 @@ async def main():
     await ev(H, "__tank.net.hostLobby()"); await H.wait_for_timeout(300)
     await ev(H, "(() => { const it = __tank.net.netItems().find(i => i.kind === 'pane' && i.v === 'mode'); __tank.applyMenu(it); })()"); await H.wait_for_timeout(300)
     pane = await ev(H, "__tank.paneItems().filter(i => i.kind === 'game').length")
-    check(pane == 6, f'waiting room mode page has the six cards ({pane})')
+    check(pane == 9, f'waiting room mode page has the nine cards ({pane})')
     await H.screenshot(path=SHOTS + 'r_lobby_modes.png')
     await br.close()
 

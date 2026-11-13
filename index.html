@@ -141,6 +141,22 @@ const C = {
   DASH_SPEED: 1.9,
   DASH_COOL: 3,
 
+  // hot potato
+  FUSE_MIN: 9,           // seconds a bomb burns, picked at random between these
+  FUSE_MAX: 15,
+  POT_WAIT: 2,           // seconds before the first bomb of a round appears
+  POT_SPEED: 1.12,       // the tank with the bomb drives a little faster
+  STUN_TIME: 0.7,        // hot potato and soccer: a hit only stuns...
+  STUN_GUARD: 1.4,       // ...and not again for this long
+
+  // tank soccer
+  BALL_R: 0.3,
+  BALL_DRAG: 0.75,       // the ball loses speed at this rate (per second)
+  BALL_BOUNCE: 0.85,     // ...and this much of it off a wall
+  BALL_MAX: 8,
+  BALL_SHOT: 3.4,        // speed a shot adds to the ball
+  SOCCER_TIME: 90,       // a round with no goal in this long is a draw
+
   // replay of the last kill of a round
   REPLAY_MAX: 4,         // real seconds at most
 
@@ -389,6 +405,40 @@ for (const m of [
     "......#...#......",
     "........C........" ]
 ]) { BASEMAPS.add(MAPS.length); MAPS.push(m); }
+// Soccer pitches: drawn like base maps (bottom half; the top is the same turned round). G = the goal this side
+// defends; the bottom side is the red team. Tanks cannot enter a goal; the ball and shots can.
+const SOCCERMAPS = new Set();
+const DOTS13 = '.............';
+for (const m of [
+  // Pitch
+  [ DOTS13, DOTS13, DOTS13, DOTS13, DOTS13, DOTS13,
+    ".............",
+    ".............",
+    "...#.....#...",
+    ".............",
+    "......1......",
+    "#...........#",
+    "#####GGG#####" ],
+  // Midfield
+  [ DOTS13, DOTS13, DOTS13, DOTS13, DOTS13, DOTS13,
+    ".............",
+    "....#...#....",
+    ".............",
+    "..#.......#..",
+    "......1......",
+    "#...........#",
+    "#####GGG#####" ],
+  // Big pitch
+  [ DOTS15, DOTS15, DOTS15, DOTS15, DOTS15, DOTS15, DOTS15,
+    "...............",
+    "...#.......#...",
+    "...............",
+    "......#.#......",
+    "...............",
+    ".......1.......",
+    "#.............#",
+    "######GGG######" ]
+]) { SOCCERMAPS.add(MAPS.length); MAPS.push(m); }
 let COLS = 11, ROWS = 11;      // size of the map being played; set by loadMap
 const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const POWER_TYPES = ['laser', 'homing', 'guided', 'shield', 'spread', 'mine', 'pierce', 'bomb'];
@@ -462,9 +512,12 @@ const AMMO_MODES = ['unlimited', 'reload', 'limited', 'single'];
 const MAP_POOLS = ['all', 'classic', 'complex'], WIN_SCORES = [3, 5, 7];
 // classic: last tank standing takes the round. teams: the same, two sides. dm: destroyed tanks come back
 // and kills are counted. hill: tanks come back, and holding the circle in the middle scores.
-const GAME_MODES = ['classic', 'dm', 'hill', 'zombie', 'teams', 'base'];
-const GAME_NAME = { classic: 'Classic', teams: 'Teams', dm: 'Deathmatch', hill: 'Hill', base: 'Base', zombie: 'Infection' };
+const GAME_MODES = ['classic', 'dm', 'hill', 'zombie', 'potato', 'gun', 'teams', 'soccer', 'base'];
+const GAME_NAME = { classic: 'Classic', teams: 'Teams', dm: 'Deathmatch', hill: 'Hill', base: 'Base', zombie: 'Infection', potato: 'Hot Potato', gun: 'Gun Game', soccer: 'Tank Soccer' };
 const GAME_TEXT = {
+  potato: 'One tank carries a bomb; touch someone to pass it. Shots only stun. Last one left wins the round.',
+  gun: 'Every kill moves you on to the next weapon. The first to get a kill with the last one wins.',
+  soccer: 'Two teams, one ball: drive into it or shoot it into their goal. Shots only stun tanks.',
   classic: 'Last tank standing wins the round.',
   zombie: 'One tank starts as a zombie; anyone it touches turns. Last to survive scores.',
   teams: 'Two teams; your side cannot hit you. Needs 3 or more tanks.',
@@ -487,7 +540,8 @@ function validSettings(s) {
 function mapPool() {
   // base mode has maps of its own: 15 by 15 for up to three tanks, 17 by 17 for more
   if (settings.game === 'base') return [...BASEMAPS].filter(i => NP >= 4 ? MAPS[i].length > 15 : MAPS[i].length <= 15);
-  const all = MAPS.map((_, i) => i).filter(i => !BASEMAPS.has(i));
+  if (settings.game === 'soccer') return [...SOCCERMAPS].filter(i => NP >= 4 ? MAPS[i].length > 13 : MAPS[i].length <= 13);
+  const all = MAPS.map((_, i) => i).filter(i => !BASEMAPS.has(i) && !SOCCERMAPS.has(i));
   if (NP >= 4 || teamsOn()) return all.filter(i => MAPS[i].length > 11);   // four or five tanks, or teams, need the bigger maps
   if (NP === 3 && settings.maps !== 'classic') return all.filter(i => MAPS[i].length > 11);
   if (settings.maps === 'classic') return all.filter(i => MAPS[i].length <= 11);
@@ -567,20 +621,33 @@ const hudOf = () => settings.game === 'base' ? 'base · ' + clock() : infOn() &&
 let hillHolder = -1, hillT = [];               // hill: who holds the circle (-1 nobody, -2 contested); seconds held per tank
 // infection: which tanks are zombies (1); who scored the last round; the last tank to be caught; whose turn to start as the zombie
 let zed = [], infWin = [], lastHuman = -1, zedFirst = 0;
+const potatoOn = () => settings.game === 'potato', soccerOn = () => settings.game === 'soccer', gunOn = () => settings.game === 'gun';
+const stunMode = () => potatoOn() || soccerOn();       // a hit only stuns
+// hot potato: who has the bomb, how long it has left, the wait before the next one, and who passed it last
+let pot = { holder: -1, fuse: 0, wait: 0, cd: 0, back: 0, from: -1, passT: 0, beep: 0 };
+// soccer: the ball (null in other modes), the side that just scored (-1 none), and the goal cells (1 red's, 2 blue's)
+let ball = null, goalBy = -1, goalCell = new Int8Array(0);
+// gun game: the weapons in order, by match length, and how long each needs between shots
+const GUN_LADDER = { 3: ['spread', 'bomb', 'laser'], 5: ['shot', 'spread', 'pierce', 'bomb', 'laser'], 7: ['shot', 'spread', 'pierce', 'bomb', 'homing', 'guided', 'laser'] };
+const GUN_COOL = { spread: 0.55, pierce: 0.9, bomb: 1.1, homing: 1.8, guided: 0.8, laser: 1.6 };
+const gunLadder = () => GUN_LADDER[settings.winScore] || GUN_LADDER[5];
+const gunWeapon = i => { const l = gunLadder(); return l[clamp(scores[i] | 0, 0, l.length - 1)]; };
+const weaponName = w => w === 'shot' ? 'Shot' : w[0].toUpperCase() + w.slice(1);
 const infOn = () => settings.game === 'zombie';
 const isZed = i => infOn() && zed[i] === 1;
 const infTime = () => NP <= 2 ? C.INF_TIME - 20 : NP === 3 ? C.INF_TIME - 10 : C.INF_TIME;
 const infClock = () => { const t = Math.max(0, Math.ceil(infTime() - roundT)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
-const respawnMode = () => settings.game === 'dm' || settings.game === 'hill' || settings.game === 'base';
+const respawnMode = () => settings.game === 'dm' || settings.game === 'hill' || settings.game === 'base' || settings.game === 'gun';
 // the match is over once someone reaches the goal (infection: one player alone at the top)
 const matchDone = () => { const top = Math.max(...scores); return top >= target() && (!infOn() || scores.filter(v => v === top).length === 1); };
-const teamsOn = () => (settings.game === 'teams' && NP > 2) || settings.game === 'base';
-const pickTeams = () => settings.game === 'teams' || settings.game === 'base';      // the waiting room shows team choices
+const teamsOn = () => (settings.game === 'teams' && NP > 2) || settings.game === 'base' || settings.game === 'soccer';
+const pickTeams = () => settings.game === 'teams' || settings.game === 'base' || settings.game === 'soccer';      // the waiting room shows team choices
 const target = () => settings.game === 'dm' ? KILL_GOAL[settings.winScore] : settings.game === 'hill' ? HILL_GOAL[settings.winScore]
-  : settings.game === 'base' ? BASE_TIME[settings.winScore] : settings.winScore;
+  : settings.game === 'base' ? BASE_TIME[settings.winScore] : gunOn() ? gunLadder().length : settings.winScore;
 // base mode: time left, as m:ss
 const clock = () => { const t = Math.max(0, Math.ceil(target() - roundT)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 const goalText = () => settings.game === 'dm' ? `first to ${target()} kills` : settings.game === 'hill' ? `hold it for ${target()} s`
+  : gunOn() ? `a kill with each of ${target()} weapons` : soccerOn() ? `first to ${target()} goals`
   : settings.game === 'base' ? `${clock()} left` : infOn() && state !== 'title' && !NET_SCREENS.includes(state) ? `first to ${target()} · ${infClock()} left` : `first to ${target()}`;
 const basePen = i => teamsOn() ? COL.pens[(teamOf[i] ?? i % 2) ? 1 : 0] : (COL.pens[i] || COL.graphite);
 const penOf = i => isZed(i) && state !== 'matchEnd' ? COL.zombie : basePen(i);
@@ -596,7 +663,7 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, dash: 0, dcool: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, stunImm: 0, vx: 0, vy: 0, dash: 0, dcool: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
 let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], particles = [], marks = [];
@@ -628,7 +695,14 @@ function loadMap(i) {
   const four = [[sr, sc], [sc, N - sr], [N - sr, M - sc], [N - sc, sr]];      // going round: bottom, left, top, right
   for (const [r, c] of rot4 ? four : two) walls[r][c] = false;
   if (settings.game === 'hill') carveHill(sc, sr);
-  if (settings.soft) markSoft(rot4);
+  goalCell = new Int8Array(COLS * ROWS);
+  const pitch = SOCCERMAPS.has(mapId);
+  if (pitch) for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    if (m[r][c] !== 'G') continue;
+    // 1: the red team's goal (bottom), 2: the blue team's (top); water keeps tanks out of them
+    for (const [g, rr, cc] of [[1, r, c], [2, N - r, M - c]]) { goalCell[rr * COLS + cc] = g; water[rr * COLS + cc] = 1; walls[rr][cc] = false; }
+  }
+  if (settings.soft && !pitch) markSoft(rot4);
   const keep = (rot4 ? four : two).slice();       // cells grass and water stay clear of
   if (BASEMAPS.has(mapId)) {
     // towers and bases, one side drawn and the other turned 180 degrees
@@ -645,7 +719,7 @@ function loadMap(i) {
     }
     baseAnchor = [{ c: sc, r: sr }, { c: M - sc, r: N - sr }];
   }
-  if (settings.terrain) addTerrain(rot4, keep);
+  if (settings.terrain && !pitch) addTerrain(rot4, keep);
   const at = ([r, c]) => ({ x: c + 0.5, y: r + 0.5 });
   if (teamsOn()) spawn = teamSpawns(sc, sr);
   else if (NP <= 2) spawn = two.map(at);
@@ -718,7 +792,7 @@ const concealed = t => settings.terrain && t.alive && !(t.reveal > 0) && grassAt
 const friendOf = (a, b) => a === b || (infOn() ? (zed[a] | 0) === (zed[b] | 0) : teamsOn() && teamOf[a] === teamOf[b]);
 // can the side of seat `viewer` see tank t? A concealed tank shows only to its own side and to enemies right beside it.
 function seenBy(viewer, t) {
-  if (replayView || viewer < 0 || friendOf(viewer, t.id)) return true;
+  if (replayView || viewer < 0 || friendOf(viewer, t.id) || (potatoOn() && t.id === pot.holder)) return true;
   // grass hides a tank but for enemies right beside it; fog (a party rule) hides it but for enemies a few cells away
   const range = concealed(t) ? C.GRASS_SEE : mutNow === 'fog' && t.alive && !(t.reveal > 0) ? C.FOG_SEE : 0;
   if (!range) return true;
@@ -929,8 +1003,10 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0;
-    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.hp = 0; t.stun = 0; t.dash = 0; t.dcool = 0;
+    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0;
   });
+  ball = null; goalBy = -1;
+  pot = { holder: -1, fuse: 0, wait: C.POT_WAIT, cd: 0, back: 0, from: -1, passT: 0, beep: 0 };
   rec.frames = []; rec.t = 0; rec.tick = 0; hl = null; rp = null; shotNow = null;
   hillHolder = -1;
   minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
@@ -956,7 +1032,7 @@ function startMatch() {
   zedFirst = (Math.random() * NP) | 0;
   // teams need both sides manned
   teamOf = tanks.map(t => teamOf[t.id] ? 1 : 0);
-  if (NP > 2 || settings.game === 'base') for (const k of [0, 1]) if (!teamOf.includes(k)) teamOf[NP - 1] = k;
+  if (NP > 2 || settings.game === 'base' || settings.game === 'soccer') for (const k of [0, 1]) if (!teamOf.includes(k)) teamOf[NP - 1] = k;
   scores = new Array(teamsOn() ? 2 : NP).fill(0); mapIdx = 0;
   stats = tanks.map(() => ({ k: 0, d: 0, s: 0, h: 0 }));
   hillT = new Array(NP).fill(0);
@@ -972,6 +1048,7 @@ function startRound() {
   loadMap(mapOrder[mapIdx % mapOrder.length]);
   resetEntities();
   zed = tanks.map(() => 0); infWin = []; lastHuman = -1;
+  if (soccerOn()) ball = { x: COLS / 2, y: ROWS / 2, vx: 0, vy: 0, rot: 0, last: -1, touchT: 0 };
   if (infOn()) {
     let k = (zedFirst + mapIdx) % NP;
     for (let n = 0; n < NP && tanks[k].gone; n++) k = (k + 1) % NP;
@@ -1001,7 +1078,10 @@ function goMenu() {
 function finishRound() {
   drawReason = ''; rp = null;
   if (respawnMode()) winner = champion();                 // the match is over: whoever reached the goal
-  else if (infOn()) {
+  else if (soccerOn()) {
+    winner = goalBy;
+    if (winner >= 0) { scores[winner]++; sfx.point(); }
+  } else if (infOn()) {
     // infection: everyone still not caught scores; if all were caught, the last one to go does
     const left = tanks.filter(o => !o.gone && !zed[o.id]).map(o => o.id);
     infWin = left.length ? left : lastHuman >= 0 ? [lastHuman] : [];
@@ -1277,7 +1357,7 @@ function fire(t) {
     t.guided.detonate = true; return true;
   }
   if (t.charge > 0 || t.cool > 0 || t.shield > 0) return false;
-  if (t.power) return usePower(t);
+  if (t.power) { const ty = t.power, ok = usePower(t); if (ok && gunOn()) t.cool = Math.max(t.cool, GUN_COOL[ty] || 0.5); return ok; }
   if (shotsLeft(t) <= 0) return false;
   const s = muzzle(t, C.BULLET_R);
   bullets.push({ id: ++entId, x: s.x, y: s.y, vx: s.dx * C.BULLET_SPEED, vy: s.dy * C.BULLET_SPEED, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0 });
@@ -1360,6 +1440,13 @@ function hit(t, by = -1) {
     netEv('block', t.id, r2(t.x), r2(t.y));
     return false;
   }
+  if (stunMode()) {
+    if (t.stunImm > 0) return false;
+    t.stun = C.STUN_TIME; t.stunImm = C.STUN_GUARD;
+    rings.push({ x: t.x, y: t.y, r: 0.7, life: 0.3, max: 0.3, col: penOf(t.id) });
+    sfx.block(); netEv('block', t.id, r2(t.x), r2(t.y));
+    return false;
+  }
   kill(t, by);
   return true;
 }
@@ -1376,6 +1463,13 @@ function fireLaser(t) {
     if (m.owner !== t.id && pathDist(path, m.x, m.y) < C.MISSILE_R + 0.06) { removeMissile(i); if (m.type === 'bomb') blast(m); else puff(m.x, m.y, m.owner); }
   }
   for (const mn of mines) if (pathDist(path, mn.x, mn.y) < C.MINE_R + 0.05) mn.boom = true;
+  if (ball && pathDist(path, ball.x, ball.y) < C.BALL_R + 0.05) {
+    // the ball goes the way the beam was going where it met it
+    let bi = 1, bd = Infinity;
+    for (let i = 1; i < path.length; i++) { const d = distToSeg(ball.x, ball.y, path[i - 1].x, path[i - 1].y, path[i].x, path[i].y); if (d < bd) { bd = d; bi = i; } }
+    const dx = path[bi].x - path[bi - 1].x, dy = path[bi].y - path[bi - 1].y, d = Math.hypot(dx, dy) || 1;
+    ball.vx += dx / d * 5; ball.vy += dy / d * 5; ball.last = t.id; ball.touchT = rec.t;
+  }
   if (!LETHAL) return;
   if (structs.length) {                                     // base mode: the beam hurts buildings where it strikes them, and minions on its way
     const ot = teamOf[t.id], done = new Set();
@@ -1428,6 +1522,10 @@ function blast(m) {
   sfx.boom();
   netEv('blast', r2(m.x), r2(m.y), m.owner, R);
   for (const mn of mines) if (Math.hypot(mn.x - m.x, mn.y - m.y) < R) mn.boom = true;     // a blast sets off mines inside it
+  if (ball) {                                                                              // ...and throws the ball
+    const dx = ball.x - m.x, dy = ball.y - m.y, d = Math.hypot(dx, dy) || 0.01;
+    if (d < R + 0.6) { const k = 1 + 6 * (1 - d / (R + 0.6)); ball.vx += dx / d * k; ball.vy += dy / d * k; ball.last = m.owner; ball.touchT = rec.t; }
+  }
   if (settings.soft) {                                                                                   // ...and knocks down breakable walls
     for (let i = 0; i < soft.length; i++) if (soft[i] && Math.hypot(i % COLS + 0.5 - m.x, ((i / COLS) | 0) + 0.5 - m.y) < R + 0.35) breakWall(i);
   }
@@ -1464,9 +1562,10 @@ function kill(t, by = -1) {
   }
   if (respawnMode()) {
     t.respawn = C.RESPAWN_TIME + (settings.game === 'base' ? roundT * C.RESPAWN_GROW : 0);
-    if (settings.game === 'dm' && state === 'play') {
-      // a kill is a point; destroying yourself (or being crushed) costs one
+    if ((settings.game === 'dm' || gunOn()) && state === 'play') {
+      // a kill is a point (gun game: the next weapon); destroying yourself (or being crushed) costs one
       if (by >= 0 && by !== t.id) scores[by]++; else scores[t.id] = Math.max(0, scores[t.id] - 1);
+      if (gunOn() && by >= 0 && tanks[by] && !tanks[by].guided && tanks[by].charge <= 0) tanks[by].power = null;   // swapped for the next weapon
       if (scores.some(n => n >= target())) { state = 'ending'; stateT = 0; }
     }
     return;
@@ -1516,7 +1615,103 @@ function humanGone(id) {
 // how fast a tank drives: zombies are quicker, and quicker still in a dash; a stunned one stands
 function driveSpeed(t) {
   if (t.stun > 0) return 0;
-  return C.TANK_SPEED * (isZed(t.id) ? C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) : 1);
+  return C.TANK_SPEED * (isZed(t.id) ? C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) : potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1);
+}
+
+/* ---------- hot potato ---------- */
+function potatoStep(dt) {
+  if (pot.holder >= 0 && !(tanks[pot.holder] && tanks[pot.holder].alive)) { pot.holder = -1; pot.wait = 1.2; }
+  if (pot.holder < 0) {
+    if ((pot.wait -= dt) > 0) return;
+    const alive = tanks.filter(t => t.alive && !t.gone);
+    if (alive.length < 2) return;
+    const h = alive[(Math.random() * alive.length) | 0];
+    pot.holder = h.id; pot.fuse = (C.FUSE_MIN + Math.random() * (C.FUSE_MAX - C.FUSE_MIN)) * (alive.length >= 4 ? 0.75 : alive.length === 3 ? 0.85 : 1);   // shorter with more tanks left pot.from = -1; pot.passT = rec.t; pot.cd = 0.5; pot.back = 0; pot.beep = 0;
+    rings.push({ x: h.x, y: h.y, r: 1, life: 0.5, max: 0.5, col: COL.pens[0] });
+    sfx.alarm(); netEv('pass', h.id, -1);
+    return;
+  }
+  pot.fuse -= dt; pot.cd -= dt; pot.back -= dt;
+  if (pot.fuse <= 0) potatoBoom();
+}
+// the bomb goes off: the carrier is out; tanks right beside it are knocked dizzy
+function potatoBoom() {
+  const h = tanks[pot.holder], by = pot.from >= 0 && pot.from !== h.id ? pot.from : -1, x = h.x, y = h.y;
+  rings.push({ x, y, r: 1.4, life: 0.5, max: 0.5, col: COL.pens[0] });
+  for (let i = 0; i < 26; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 1 + Math.random() * 4.5, life = 0.3 + Math.random() * 0.5;
+    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life, max: life, col: i % 3 ? COL.pens[0] : COL.graphite, size: 0.05 + Math.random() * 0.05 });
+  }
+  netEv('blast', r2(x), r2(y), h.id, 1.4);
+  for (const o of tanks) if (o !== h && o.alive && Math.hypot(o.x - x, o.y - y) < 1.4) o.stun = Math.max(o.stun, 0.6);
+  pot.holder = -1; pot.wait = 1.5; pot.from = -1;
+  shotNow = { age: clamp(rec.t - pot.passT + 0.3, 0.8, 3), id: -1, n: 0 };
+  h.inv = 0; h.shield = 0;
+  kill(h, by);
+  shotNow = null;
+}
+// the fuse ticks, faster as it burns down (every device works this out for itself)
+function fuseBeep(dt) {
+  if (!potatoOn() || state !== 'play' || pot.holder < 0) { pot.beep = 0; return; }
+  if (mode === 'guest') pot.fuse = Math.max(0, pot.fuse - dt);
+  if ((pot.beep -= dt) > 0) return;
+  pot.beep = pot.fuse > 5 ? 0.9 : pot.fuse > 2.5 ? 0.45 : 0.2;
+  sfx.fuse();
+}
+
+/* ---------- tank soccer ---------- */
+function ballStep(dt) {
+  const b = ball, R = C.BALL_R;
+  // tanks push the ball: it bounces off a moving tank, taking on its speed. Every tank's push is worked out from the
+  // ball as it was, and the pushes added, so two tanks meeting at the ball cancel out whatever order they come in.
+  const v0x = b.vx, v0y = b.vy, order = tanks.filter(t => t.alive), bx0 = b.x, by0 = b.y;
+  for (let i = order.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [order[i], order[j]] = [order[j], order[i]]; }
+  for (const t of order) {
+    const dx = b.x - t.x, dy = b.y - t.y, d = Math.hypot(dx, dy), min = C.TANK_R + R;
+    if (d >= min || d < 1e-6) continue;
+    const nx = dx / d, ny = dy / d;
+    b.x = t.x + nx * min; b.y = t.y + ny * min;
+    const vn = (v0x - t.vx) * nx + (v0y - t.vy) * ny;
+    if (vn < 0) { b.vx -= 1.5 * vn * nx; b.vy -= 1.5 * vn * ny; }
+    b.last = t.id; b.touchT = rec.t;
+  }
+  // a tank cannot shove the ball into a wall: it stays where it was (and if it is somehow inside one, it goes to the nearest open cell)
+  if (circleHitsWall(b.x, b.y, R)) { resolveCircle(b, R); if (circleHitsWall(b.x, b.y, R)) { b.x = bx0; b.y = by0; } }
+  if (circleHitsWall(b.x, b.y, R)) {
+    let best = null, bd = Infinity;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      if (walls[r][c]) continue;
+      const d = Math.hypot(c + 0.5 - b.x, r + 0.5 - b.y);
+      if (d < bd && !circleHitsWall(c + 0.5, r + 0.5, R)) { bd = d; best = { x: c + 0.5, y: r + 0.5 }; }
+    }
+    if (best) { b.x = best.x; b.y = best.y; }
+  }
+  const sp = Math.hypot(b.vx, b.vy);
+  if (sp > C.BALL_MAX) { b.vx *= C.BALL_MAX / sp; b.vy *= C.BALL_MAX / sp; }
+  const f = Math.exp(-C.BALL_DRAG * dt); b.vx *= f; b.vy *= f;
+  b.x += b.vx * dt; if (circleHitsWall(b.x, b.y, R)) { b.x -= b.vx * dt; b.vx = -b.vx * C.BALL_BOUNCE; }
+  b.y += b.vy * dt; if (circleHitsWall(b.x, b.y, R)) { b.y -= b.vy * dt; b.vy = -b.vy * C.BALL_BOUNCE; }
+  b.rot += Math.hypot(b.vx, b.vy) * dt / R;
+  // over the line, well into the goal
+  if (goalBy >= 0 || state !== 'play') return;
+  const c = Math.floor(b.x), r = Math.floor(b.y);
+  if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return;
+  const g = goalCell[r * COLS + c];
+  if (g && (r >= ROWS / 2 ? b.y > r + 0.4 : b.y < r + 0.6)) scoreGoal(g === 1 ? 1 : 0);
+}
+function scoreGoal(team) {
+  goalBy = team;
+  const k = ball.last;
+  if (k >= 0 && stats[k] && sideOf(k) === team) stats[k].k++;          // an own goal does not count for its tank
+  hl = { t: rec.t, age: clamp(rec.t - ball.touchT + 0.2, 0.6, 3), v: -1, k, b: -1, n: 0, touch: false, goal: team };
+  rings.push({ x: ball.x, y: ball.y, r: 1.4, life: 0.6, max: 0.6, col: COL.pens[team] });
+  for (let i = 0; i < 30; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 1 + Math.random() * 4, life = 0.4 + Math.random() * 0.5;
+    particles.push({ x: ball.x, y: ball.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life, max: life, col: i % 2 ? COL.pens[team] : COL.graphite, size: 0.04 + Math.random() * 0.05 });
+  }
+  shake = Math.max(shake, 0.3); sfx.boom();
+  netEv('goal', team, r2(ball.x), r2(ball.y));
+  state = 'ending'; stateT = 0;
 }
 
 let lastBounceSound = 0;
@@ -1552,7 +1747,7 @@ function spawnPickups() {
 /* ---------- sudden death: the arena closes in, one ring of cells at a time ---------- */
 const ringOf = (c, r) => Math.min(c, r, COLS - 1 - c, ROWS - 1 - r);     // 0 = outer edge
 const ringCount = () => Math.ceil(Math.min(COLS, ROWS) / 2);
-const sdOn = () => C.SUDDEN_DEATH_TIME > 0 && !respawnMode() && !infOn() && roundT >= C.SUDDEN_DEATH_TIME;
+const sdOn = () => C.SUDDEN_DEATH_TIME > 0 && !respawnMode() && !infOn() && !stunMode() && roundT >= C.SUDDEN_DEATH_TIME;
 function closeRing(k) {
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
     if (ringOf(c, r) === k && !walls[r][c]) { walls[r][c] = true; crushed[r * COLS + c] = 1; water[r * COLS + c] = grass[r * COLS + c] = 0; }
@@ -1627,11 +1822,18 @@ function botInput(seat) {
   if (!t || (state !== 'play' && state !== 'ending')) return IDLE;
   const ai = t.ai || (t.ai = { replan: 0, wp: null, react: 0.4 + Math.random() * 0.5, dodge: 0, da: 0, wander: 0, wa: 0, chk: 0.6, px: t.x, py: t.y });
   if (isZed(seat)) return zedBot(seat, t, ai);
+  if (soccerOn()) return soccerBot(seat, t, ai);
+  if (potatoOn() && pot.holder === seat) return chaseBot(seat, t, ai, o => !(o.id === pot.from && pot.back > 0), false);
   let fi = -1, fd = Infinity;
   for (const o of tanks) {
     if (!o.alive || friendOf(seat, o.id) || !seenBy(seat, o)) continue;
     const d = Math.hypot(o.x - t.x, o.y - t.y);
     if (d < fd) { fd = d; fi = o.id; }
+  }
+  if (potatoOn()) {
+    // hot potato: the only one to watch is the tank with the bomb
+    const h = pot.holder >= 0 && pot.holder !== seat ? tanks[pot.holder] : null;
+    fi = h && h.alive ? h.id : -1; fd = fi >= 0 ? Math.hypot(h.x - t.x, h.y - t.y) : Infinity;
   }
   const foe = fi >= 0 ? tanks[fi] : null, hasFoe = !!foe;
   // remember where an enemy was last seen; go and look there for a while
@@ -1691,7 +1893,7 @@ function botInput(seat) {
     for (const k of pickups) { const d = Math.hypot(k.x - t.x, k.y - t.y); if (d < bd) { bd = d; bk = k; } }
     if (bk) { goal = bk; fight = false; }
   }
-  if (!goal && !infOn()) goal = ai.last;                     // (a survivor does not go looking for a zombie)
+  if (!goal && !infOn() && !potatoOn()) goal = ai.last;                     // (a survivor does not go looking for a zombie)
   if (!goal) {                                               // nobody in sight: roam to somewhere else on the map
     if (!ai.roam || (ai.roam.t -= dt) <= 0 || Math.hypot(ai.roam.x - t.x, ai.roam.y - t.y) < 0.8) {
       ai.roam = null;
@@ -1708,9 +1910,9 @@ function botInput(seat) {
   } else if (hasFoe && ai.react <= 0 && (t.power === 'homing' || t.power === 'guided' || t.power === 'mine')) {
     pressFire(seat); ai.react = 0.6;                         // missiles and mines do not need a clear line
   }
-  if (infOn() && hasFoe) {
-    // a survivor keeps its distance from a zombie: shoots it from afar, backs off when it comes close
-    if (dFoe < 1.7) return unitTo(t.x - foe.x, t.y - foe.y, 1);
+  if ((infOn() || potatoOn()) && hasFoe) {
+    // a survivor keeps its distance from a zombie (or the bomb): shoots it from afar, backs off when it comes close
+    if (dFoe < (potatoOn() ? 2.4 : 1.7)) return unitTo(t.x - foe.x, t.y - foe.y, 1);
     if (los) return unitTo(foe.x - t.x, foe.y - t.y, 0.04);
     if (!ai.flee || (ai.flee.t -= dt) <= 0 || Math.hypot(ai.flee.x - t.x, ai.flee.y - t.y) < 0.8) {
       ai.flee = null;                                          // somewhere reachable, away from it
@@ -1740,12 +1942,14 @@ function botInput(seat) {
 }
 
 // infection: a computer zombie goes for the nearest survivor it can find, and dashes at it when it is close
-function zedBot(seat, t, ai) {
+function zedBot(seat, t, ai) { return chaseBot(seat, t, ai, o => !zed[o.id] && !(o.inv > 0), true); }
+// going after another tank to touch it: a zombie dashes at it, the bomb carrier stuns it with a shot first
+function chaseBot(seat, t, ai, isPrey, dash) {
   const dt = C.STEP;
   if (!t.alive || t.stun > 0) return IDLE;
   let foe = null, fd = Infinity;
   for (const o of tanks) {
-    if (!o.alive || o.gone || zed[o.id] || o.inv > 0) continue;
+    if (!o.alive || o.gone || o === t || !isPrey(o)) continue;
     const d = Math.hypot(o.x - t.x, o.y - t.y);
     if (d < fd && (seenBy(seat, o) || d < 2.5)) { fd = d; foe = o; }
   }
@@ -1753,7 +1957,8 @@ function zedBot(seat, t, ai) {
   else if (ai.last && ((ai.last.t -= dt) <= 0 || Math.hypot(ai.last.x - t.x, ai.last.y - t.y) < 0.6)) ai.last = null;
   const clear = foe && lineClear(t.x, t.y, foe.x, foe.y, C.TANK_R * 0.9);
   ai.react -= dt;
-  if (clear && fd < 2.3 && t.dcool <= 0 && ai.react <= 0) { pressFire(seat); ai.react = 0.4; }
+  if (dash && clear && fd < 2.3 && t.dcool <= 0 && ai.react <= 0) { pressFire(seat); ai.react = 0.4; }
+  if (!dash && clear && fd < 5 && ai.react <= 0 && t.cool <= 0 && !(foe.stunImm > 0) && Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle)) < 0.15) { pressFire(seat); ai.react = 0.5; }
   if (clear) return unitTo(foe.x - t.x, foe.y - t.y, 1);
   let goal = foe || ai.last;
   if (!goal) {
@@ -1775,6 +1980,47 @@ function zedBot(seat, t, ai) {
   if (ai.wander > 0) { ai.wander -= dt; return { x: Math.cos(ai.wa), y: Math.sin(ai.wa), mag: 1 }; }
   if (!ai.wp) return IDLE;
   return unitTo(ai.wp.x - t.x, ai.wp.y - t.y, 1);
+}
+// soccer: get behind the ball (seen from the goal to score in) and drive through it, or shoot it when it lines up;
+// with a team-mate nearer the ball, stand in front of our own goal instead
+function soccerBot(seat, t, ai) {
+  const dt = C.STEP;
+  if (!t.alive || t.stun > 0 || !ball || goalBy >= 0) return IDLE;
+  const team = teamOf[seat] ? 1 : 0, gx = COLS / 2, gy = team ? ROWS - 0.6 : 0.6, b = ball;
+  let ux = gx - b.x, uy = gy - b.y; const ul = Math.hypot(ux, uy) || 1; ux /= ul; uy /= ul;
+  const dMe = Math.hypot(b.x - t.x, b.y - t.y);
+  const ourHalf = team ? b.y < ROWS / 2 : b.y > ROWS / 2;      // a team-mate guards our goal only while the ball is on our side
+  const mate = ourHalf && tanks.some(o => o !== t && o.alive && teamOf[o.id] === teamOf[seat] && Math.hypot(b.x - o.x, b.y - o.y) < dMe - 0.5);
+  let goal;
+  ai.react -= dt;
+  const still = Math.hypot(b.vx || 0, b.vy || 0) < 0.4 && dMe < 1.6;
+  ai.stall = still ? (ai.stall || 0) + dt : 0;
+  // stuck against the ball (another tank pushing back, or a wall): back off, then come again, shooting it if it lines up at all
+  if (ai.stall > 1.2) { ai.backoff = 0.5 + Math.random() * 0.4; ai.stall = 0; ai.loose = 2; }
+  if (ai.backoff > 0) { ai.backoff -= dt; return unitTo(t.x - b.x + (Math.random() - 0.5) * 0.3, t.y - b.y, 1); }
+  ai.loose = Math.max(0, (ai.loose || 0) - dt);
+  if (mate) goal = { x: (b.x + gx) / 2, y: team ? 2 : ROWS - 2 };
+  else {
+    const along = (t.x - b.x) * ux + (t.y - b.y) * uy, side = (t.x - b.x) * uy - (t.y - b.y) * ux;
+    if (along < -0.25 && Math.abs(side) < 0.45) goal = { x: b.x + ux * 0.6, y: b.y + uy * 0.6 };
+    else if (along < -0.25) goal = { x: b.x - ux * 0.85, y: b.y - uy * 0.85 };
+    else { const sd = side >= 0 ? 1 : -1; goal = { x: b.x - ux * 0.6 + uy * sd * 1.05, y: b.y - uy * 0.6 - ux * sd * 1.05 }; }
+  }
+  // shoot the ball when it lies between us and their goal
+  const off = Math.abs(wrapAngle(Math.atan2(b.y - t.y, b.x - t.x) - t.angle)), lineup = ((b.x - t.x) * ux + (b.y - t.y) * uy) / (dMe || 1);
+  if (off < 0.18 && lineup > (ai.loose > 0 ? 0.3 : 0.85) && dMe < 6 && ai.react <= 0 && t.cool <= 0 && lineClear(t.x, t.y, b.x, b.y, C.BULLET_R)) { pressFire(seat); ai.react = 0.3 + Math.random() * 0.3; }
+  goal.x = clamp(goal.x, 0.5, COLS - 0.5); goal.y = clamp(goal.y, 0.5, ROWS - 0.5);
+  const dg = Math.hypot(goal.x - t.x, goal.y - t.y);
+  if (lineClear(t.x, t.y, goal.x, goal.y, C.TANK_R, true)) return dg < 0.15 ? (mate ? unitTo(b.x - t.x, b.y - t.y, 0.04) : IDLE) : unitTo(goal.x - t.x, goal.y - t.y, 1);
+  ai.replan -= dt;
+  if (ai.replan <= 0 || !ai.wp) { ai.replan = 0.25; ai.wp = planWaypoint(t, goal, C.TANK_R + 0.04, true); }
+  ai.chk -= dt;
+  if (ai.chk <= 0) {
+    if (Math.hypot(t.x - ai.px, t.y - ai.py) < 0.1) { ai.wander = 0.45; ai.wa = Math.random() * Math.PI * 2; ai.wp = null; }
+    ai.chk = 0.6; ai.px = t.x; ai.py = t.y;
+  }
+  if (ai.wander > 0) { ai.wander -= dt; return { x: Math.cos(ai.wa), y: Math.sin(ai.wa), mag: 1 }; }
+  return ai.wp ? unitTo(ai.wp.x - t.x, ai.wp.y - t.y, 1) : IDLE;
 }
 // base mode: where a computer tank goes, and what it aims at on the way ({x, y} to drive to; ax, ay to shoot at)
 function baseGoal(seat, t) {
@@ -1834,7 +2080,9 @@ function stepPhysics(dt, lethal, control) {
     t.shield = Math.max(0, t.shield - dt);
     t.reveal = Math.max(0, t.reveal - dt);
     t.inv = Math.max(0, t.inv - dt);
-    t.stun = Math.max(0, t.stun - dt); t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt);
+    t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt);
+    if (gunOn() && !t.power && !t.guided && t.charge <= 0 && t.cool <= 0) { const w = gunWeapon(t.id); if (w !== 'shot') t.power = w; }
+    const px = t.x, py = t.y;
     if (t.reload > 0) { t.reload -= dt; if (t.reload <= 0) { t.reload = 0; t.ammo = clipSize(); sfx.reloaded(); netEv('sfx', 'reloaded', t.id); } }
     const locked = t.charge > 0 || t.guided !== null || t.stun > 0;   // charging a laser, steering a missile or stunned: the tank stands still
     if (t.charge > 0) {
@@ -1854,11 +2102,12 @@ function stepPhysics(dt, lethal, control) {
       t.y += Math.sin(t.angle) * speed * dt;
     }
     resolveCircle(t, C.TANK_R, true);
+    t.vx = (t.x - px) / dt; t.vy = (t.y - py) / dt;
     if (t.fireQ > 0 && isZed(t.id)) {
       // a zombie cannot shoot: its button is a dash
       if (control && t.dcool <= 0 && t.stun <= 0) { t.dash = C.DASH_TIME; t.dcool = C.DASH_COOL; t.fireQ = 0; t.reveal = C.GRASS_REVEAL; sfx.launch(); netEv('sfx', 'launch'); }
       else t.fireQ -= dt;
-    } else if (t.fireQ > 0) { if (control && fire(t)) { t.fireQ = 0; t.reveal = C.GRASS_REVEAL; t.inv = 0; } else t.fireQ -= dt; }
+    } else if (t.fireQ > 0) { if (control && t.stun <= 0 && fire(t)) { t.fireQ = 0; t.reveal = C.GRASS_REVEAL; t.inv = 0; } else t.fireQ -= dt; }
     if (!t.power && !t.guided && t.charge <= 0 && !isZed(t.id)) {
       for (let i = pickups.length - 1; i >= 0; i--) {
         const k = pickups[i];
@@ -1888,6 +2137,20 @@ function stepPhysics(dt, lethal, control) {
       infect(h, z.id);
     }
   }
+
+  // hot potato: the bomb goes to whoever the carrier touches (not straight back to the one who passed it)
+  if (lethal && potatoOn() && pot.holder >= 0 && pot.cd <= 0) {
+    const h = tanks[pot.holder];
+    if (h && h.alive) for (const o of tanks) {
+      if (o === h || !o.alive || o.gone || (o.id === pot.from && pot.back > 0)) continue;
+      if (Math.hypot(o.x - h.x, o.y - h.y) > C.TANK_R * 2 + 0.07) continue;
+      pot.from = h.id; pot.holder = o.id; pot.cd = 0.3; pot.back = 1; pot.passT = rec.t;
+      rings.push({ x: o.x, y: o.y, r: 0.8, life: 0.35, max: 0.35, col: COL.pens[0] });
+      sfx.pickup(); netEv('pass', o.id, h.id);
+      break;
+    }
+  }
+  if (lethal && ball) ballStep(dt);
 
   // bullets
   const hitR = C.TANK_R * 0.92 + C.BULLET_R;
@@ -1922,6 +2185,12 @@ function stepPhysics(dt, lethal, control) {
       }
     }
     if (!lethal) continue;
+    if (ball && Math.hypot(b.x - ball.x, b.y - ball.y) < C.BALL_R + C.BULLET_R) {      // a shot knocks the ball on
+      const sp = Math.hypot(b.vx, b.vy) || 1, k = C.BALL_SHOT * (b.extra ? 0.6 : 1);
+      ball.vx += b.vx / sp * k; ball.vy += b.vy / sp * k; ball.last = b.owner; ball.touchT = rec.t;
+      if (stats[b.owner] && !b.extra) stats[b.owner].h++;
+      bounceFx(b); bullets.splice(i, 1); continue;
+    }
     for (let j = minions.length - 1; j >= 0; j--) {
       const m = minions[j];
       if (teamOf[b.owner] !== m.team && Math.hypot(b.x - m.x, b.y - m.y) < C.MINION_R + C.BULLET_R) { hurtMinion(j, 1); bullets.splice(i, 1); continue bulletLoop; }
@@ -1980,6 +2249,12 @@ function stepPhysics(dt, lethal, control) {
     let onMine = false;
     for (const mn of mines) if (!mn.boom && Math.hypot(m.x - mn.x, m.y - mn.y) < C.MINE_R + C.MISSILE_R) { mn.boom = true; onMine = true; }
     if (onMine) { removeMissile(i); if (m.type !== 'homing') blast(m); else puff(m.x, m.y, m.owner); continue; }
+    if (ball && lethal && Math.hypot(m.x - ball.x, m.y - ball.y) < C.MISSILE_R + C.BALL_R) {
+      removeMissile(i);
+      if (m.type !== 'homing') blast(m);
+      else { ball.vx += Math.cos(m.angle) * 3; ball.vy += Math.sin(m.angle) * 3; ball.last = m.owner; ball.touchT = rec.t; puff(m.x, m.y, m.owner); }
+      continue;
+    }
     for (const t of tanks) {
       if (!t.alive) continue;
       // a homing missile never turns on its own tank; a guided one can, once it is armed
@@ -2021,6 +2296,7 @@ function update(dt) {
   for (const k of pickups) k.age += dt;
   for (const st of structs) st.flash = Math.max(0, st.flash - dt);
   if (state === 'replay') stepReplay(dt); else if (rpPrev >= 0) { rpPrev = -1; rpParts = []; rpRings = []; rpT = 0; }
+  fuseBeep(dt);
   if (mode === 'guest') { guestStep(dt); return; }
   if (mode === 'host') hostStep(dt);
 
@@ -2037,6 +2313,8 @@ function update(dt) {
       if (state !== 'play') break;
       roundT += dt;
       if (infOn() && roundT >= infTime()) { finishRound(); break; }
+      if (potatoOn()) { potatoStep(dt); if (state !== 'play') break; }
+      if (soccerOn() && roundT >= C.SOCCER_TIME) { goalBy = -1; finishRound(); break; }
       if (settings.game === 'hill') { hillStep(dt); if (state !== 'play') break; }
       if (baseOn()) { baseStep(dt); if (state !== 'play') break; }
       if (sdOn()) {
@@ -2045,12 +2323,12 @@ function update(dt) {
         while (sdClosed < due && state === 'play') closeRing(sdClosed++);
         if (state !== 'play') break;
       }
-      if (settings.powerups || mutNow === 'storm') {
+      if ((settings.powerups || mutNow === 'storm') && !gunOn()) {
         pickupTimer -= dt;
         if (pickupTimer <= 0 && pickups.length <= (mutNow === 'storm' ? 5 : 1)) { spawnPickups(); pickupTimer = C.PICKUP_INTERVAL; }
       }
       // "5 only" without power-ups: when nobody has a shot left and the field is clear, the round is a draw
-      if (settings.ammo === 'limited' && !settings.powerups && tanks.filter(t => t.alive).every(t => t.ammo <= 0) && bullets.length === 0) {
+      if (settings.ammo === 'limited' && !settings.powerups && !stunMode() && tanks.filter(t => t.alive).every(t => t.ammo <= 0) && bullets.length === 0) {
         emptyT += dt;
         if (emptyT > 0.6) {
           if (respawnMode()) { tanks.forEach(t => { t.ammo = clipSize(); }); emptyT = 0; }      // nobody can shoot: everyone is topped up
@@ -2087,11 +2365,12 @@ function update(dt) {
 const rec = { frames: [], t: 0, tick: 0 };   // t: seconds of play this round (the replay's clock)
 let hl = null;          // the round's last kill: { t, age: how long the shot had been flying, v: victim, k: killer, b: bullet id or -1, n: bounces, touch }
 let rp = null;          // the replay being shown: { from, to, dur, speed }
-let rpT = 0, rpPrev = -1, rpParts = [], rpRings = [], replayView = false;
+let rpT = 0, rpPrev = -1, rpParts = [], rpRings = [], replayView = false, rpHold = -1;
+const potHolder = () => replayView ? rpHold : pot.holder;
 let shotNow = null;     // the shot that is hitting a tank right now
 function noteKill(v, by, touch) {
   const s = shotNow || { age: 1.2, id: -1, n: 0 };
-  hl = { t: rec.t, age: s.age, v, k: by, b: touch ? -1 : s.id, n: touch ? 0 : s.n, touch: !!touch };
+  hl = { t: rec.t, age: s.age, v, k: by, b: touch ? -1 : s.id, n: touch ? 0 : s.n, touch: !!touch, goal: -1 };
 }
 function recFrame() {
   rec.frames.push({ t: rec.t,
@@ -2100,7 +2379,7 @@ function recFrame() {
     M: missiles.map(m => [m.id, m.x, m.y, m.angle, m.owner, m.type]),
     N: mines.map(n => [n.x, n.y, n.owner, n.armed ? 1 : 0]),
     L: beams.map(b => [b.path, penOf(b.owner), b.life / b.max]),
-    K: marks.length });
+    K: marks.length, O: ball ? [ball.x, ball.y, ball.rot] : null, H: pot.holder });
   while (rec.frames.length > 2 && rec.t - rec.frames[0].t > 6) rec.frames.shift();
 }
 // host and one screen: the clock runs through play and the moment after the kill
@@ -2165,7 +2444,9 @@ function stepReplay(dt) {
 function enterReplayWorld() {
   const now = rpNow(), { a, b, k } = framePair(now);
   if (!a) return null;
-  const saved = { tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells };
+  const saved = { tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells, ball };
+  ball = a.O ? { x: a.O[0] + ((b.O || a.O)[0] - a.O[0]) * k, y: a.O[1] + ((b.O || a.O)[1] - a.O[1]) * k, rot: a.O[2] || 0 } : null;
+  rpHold = a.H == null ? -1 : a.H;
   const lerp = (p, q) => p + (q - p) * k, lerpA = (p, q) => wrapAngle(p + wrapAngle(q - p) * k);
   tanks = a.T.map((q, i) => {
     const r = b.T[i] || q, o = makeTank(i);
@@ -2190,18 +2471,19 @@ function enterReplayWorld() {
   return saved;
 }
 function leaveReplayWorld(sv) {
-  ({ tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells } = sv);
+  ({ tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells, ball } = sv);
   replayView = false;
 }
 // the path the killing shot took, drawn faintly behind it as it flies
 function drawShotPath() {
-  if (!hl || hl.b < 0) return;
+  const byBall = !!hl && hl.goal >= 0;                 // a goal: the path the ball took
+  if (!hl || (hl.b < 0 && !byBall)) return;
   const now = rpNow(), pts = [];
   let pen = COL.graphite;
   for (const fr of rec.frames) {
     if (fr.t < rp.from) continue;
     if (fr.t > now) break;
-    const e = fr.B.find(x => x[0] === hl.b);
+    const e = byBall ? (fr.O ? [0, fr.O[0], fr.O[1], COL.pens[hl.goal]] : null) : fr.B.find(x => x[0] === hl.b);
     if (e) { pts.push(e[1], e[2]); pen = e[3]; }
   }
   if (pts.length < 4) return;
@@ -2214,7 +2496,13 @@ function drawShotPath() {
 // what the replay shows, in words
 function replayText() {
   if (!hl) return '';
+  if (hl.goal >= 0) {
+    const team = TEAM_NAME[hl.goal];
+    if (hl.k < 0) return `${team} team scores`;
+    return sideOf(hl.k) === hl.goal ? `${nameOf(hl.k)} scores for ${team}` : `Own goal by ${nameOf(hl.k)}`;
+  }
   const v = nameOf(hl.v), k = hl.k >= 0 ? nameOf(hl.k) : '';
+  if (potatoOn()) return `${v} was left holding the bomb` + (hl.k >= 0 ? ` · ${k} passed it` : '');
   if (hl.touch) return `${k} caught ${v}`;
   const b = hl.n > 0 ? ` · ${hl.n} bounce${hl.n > 1 ? 's' : ''}` : '';
   if (hl.k < 0) return `${v} went down`;
@@ -2572,7 +2860,8 @@ function buildSnap() {
     hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h, v.b | 0]) : null,
     bw: baseWinner,
     zd: play && infOn() ? zed : null, iw: infWin, rc: r2(rec.t),
-    hl: hl ? [r2(hl.t), r2(hl.age), hl.v, hl.k, hl.b, hl.n, hl.touch ? 1 : 0] : null,
+    hl: hl ? [r2(hl.t), r2(hl.age), hl.v, hl.k, hl.b, hl.n, hl.touch ? 1 : 0, hl.goal] : null,
+    pt: play && potatoOn() ? [pot.holder, r1(pot.fuse)] : null, bl: play && ball ? [r2(ball.x), r2(ball.y)] : null, gb: goalBy,
     rp: state === 'replay' && rp ? [rp.from, rp.to, rp.dur] : null,
     T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0),
       shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0, t.dcool > 0 ? r1(t.dcool) : 0]) : [],
@@ -2867,7 +3156,9 @@ function applyDiscrete(g, dt) {
   if (typeof g.bw === 'number') baseWinner = g.bw;
   zed = Array.isArray(g.zd) ? g.zd.map(v => v ? 1 : 0) : [];
   infWin = Array.isArray(g.iw) ? g.iw.filter(v => Number.isInteger(v)) : [];
-  hl = Array.isArray(g.hl) ? { t: +g.hl[0] || 0, age: +g.hl[1] || 0, v: g.hl[2] | 0, k: g.hl[3] | 0, b: g.hl[4] | 0, n: g.hl[5] | 0, touch: !!g.hl[6] } : null;
+  hl = Array.isArray(g.hl) ? { t: +g.hl[0] || 0, age: +g.hl[1] || 0, v: g.hl[2] | 0, k: g.hl[3] | 0, b: g.hl[4] | 0, n: g.hl[5] | 0, touch: !!g.hl[6], goal: typeof g.hl[7] === 'number' ? g.hl[7] : -1 } : null;
+  if (Array.isArray(g.pt)) { pot.holder = g.pt[0] | 0; if (Math.abs((+g.pt[1] || 0) - pot.fuse) > 0.3) pot.fuse = +g.pt[1] || 0; } else pot.holder = -1;
+  goalBy = typeof g.gb === 'number' ? g.gb : -1;
   if (g.st === 'replay' && Array.isArray(g.rp)) {
     if (state !== 'replay') { rpT = +g.t || 0; rpPrev = -1; rpParts = []; rpRings = []; }
     rp = { from: +g.rp[0] || 0, to: +g.rp[1] || 0, dur: Math.max(0.5, +g.rp[2] || 1) }; rp.speed = (rp.to - rp.from) / rp.dur;
@@ -2969,6 +3260,13 @@ function playEvent(e) {
   } else if (kind === 'kill') {
     marks.push({ x: e[3], y: e[4], col: pen(e[2]), seed: e[5] | 0 });
     burst(e[3], e[4], 30, pen(e[2]), 3.2, 0.6, 0.07); shake = 0.35; sfx.boom();
+  } else if (kind === 'pass') {
+    const t = tanks[e[2]];
+    if (t) rings.push({ x: t.x, y: t.y, r: e[3] < 0 ? 1 : 0.8, life: 0.4, max: 0.4, col: COL.pens[0] });
+    if (e[3] < 0) sfx.alarm(); else sfx.pickup();
+  } else if (kind === 'goal') {
+    rings.push({ x: e[3], y: e[4], r: 1.4, life: 0.6, max: 0.6, col: COL.pens[e[2]] });
+    burst(e[3], e[4], 30, COL.pens[e[2]], 3, 0.6, 0.07); shake = Math.max(shake, 0.3); sfx.boom();
   } else if (kind === 'infect') {
     rings.push({ x: e[3], y: e[4], r: 0.9, life: 0.45, max: 0.45, col: COL.zombie });
     burst(e[3], e[4], 18, COL.zombie, 2.4, 0.5, 0.06); shake = Math.max(shake, 0.2); sfx.crack(); sfx.boom();
@@ -3034,6 +3332,11 @@ function applyEntities(a, b, k, dt) {
   minions = (b.Y || []).map(q => { const p = aY.get(q[0]) || q; return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), angle: lerpA(p[3], q[3]), team: q[4], hp: q[5] | 0 }; });
   shells = (b.Q || []).map(q => { const p = aQ.get(q[0]) || q; return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), team: q[3] }; });
   pickups = (b.P || []).map(q => ({ x: q[0], y: q[1], type: POWER_TYPES[q[2]] || 'laser', age: age('p' + q[0] + ',' + q[1] + ',' + lastRound) }));
+  if (Array.isArray(b.bl)) {
+    const p = Array.isArray(a.bl) ? a.bl : b.bl, nx = lerp(p[0], b.bl[0]), ny = lerp(p[1], b.bl[1]);
+    if (!ball) ball = { x: nx, y: ny, vx: 0, vy: 0, rot: 0, last: -1, touchT: 0 };
+    ball.rot += Math.hypot(nx - ball.x, ny - ball.y) / C.BALL_R; ball.x = nx; ball.y = ny;
+  } else ball = null;
 }
 
 /* ---------- sound (small synth, no files) ---------- */
@@ -3081,6 +3384,7 @@ const sfx = {
   empty: () => tone(150, 0.05, 'square', 0.04),
   reloaded: () => { tone(700, 0.04, 'square', 0.04); tone(950, 0.05, 'square', 0.04, 0, 0.07); },
   spawn: () => tone(990, 0.12, 'sine', 0.05, 1500),
+  fuse: () => tone(1500, 0.05, 'square', 0.035),
   pickup: () => { tone(620, 0.07, 'triangle', 0.08); tone(930, 0.07, 'triangle', 0.08, 0, 0.07); tone(1240, 0.12, 'triangle', 0.08, 0, 0.14); },
   charge: () => tone(200, C.LASER_CHARGE, 'sawtooth', 0.04, 1500),
   zap: () => { tone(1900, 0.28, 'square', 0.07, 180); noise(0.15, 0.12); },
@@ -3170,16 +3474,17 @@ const featIdx = () => (settings.soft ? 1 : 0) + (settings.terrain ? 2 : 0);
 const featPatch = v => ({ soft: !!(v & 1), terrain: !!(v & 2) });
 const settingPatch = it => it.kind === 'soft' ? featPatch(it.v) : { [SETTING_KEY[it.kind]]: it.v };
 const nextOf = (arr, v) => arr[(arr.indexOf(v) + 1) % arr.length];
-const goalChip = () => settings.game === 'dm' ? `First to ${target()} kills` : settings.game === 'hill' ? `Hold for ${target()} s`
+const goalChip = () => settings.game === 'dm' ? `First to ${target()} kills` : settings.game === 'hill' ? `Hold for ${target()} s` : gunOn() ? `${target()} weapons`
   : settings.game === 'base' ? `${target() / 60} min limit` : `First to ${target()}`;
 // The menu goes one step at a time: pick a mode, then who plays, then check the rules and START.
 // Online, the waiting room opens the same mode and rules pages from two buttons.
 let menuStep = 'mode', lobbyPane = '';
 const GAME_SHORT = {
   classic: 'Last tank standing wins the round', teams: 'Two sides; team-mates can\'t hit you', dm: 'Tanks come back; every kill scores',
-  hill: 'Hold the circle in the middle', base: 'Towers and minions: take their base', zombie: 'Run from the zombie, or become one'
+  hill: 'Hold the circle in the middle', base: 'Towers and minions: take their base', zombie: 'Run from the zombie, or become one',
+  potato: 'Pass the bomb before it goes off', gun: 'Every kill gives you the next weapon', soccer: 'Push or shoot the ball into their goal'
 };
-const TEAM_MODES = new Set(['teams', 'base']);
+const TEAM_MODES = new Set(['teams', 'base', 'soccer']);
 const modeCards = (top, h = U * 0.92, gy = U * 0.12) =>
   cardGrid(GAME_MODES.map(m => ({ kind: 'game', v: m, text: GAME_NAME[m], sub: GAME_SHORT[m], on: settings.game === m, icon: m })), top, h, gy);
 // a small picture for each mode, centred on x, y, about s across
@@ -3204,6 +3509,16 @@ function drawModeIcon(m, x, y, s, col) {
   } else if (m === 'teams') {                              // two sides
     ctx.lineWidth = ctx.lineWidth * 0.8;
     for (const [dx, c] of [[-0.17, COL.pens[0]], [0.17, COL.pens[1]]]) { ctx.fillStyle = c; ctx.strokeStyle = c; ctx.beginPath(); ctx.arc(dx, 0, 0.24, 0, Math.PI * 2); ctx.globalAlpha = 0.35; ctx.fill(); ctx.globalAlpha = 1; ctx.stroke(); }
+  } else if (m === 'potato') {                             // a bomb with a lit fuse
+    ctx.beginPath(); ctx.arc(-0.06, 0.08, 0.3, 0, Math.PI * 2); fillSoft();
+    ctx.beginPath(); ctx.moveTo(0.14, -0.16); ctx.quadraticCurveTo(0.22, -0.36, 0.36, -0.34); ctx.stroke();
+    ctx.beginPath(); for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2 + 0.4; ctx.moveTo(0.38, -0.36); ctx.lineTo(0.38 + Math.cos(a) * 0.1, -0.36 + Math.sin(a) * 0.1); } ctx.stroke();
+  } else if (m === 'gun') {                                // steps up
+    ctx.beginPath(); ctx.moveTo(-0.4, 0.34); ctx.lineTo(-0.4, 0.14); ctx.lineTo(-0.14, 0.14); ctx.lineTo(-0.14, -0.06); ctx.lineTo(0.12, -0.06); ctx.lineTo(0.12, -0.26); ctx.lineTo(0.4, -0.26); ctx.lineTo(0.4, 0.34); ctx.closePath(); fillSoft();
+  } else if (m === 'soccer') {                             // a ball
+    ctx.beginPath(); ctx.arc(0, 0, 0.36, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); for (let i = 0; i < 5; i++) { const a = -Math.PI / 2 + i * Math.PI * 2 / 5; ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * 0.13, Math.sin(a) * 0.13); } ctx.closePath(); ctx.fill();
+    ctx.beginPath(); for (let i = 0; i < 5; i++) { const a = -Math.PI / 2 + i * Math.PI * 2 / 5; ctx.moveTo(Math.cos(a) * 0.13, Math.sin(a) * 0.13); ctx.lineTo(Math.cos(a) * 0.36, Math.sin(a) * 0.36); } ctx.stroke();
   } else if (m === 'base') {                               // a tower
     ctx.beginPath(); ctx.moveTo(-0.24, 0.4); ctx.lineTo(-0.24, -0.3); ctx.lineTo(-0.12, -0.3); ctx.lineTo(-0.12, -0.18); ctx.lineTo(-0.06, -0.18); ctx.lineTo(-0.06, -0.3);
     ctx.lineTo(0.06, -0.3); ctx.lineTo(0.06, -0.18); ctx.lineTo(0.12, -0.18); ctx.lineTo(0.12, -0.3); ctx.lineTo(0.24, -0.3); ctx.lineTo(0.24, 0.4); ctx.closePath(); fillSoft();
@@ -3213,11 +3528,12 @@ function drawModeIcon(m, x, y, s, col) {
 }
 const FEAT_SHORT = ['Plain', 'Breakable', 'Grass & water', 'All'];
 const MAP_SHORT = { all: 'All', classic: 'Small', complex: 'Large' };
-const winText = v => settings.game === 'dm' ? `${KILL_GOAL[v]} kills` : settings.game === 'hill' ? `${HILL_GOAL[v]} s` : settings.game === 'base' ? `${BASE_TIME[v] / 60} min` : `First to ${v}`;
-const winLabel = () => settings.game === 'dm' ? 'To win' : settings.game === 'hill' ? 'Hold for' : settings.game === 'base' ? 'Time limit' : 'Rounds';
+const winText = v => settings.game === 'dm' ? `${KILL_GOAL[v]} kills` : settings.game === 'hill' ? `${HILL_GOAL[v]} s` : settings.game === 'base' ? `${BASE_TIME[v] / 60} min`
+  : gunOn() ? `${GUN_LADDER[v].length} weapons` : `First to ${v}`;
+const winLabel = () => settings.game === 'dm' ? 'To win' : settings.game === 'hill' ? 'Hold for' : settings.game === 'base' ? 'Time limit' : gunOn() ? 'Weapons' : soccerOn() ? 'Goals' : 'Rounds';
 // who plays, in words, for the current mode
 function whoText(n) {
-  const sides = settings.game === 'teams' || settings.game === 'base';
+  const sides = settings.game === 'teams' || settings.game === 'base' || settings.game === 'soccer';
   if (!n) return settings.game === 'teams' ? 'Teams need 3 tanks: plays as Classic' : 'One at each end of this screen';
   if (!sides) return `You against ${n} computer tank${n > 1 ? 's' : ''}`;
   return n === 1 ? 'You against one computer tank' : n === 2 ? 'You and a CPU against a CPU' : 'You and a CPU against two CPUs';
@@ -3258,7 +3574,8 @@ function ruleRows(top) {
 const button = (kind, text, cx, cy, w, v) => ({ kind, v, text, x: cx - w / 2, y: cy - U * 0.35, w, h: U * 0.7 });
 // the title menu (one half of the screen when two share it); in the waiting room, its two buttons and START
 // where the title menu starts: the lower half when two share the screen, else centred in the arena
-const menuTop = () => twoSided() ? AY + AH / 2 : AY + AH / 2 - U * 2.75;
+const MODE_ROWS = Math.ceil(GAME_MODES.length / 2);
+const menuTop = () => twoSided() ? AY + AH / 2 : AY + AH / 2 - U * (menuStep === 'mode' ? 1.3 + MODE_ROWS * 0.52 + 0.4 : 2.75);
 function menuItems(top = menuTop(), buttons = null, lobby = false) {
   const cx = mcx();
   if (lobby) {
@@ -3271,7 +3588,7 @@ function menuItems(top = menuTop(), buttons = null, lobby = false) {
   if (menuStep === 'mut') return [...mutCards(y0, 'rules'), Object.assign(button('step', '‹', cx - U * 4.6, top + U * 0.42, U * 1.0, 'rules'), { h: U * 0.6, y: top + U * 0.12 })];
   if (menuStep === 'mode') {
     // the modes, then (apart from them, as it is not a mode) playing online
-    const ow = U * 9.65, oy = y0 + 3 * U * 1.04 + U * 0.1;
+    const ow = U * 9.65, oy = y0 + MODE_ROWS * U * 1.04 + U * 0.1;
     return [...modeCards(y0),
       { kind: 'online', bar: true, text: 'Play online', sub: 'each player on their own device', x: cx - ow / 2, y: oy, w: ow, h: U * 0.62 },
       Object.assign(button('board', 'Leaderboard', cx + U * 4.0, top + U * 0.42, U * 2.3), { h: U * 0.5, y: top + U * 0.17 })];
@@ -3288,7 +3605,7 @@ function menuItems(top = menuTop(), buttons = null, lobby = false) {
 function paneItems() {
   const cx = mcx(), top = AY + U * 1.7;
   if (lobbyPane === 'mut') return [...mutCards(top), button('done', '‹ Back', cx, top + U * 4.15, U * 2.6)];
-  if (lobbyPane === 'mode') return [...modeCards(top), button('done', '‹ Back', cx, top + U * 3.85, U * 2.6)];
+  if (lobbyPane === 'mode') return [...modeCards(top), button('done', '‹ Back', cx, top + U * (MODE_ROWS * 1.04 + 0.55), U * 2.6)];
   const r = ruleRows(top);
   return [...r.items, button('done', 'Done', cx, r.end + U * 0.55, U * 3.2)];
 }
@@ -3353,6 +3670,9 @@ function menuHintText(lobby) {
     'Breakable walls, grass to hide in, and water to shoot across.'][featIdx()];
   if (k === 'maps') return settings.maps === 'all' ? 'Small and large maps, shuffled.' : settings.maps === 'classic' ? 'Small 11 by 11 maps. (3+ tanks always get large ones.)' : 'Large 13 by 13 maps with more cover.';
   if (k === 'win' && settings.game === 'base') return `After ${target() / 60} minutes the side with more of its base left wins.`;
+  if (k === 'win' && gunOn()) return 'Weapons in order: ' + gunLadder().map(weaponName).join(' → ') + '.';
+  if (k === 'win' && soccerOn()) return `The match ends at ${target()} goals.`;
+  if (k === 'pu' && gunOn()) return 'Gun Game has no pickups: your kills decide your weapon.';
   if (k === 'win') return settings.game === 'dm' ? `The match ends at ${target()} kills.` : settings.game === 'hill' ? `The match ends when a tank has held the hill for ${target()} seconds.` : `The match ends at ${target()} rounds won.`;
   return lobby ? GAME_TEXT[settings.game] : '';
 }
@@ -3518,7 +3838,7 @@ function buildStatic() {
 
   // water: a pale wash with pencil ripples
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-    if (!water[r * COLS + c] || (walls[r] && walls[r][c])) continue;
+    if (!water[r * COLS + c] || goalCell[r * COLS + c] || (walls[r] && walls[r][c])) continue;
     const x = AX + (viewFlip ? COLS - 1 - c : c) * P, y = AY + (viewFlip ? ROWS - 1 - r : r) * P;
     const rnd = mulberry32(31 + mapId * 613 + r * 17 + c);
     g.globalAlpha = 0.22; g.fillStyle = COL.water; g.fillRect(x, y, P, P);
@@ -3529,6 +3849,26 @@ function buildStatic() {
       for (let q = 1; q <= 4; q++) { const xm = x0 + (x1 - x0) * (q - 0.5) / 4, xe = x0 + (x1 - x0) * q / 4; g.quadraticCurveTo(xm, yy + (q % 2 ? -a : a), xe, yy); }
       g.stroke();
     }
+  }
+
+  // soccer: the goals as nets in their team's colour, with the goal line across the mouth; a circle in the middle
+  if (SOCCERMAPS.has(mapId)) {
+    g.globalAlpha = 0.6; g.strokeStyle = COL.margin; g.lineWidth = Math.max(1.5, P * 0.035);
+    g.beginPath(); g.arc(AX + AW / 2, AY + AH / 2, P * 1.5, 0, Math.PI * 2); g.stroke();
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const gc = goalCell[r * COLS + c];
+      if (!gc) continue;
+      const col = COL.pens[gc === 1 ? 0 : 1], x = AX + (viewFlip ? COLS - 1 - c : c) * P, y = AY + (viewFlip ? ROWS - 1 - r : r) * P;
+      g.save(); g.beginPath(); g.rect(x, y, P, P); g.clip();
+      g.globalAlpha = 0.12; g.fillStyle = col; g.fillRect(x, y, P, P);
+      g.globalAlpha = 0.55; g.strokeStyle = col; g.lineWidth = Math.max(1, P * 0.025); g.beginPath();
+      for (let k = -P; k < P; k += P / 4) { g.moveTo(x + k, y); g.lineTo(x + k + P, y + P); g.moveTo(x + k, y + P); g.lineTo(x + k + P, y); }
+      g.stroke(); g.restore();
+      const ym = r >= ROWS / 2 ? r : r + 1, yy = AY + (viewFlip ? ROWS - ym : ym) * P;
+      g.globalAlpha = 0.95; g.strokeStyle = col; g.lineWidth = Math.max(2, P * 0.08);
+      g.beginPath(); g.moveTo(x, yy); g.lineTo(x + P, yy); g.stroke();
+    }
+    g.globalAlpha = 1;
   }
 
   // grass on the paper
@@ -3668,7 +4008,7 @@ function drawTank(t) {
   ctx.save();
   ctx.translate(t.x * P, t.y * P);
   if (C.TANK_R !== C0.TANK_R) ctx.scale(C.TANK_R / C0.TANK_R, C.TANK_R / C0.TANK_R);
-  if (t.power) {                                         // a dashed ring shows the other player that this tank is carrying a power-up
+  if (t.power && !gunOn()) {                             // a dashed ring shows the other player that this tank is carrying a power-up
     ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(1.2, P * 0.03); ctx.globalAlpha = 0.75;
     ctx.setLineDash([P * 0.1, P * 0.08]); ctx.beginPath(); ctx.arc(0, 0, P * 0.46, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
@@ -3715,9 +4055,44 @@ function drawTank(t) {
   ctx.fillStyle = COL.paper;
   rrect(P * 0.04 - kick, -P * 0.055, P * 0.38, P * 0.11, P * 0.02); ctx.fill(); ctx.stroke();
   // turret
-  ctx.fillStyle = t.power ? COL.graphite : col; ctx.beginPath(); ctx.arc(0, 0, P * 0.14, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = t.power && !gunOn() ? COL.graphite : col; ctx.beginPath(); ctx.arc(0, 0, P * 0.14, 0, Math.PI * 2); ctx.fill();
   if (teamsOn() && !twoSided() && t.id === mySeat) { ctx.fillStyle = COL.paper; ctx.beginPath(); ctx.arc(0, 0, P * 0.065, 0, Math.PI * 2); ctx.fill(); }
   ctx.restore();
+  if (t.stun > 0 && !REDUCED) {                          // stunned: dots going round
+    const r0 = performance.now() / 160;
+    ctx.fillStyle = col;
+    for (let i = 0; i < 3; i++) { const a2 = r0 + i * 2.09; ctx.beginPath(); ctx.arc(t.x * P + Math.cos(a2) * P * 0.42, t.y * P + Math.sin(a2) * P * 0.42, Math.max(1.5, P * 0.045), 0, Math.PI * 2); ctx.fill(); }
+  }
+}
+
+// the soccer ball: a paper ball with ink patches that turn as it rolls
+function drawBall(b) {
+  const x = b.x * P, y = b.y * P, r = C.BALL_R * P;
+  ctx.save(); ctx.translate(x, y);
+  ctx.globalAlpha = 0.18; ctx.fillStyle = COL.graphite; ctx.beginPath(); ctx.ellipse(r * 0.12, r * 0.18, r, r * 0.9, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1; ctx.fillStyle = COL.paper; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  ctx.save(); ctx.clip(); ctx.rotate(b.rot || 0); ctx.fillStyle = COL.graphite;
+  const pent = (cx, cy, rr) => { ctx.beginPath(); for (let i = 0; i < 5; i++) { const a = -Math.PI / 2 + i * Math.PI * 2 / 5; ctx[i ? 'lineTo' : 'moveTo'](cx + Math.cos(a) * rr, cy + Math.sin(a) * rr); } ctx.closePath(); ctx.fill(); };
+  pent(0, 0, r * 0.36);
+  for (let i = 0; i < 5; i++) { const a = Math.PI / 2 + i * Math.PI * 2 / 5; pent(Math.cos(a) * r * 1.05, Math.sin(a) * r * 1.05, r * 0.32); }
+  ctx.restore();
+  ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(1.5, P * 0.045); ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+// hot potato: the bomb rides on the tank that has it, with a pulsing ring; it flashes in its last seconds
+function drawPotato(t) {
+  const x = t.x * P, y = t.y * P, r = P * 0.17, now = performance.now();
+  const hot = !replayView && pot.fuse < 3 && Math.floor(now / 120) % 2 === 0, pulse = REDUCED ? 0.5 : 0.5 + 0.5 * Math.sin(now / 140);
+  ctx.strokeStyle = COL.pens[0]; ctx.lineWidth = Math.max(2, P * 0.06); ctx.globalAlpha = 0.4 + 0.5 * pulse;
+  ctx.beginPath(); ctx.arc(x, y, P * (0.56 + 0.06 * pulse), 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+  ctx.fillStyle = hot ? COL.pens[0] : COL.graphite; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(1.5, P * 0.04);
+  ctx.beginPath(); ctx.moveTo(x + r * 0.5, y - r * 0.8); ctx.quadraticCurveTo(x + r * 0.8, y - r * 1.7, x + r * 1.5, y - r * 1.6); ctx.stroke();
+  if (!REDUCED) {
+    ctx.strokeStyle = COL.pens[3]; ctx.lineWidth = Math.max(1.2, P * 0.03);
+    ctx.beginPath(); for (let i = 0; i < 4; i++) { const a = now / 90 + i * Math.PI / 2, l = r * (0.4 + 0.3 * Math.random()); ctx.moveTo(x + r * 1.5, y - r * 1.6); ctx.lineTo(x + r * 1.5 + Math.cos(a) * l, y - r * 1.6 + Math.sin(a) * l); } ctx.stroke();
+  }
+  ctx.fillStyle = COL.paper; ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(x - r * 0.35, y - r * 0.35, r * 0.22, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
 }
 
 function drawBomb(m) {
@@ -3868,8 +4243,9 @@ function drawStrip(p, seat) {
   // fire button: its word says what the next press does
   const pressed = pl.fireId !== null, left = shotsLeft(t);
   let text = 'FIRE', fsz = FR * 0.56, hot = false, can = t.alive && left > 0;
-  const zom = isZed(seat);
+  const zom = isZed(seat), gw = gunOn() ? gunWeapon(seat) : 'shot';
   if (zom) { text = 'DASH'; fsz = FR * 0.48; can = t.alive && !(t.dcool > 0) && !(t.stun > 0); hot = can; }
+  else if (gw !== 'shot' && !t.guided && !(t.charge > 0)) { text = POWER_NAME[gw]; fsz = FR * 0.42; hot = !!t.power; can = t.alive && !!t.power; }
   else if (t.guided) { text = 'BOOM'; hot = true; can = true; }
   else if (t.charge > 0) { text = POWER_NAME.laser; fsz = FR * 0.42; hot = true; can = true; }
   else if (t.shield > 0) { text = POWER_NAME.shield; fsz = FR * 0.42; can = false; }
@@ -3886,7 +4262,7 @@ function drawStrip(p, seat) {
 
   // ammo dots, or an arc: reload progress filling up, or shield time running down
   const span = 0.36, n = settings.ammo === 'unlimited' ? C.MAX_BULLETS : clipSize();
-  const arc = zom ? (t.dcool > 0 ? 1 - t.dcool / C.DASH_COOL : -2) : t.shield > 0 ? t.shield / C.SHIELD_TIME : t.reload > 0 ? 1 - t.reload / reloadTime() : -1;
+  const arc = zom ? (t.dcool > 0 ? 1 - t.dcool / C.DASH_COOL : -2) : gw !== 'shot' ? -2 : t.shield > 0 ? t.shield / C.SHIELD_TIME : t.reload > 0 ? 1 - t.reload / reloadTime() : -1;
   if (arc === -2) {
     // a zombie has no ammo to show
   } else if (arc >= 0) {
@@ -4161,7 +4537,7 @@ function drawNetScreen() {
   const items = netItems();
   withFrame(fr && fr.R, () => drawNetItems(items, accent));
 }
-const MODE_SHORT = { classic: 'Classic', teams: 'Teams', dm: 'Deathm.', hill: 'Hill', base: 'Base', zombie: 'Infect.' };
+const MODE_SHORT = { classic: 'Classic', teams: 'Teams', dm: 'Deathm.', hill: 'Hill', base: 'Base', zombie: 'Infect.', potato: 'Potato', gun: 'Gun', soccer: 'Soccer' };
 function drawBoard(accent) {
   const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite;
   label('Leaderboard', cx, y(0.7), U * 0.7, accent, FONT_D);
@@ -4253,8 +4629,8 @@ function drawMatchEnd(p, seat) {
     ty = 3.0;
   }
   // table: one row per tank, best first
-  const scoreHead = teamsOn() ? '' : settings.game === 'dm' ? 'Points' : settings.game === 'hill' ? 'Seconds' : 'Rounds';
-  const base = settings.game === 'base', cols = [[scoreHead, 1.0], ['Kills', 2.2], ['Lost', 3.3], [base ? 'Damage' : 'Hit %', 4.4]];
+  const scoreHead = teamsOn() ? '' : settings.game === 'dm' ? 'Points' : settings.game === 'hill' ? 'Seconds' : gunOn() ? 'Weapon' : 'Rounds';
+  const base = settings.game === 'base', cols = [[scoreHead, 1.0], [soccerOn() ? 'Goals' : 'Kills', 2.2], [soccerOn() ? 'Shots' : 'Lost', 3.3], [base ? 'Damage' : 'Hit %', 4.4]];
   for (const [t, dx] of cols) if (t) label(t, cx + U * dx, y(ty), U * 0.24, ink, FONT_B, 0.65);
   const order = tanks.map(t => t.id).sort((a, b) => teamsOn() ? (teamOf[a] - teamOf[b]) || ((stats[b] || {}).k | 0) - ((stats[a] || {}).k | 0) : (scores[b] | 0) - (scores[a] | 0));
   order.forEach((i, k) => {
@@ -4264,7 +4640,7 @@ function drawMatchEnd(p, seat) {
     label(nameOf(i) + (i === seat && names[i] && names[i] !== 'You' ? ' (you)' : ''), cx - U * 4.25, yy, U * 0.33, col, FONT_D, 1, 'left');
     const cell = (t, dx) => label(String(t), cx + U * dx, yy, U * 0.34, ink, FONT_D, 0.9);
     if (!teamsOn()) cell(scores[i] | 0, 1.0);
-    cell(v.k, 2.2); cell(v.d, 3.3); cell(base ? v.b | 0 : hitRate(v), 4.4);
+    cell(v.k, 2.2); cell(soccerOn() ? v.s : v.d, 3.3); cell(base ? v.b | 0 : hitRate(v), 4.4);
   });
   if (mode === 'guest' && !isLeader) label(dedicatedGame ? 'Waiting for the player who made the game…' : 'Waiting for the host…', cx, y(ty + 0.58 * (NP + 1) + 0.25), U * 0.28, ink, FONT_B, 0.8);
 }
@@ -4293,10 +4669,15 @@ function drawOverlay(p, seat) {
       label(isZed(seat) ? 'You are the ZOMBIE' : `You are ${PEN_NAMES[seat]}: survive!`, cx, mid + U * (single ? 1.6 : 1.05), U * 0.45, col, FONT_D, 0.9);
       label(isZed(seat) ? 'Touch them to turn them. FIRE dashes.' : 'Keep away from the zombie. It takes 2 shots.', cx, mid + U * (single ? 2.2 : 1.55), U * 0.3, COL.graphite, FONT_B, 0.85);
     } else if (single && seat >= 0) label(teamsOn() ? `You are on the ${TEAM_NAME[teamOf[seat] ? 1 : 0]} team` : `You are ${PEN_NAMES[seat]}`, cx, mid + U * 1.6, U * 0.45, col, FONT_D, 0.9);
+    const tip = potatoOn() ? 'Touch someone to pass the bomb. Shots only stun.' : gunOn() ? 'Every kill gives you the next weapon.'
+      : soccerOn() && seat >= 0 ? `You are ${TEAM_NAME[teamOf[seat] ? 1 : 0]}: score in the goal at the top.` : '';
+    if (tip && (single || mapIdx === 0 || soccerOn())) label(tip, cx, mid + U * (single ? 2.75 : 2.05), U * 0.3, soccerOn() && seat >= 0 ? col : COL.graphite, FONT_B, 0.9);
     if (settings.game !== 'classic' && !infOn() && (single || mapIdx === 0))
       label(`${GAME_NAME[settings.game === 'teams' && !teamsOn() ? 'classic' : settings.game]} · ${goalText()}`, cx, mid + U * (single ? 2.2 : 1.5), U * 0.32, COL.graphite, FONT_B, 0.85);
   } else if (state === 'play' && stateT < 0.5) {
     label('GO!', cx, mid, U * 2, col, FONT_D, 1 - stateT / 0.5);
+  } else if (state === 'play' && potatoOn() && seat >= 0 && pot.holder === seat && me && me.alive) {
+    label('YOU HAVE THE BOMB · touch someone!', cx, single ? AY + U * 0.55 : AY + AH - U * 0.5, U * 0.38, COL.pens[0], FONT_D, 0.95);
   } else if (state === 'play' && me && !me.alive && !me.gone && (respawnMode() || isZed(seat))) {
     label('Back in ' + Math.max(1, Math.ceil(me.respawn || 0)), cx, mid, U * 0.9, col, FONT_D, 0.85);
   } else if (state === 'play' && me && me.alive && isZed(seat) && me.stun > 0.25) {
@@ -4310,6 +4691,12 @@ function drawOverlay(p, seat) {
     label('REPLAY', single ? cx : cx - U * 1.6, single ? yT : yB, U * (single ? 0.55 : 0.45), COL.graphite, FONT_D, 0.9);
     label(replayText(), cx, single ? yB : yT, U * 0.32, hl && hl.k >= 0 ? basePen(hl.k) : COL.graphite, FONT_B, 0.95);
     for (const it of replayItems()) drawChip(it, false, col);
+  } else if (state === 'result' && soccerOn()) {
+    const a = Math.min(1, stateT / 0.15);
+    if (winner >= 0) {
+      label('GOAL!', cx, mid, U * 1.9, COL.pens[winner], FONT_D, a);
+      label(seat >= 0 && sideOf(seat) === winner ? 'Your team scores' : `${TEAM_NAME[winner]} team scores`, cx, mid + U * (single ? 1.15 : 1.0), U * 0.36, COL.graphite, FONT_B, a * 0.9);
+    } else label('TIME UP', cx, mid, U * 1.3, COL.graphite, FONT_D, a);
   } else if (state === 'result' && infOn()) {
     const a = Math.min(1, stateT / 0.15), caught = infWin.length > 0 && infWin.every(i => zed[i]);
     if (!infWin.length) label('ZOMBIES WIN', cx, mid, U * 1.2, COL.zombie, FONT_D, a);
@@ -4372,6 +4759,7 @@ function render() {
   for (const k of pickups) drawPickup(k);
   for (const mn of mines) drawMine(mn);
   if (rsv) drawShotPath();
+  if (ball && matchOn) drawBall(ball);
 
   // laser charge-up: the line the beam will take, bounces included
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -4412,7 +4800,10 @@ function render() {
     ctx.setLineDash([P * 0.14, P * 0.1]); ctx.beginPath(); ctx.arc(tg.x * P, tg.y * P, P * (0.5 + pulse), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     ctx.globalAlpha = 1;
   }
-  if (!NET_SCREENS.includes(state)) for (const t of tanks) if (t.alive && seenBy(eye, t)) { drawTank(t); if (settings.terrain && !replayView) grassOver(t); }
+  if (!NET_SCREENS.includes(state)) for (const t of tanks) if (t.alive && seenBy(eye, t)) {
+    drawTank(t); if (settings.terrain && !replayView) grassOver(t);
+    if (potatoOn() && t.id === potHolder() && matchOn) drawPotato(t);
+  }
   if (state === 'countdown' && !twoSided() && tanks[mySeat]) {
     // which tank is mine: a ring closes in on it while the round counts down
     const t = tanks[mySeat], k = REDUCED ? 0.5 : (stateT % 0.65) / 0.65;
@@ -4644,6 +5035,7 @@ window.__tank = {
   damageStruct, spawnWave, endBase, BASEMAPS, set roundTv(v) { roundT = v; },
   get zed() { return zed; }, get infWin() { return infWin; }, infect, matchDone, get rec() { return rec; }, get hl() { return hl; }, get rp() { return rp; }, get rpT() { return rpT; },
   replayPlan, skipReplay, replayText, replayItems, drawModeIcon, get lastHuman() { return lastHuman; },
+  get pot() { return pot; }, get ball() { return ball; }, get goalBy() { return goalBy; }, get goalCell() { return goalCell; }, SOCCERMAPS, gunWeapon, gunLadder, potatoBoom, scoreGoal,
   lobbyFrames, paneItems, applyMut, openBoard, reportResult, get boardData() { return boardData; }, get mutNow() { return mutNow; }, MUTS, get menuStep() { return menuStep; }, set menuStep(v) { menuStep = v; }, get lobbyPane() { return lobbyPane; }, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
   lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };

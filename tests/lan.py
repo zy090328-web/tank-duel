@@ -46,7 +46,7 @@ async def main():
     owners = await H.evaluate("__tank.net.buildSnap().E.filter(e => e[1] === 'shot').map(e => e[2])")
     check(len(set(owners)) >= 3, f'shots from every guest reached the host {sorted(set(owners))}')
     await G1.screenshot(path='/home/claude/tests/lan_guest.png')
-    await G1.close(); await H.wait_for_timeout(1500)
+    await G1.evaluate('__tank.goMenu()'); await G1.close(); await H.wait_for_timeout(1500)     # leaving on purpose
     check(await H.evaluate('__tank.net.direct') == 1, 'a guest leaving closes its link')
     await br.close()
   print('\nERRORS:' if errors else '\nno console errors')

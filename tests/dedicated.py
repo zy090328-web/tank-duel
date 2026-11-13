@@ -80,12 +80,12 @@ async def main():
       check(items == ['rematch', 'lobby'], f'new leader gets Rematch/Lobby {items}')
       await ev(P[1], "__tank.net.sendCmd('lobby')"); await P[1].wait_for_timeout(800)
       check(await ev(P[3], '__tank.state') == 'guestWait', 'lobby brings everyone back to the waiting room')
-    # everyone leaves: the room closes on the server
+    # everyone drops out (pages closed): the room stays open for a while
     for p in P[1:]: await p.close()
     await asyncio.sleep(17)
     import urllib.request, json
     rooms = json.loads(urllib.request.urlopen(URL + 'relay.json').read())['rooms']
-    check(rooms == 0, f'empty room closed on the server (rooms={rooms})')
+    check(rooms >= 1, f'a room everyone dropped out of is kept a while for them to come back (rooms={rooms})')
     await br.close()
   print('\nERRORS:' if errors else '\nno console errors')
   for e in errors[:20]: print('  ', e)

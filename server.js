@@ -230,9 +230,22 @@ setInterval(() => {
   }
 }, 10000);
 
-/* ---------- rooms: code -> { host, guests: Map(id -> client) } ---------- */
+/* ---------- rooms: code -> { host, hostKey, hostAway, guests: Map(id -> client) } ---------- */
 const rooms = new Map();
 let nextId = 1;
+// A player who joins with the key their device keeps gets the same id every time, so after dropping out
+// (browser in the background, network gone) they come back as themselves. A tablet host that drops out
+// keeps its room for HOST_GRACE; the guests are told it is away and wait.
+const HOST_GRACE = 180000;
+const validKey = k => typeof k === 'string' && /^[a-z0-9]{6,16}$/.test(k);
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, r] of rooms) {
+    if (r.host || !r.hostAway || now - r.hostAway < HOST_GRACE) continue;
+    for (const g of r.guests.values()) { g.send({ t: 'hostleft' }); g.room = null; g.role = null; }
+    rooms.delete(code);
+  }
+}, 5000);
 
 function onClient(c) {
   clients.add(c);
@@ -241,28 +254,49 @@ function onClient(c) {
   c.send({ t: 'hello', id: c.id });
   c.onmsg = m => {
     if (m.t === 'host' && !c.room) {
-      const code = /^[0-9]{4}$/.test(m.code) ? m.code : null;
-      if (!code || rooms.has(code)) { c.send({ t: 'taken' }); return; }
-      rooms.set(code, { host: c, guests: new Map() });
+      const code = /^[0-9]{4}$/.test(m.code) ? m.code : null, key = validKey(m.key) ? m.key : null;
+      const r0 = code && rooms.get(code);
+      if (r0 && key && r0.hostKey === key) {
+        // the same host coming back: take the room over (from a line the server may not yet know is dead)
+        const old = r0.host;
+        if (old && old !== c) { old.room = null; old.role = null; try { old.close(); } catch (e) {} }
+        r0.host = c; r0.hostAway = 0;
+        c.room = code; c.role = 'host';
+        c.send({ t: 'hosting', code });
+        for (const g of r0.guests.values()) { c.send({ t: 'guest', id: g.id }); g.send({ t: 'hostback' }); }
+        return;
+      }
+      if (!code || r0) { c.send({ t: 'taken' }); return; }
+      rooms.set(code, { host: c, hostKey: key, hostAway: 0, guests: new Map() });
       c.room = code; c.role = 'host';
       c.send({ t: 'hosting', code });
       if (c.onHosting) c.onHosting(code);
     } else if (m.t === 'join' && !c.room) {
       const r = rooms.get(String(m.code));
       if (!r) { c.send({ t: 'nogame' }); return; }
+      if (validKey(m.key)) {
+        c.id = 'k' + m.key;
+        const old = r.guests.get(c.id);
+        if (old && old !== c) { r.guests.delete(c.id); old.room = null; old.role = null; try { old.close(); } catch (e) {} }   // the same player again
+      }
       if (r.guests.size >= MAX_GUESTS + 8) { c.send({ t: 'full' }); return; }   // a few spectators beyond the seats
       r.guests.set(c.id, c);
       c.room = String(m.code); c.role = 'guest';
-      c.send({ t: 'joined' });
-      r.host.send({ t: 'guest', id: c.id });
+      c.send({ t: 'joined', id: c.id });
+      if (r.host) r.host.send({ t: 'guest', id: c.id });
+      else c.send({ t: 'hostaway' });
     } else if (m.t === 'd' && c.role === 'guest') {
       const r = rooms.get(c.room);
-      if (r) r.host.send({ t: 'from', id: c.id, d: m.d });
+      if (r && r.host) r.host.send({ t: 'from', id: c.id, d: m.d });
     } else if (m.t === 'to' && c.role === 'host') {
       const r = rooms.get(c.room);
       if (!r) return;
       if (m.id) { const g = r.guests.get(m.id); if (g) g.send({ t: 'd', d: m.d }); }
       else for (const g of r.guests.values()) g.send({ t: 'd', d: m.d });
+    } else if (m.t === 'end' && c.role === 'host') {
+      const r = rooms.get(c.room);
+      if (r && r.host === c) { for (const g of r.guests.values()) { g.send({ t: 'hostleft' }); g.room = null; g.role = null; } rooms.delete(c.room); }
+      c.room = null; c.role = null;
     } else if (m.t === 'kick' && c.role === 'host') {
       const r = rooms.get(c.room), g = r && r.guests.get(m.id);
       if (g) { r.guests.delete(m.id); g.send({ t: 'hostleft' }); }
@@ -273,11 +307,17 @@ function onClient(c) {
     const r = c.room && rooms.get(c.room);
     if (!r) return;
     if (c.role === 'host' && r.host === c) {
+      if (r.hostKey && !c.virtual) {
+        // a tablet host dropped out: keep the room a while; it may come back
+        r.host = null; r.hostAway = Date.now();
+        for (const g of r.guests.values()) g.send({ t: 'hostaway' });
+        return;
+      }
       for (const g of r.guests.values()) { g.send({ t: 'hostleft' }); g.room = null; g.role = null; }
       rooms.delete(c.room);
-    } else if (c.role === 'guest') {
+    } else if (c.role === 'guest' && r.guests.get(c.id) === c) {
       r.guests.delete(c.id);
-      r.host.send({ t: 'left', id: c.id });
+      if (r.host) r.host.send({ t: 'left', id: c.id });
     }
   };
 }
@@ -363,13 +403,14 @@ function createRoom() {
   });
 }
 
-// Close a room once nobody is in it (sooner if someone had joined), or if its game gave up.
+// Close a room once nobody has been in it for a while (5 minutes once someone had joined, so players who
+// all dropped out can come back), or if its game gave up.
 function watch(room) {
   if (room.env.__tank.net.mode !== 'host') { destroy(room); return; }
   const r = rooms.get(room.code), n = r ? r.guests.size : 0;
   if (n > 0) { room.everJoined = true; room.emptySince = 0; return; }
   if (!room.emptySince) room.emptySince = Date.now();
-  if (Date.now() - room.emptySince > (room.everJoined ? 15000 : 60000)) destroy(room);
+  if (Date.now() - room.emptySince > (room.everJoined ? 300000 : 120000)) destroy(room);
 }
 function destroy(room) {
   if (room.done) return;

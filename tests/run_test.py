@@ -145,6 +145,7 @@ async def main():
         await H.screenshot(path='/home/claude/tests/host_end.png')
 
         # a guest leaves; back in the lobby the seat is gone
+        await ev(G[3], '__tank.goMenu()')          # leaving on purpose (closing the page only marks it away)
         await G[3].close()
         await H.wait_for_timeout(600)
         await ev(H, '__tank.net.hostLobby()')
@@ -182,6 +183,7 @@ async def main():
         await G[0].screenshot(path='/home/claude/tests/guest_play.png')
 
         # the host leaves: guests are told
+        await ev(H, '__tank.goMenu()')             # the host leaves on purpose
         await H.close()
         await G[0].wait_for_timeout(1200)
         check(await ev(G[0], '__tank.state') == 'netLost', 'guest told the host left')

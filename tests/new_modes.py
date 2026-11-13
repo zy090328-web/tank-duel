@@ -91,7 +91,7 @@ async def main():
     r = await ev(L, """(() => { const T = __tank, tk = T.tanksNow, t = tk[0]; tk[1].inv = 0; tk[1].shield = 0; T.kill(tk[1], 0); T.update(1 / 120); T.update(1 / 120);
       const w = [T.scores[0], T.gunWeapon(0), t.power]; t.cool = 0; const n = T.bullets.length; T.fire(t); return w.concat([T.bullets.length - n, t.power, t.cool > 0.4]); })()""")
     check(r == [1, 'spread', 'spread', 3, None, True], f'a kill moves you to the next weapon, which fires as that weapon {r}')
-    r = await ev(L, """(() => { const T = __tank, t = T.tanksNow[0]; for (let i = 0; i < 120; i++) T.update(1 / 120); const back = t.power;
+    r = await ev(L, """(() => { const T = __tank, t = T.tanksNow[0]; T.tanksNow.forEach(o => { if (o !== t) o.alive = false; }); t.inv = 5; for (let i = 0; i < 120; i++) T.update(1 / 120); const back = t.power;
       t.inv = 0; t.shield = 0; T.kill(t, 0); return [back, T.scores[0]]; })()""")
     check(r == ['spread', 0], f'the weapon comes back after its pause; destroying yourself costs a weapon {r}')
     r = await ev(L, """(() => { const T = __tank; for (let i = 0; i < 120 * 30; i++) T.update(1 / 120); return T.pickups.length; })()""")

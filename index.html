@@ -118,6 +118,14 @@ const C = {
   MINE_ARM: 0.8,         // seconds before a mine can go off
   MINE_TRIGGER: 0.5,     // a tank this close (centre to centre) sets an armed mine off
   MINE_R: 0.15,
+  MINE_SEE: 1.3,         // an armed mine is hidden from the other side, except to a tank this close
+  GAT_FIRST: 6,          // gatling: seconds into a round before it first appears on its spot,
+  GAT_RESPAWN: 15,       // and before it comes back after being taken
+  GAT_TIME: 2.2,         // one press fires a stream this long...
+  GAT_RATE: 0.075,       // ...a shot this often (about 30)...
+  GAT_SPREAD: 0.09,      // ...each a little off line (radians)...
+  GAT_LIFE: 1.6,         // ...short-lived and bouncing once
+  GAT_SLOW: 0.55,        // the tank drives at this fraction of its speed while it fires
   PIERCE_SPEED: 3.4,      // a piercing shot flies through walls, slowly, and never bounces
   BOMB_SPEED: 3.0,       // a bomb flies straight, slower than a shot...
   BOMB_LIFE: 1.5,        // ...goes off after this long (about 4.5 cells), or on touching a wall, a tank or a mine...
@@ -441,8 +449,10 @@ for (const m of [
 ]) { SOCCERMAPS.add(MAPS.length); MAPS.push(m); }
 let COLS = 11, ROWS = 11;      // size of the map being played; set by loadMap
 const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-const POWER_TYPES = ['laser', 'homing', 'guided', 'shield', 'spread', 'mine', 'pierce', 'bomb'];
-const POWER_NAME = { laser: 'LASER', homing: 'HOMING', guided: 'GUIDED', shield: 'SHIELD', spread: 'SPREAD', mine: 'MINE', pierce: 'PIERCE', bomb: 'BOMB' };
+const POWER_TYPES = ['laser', 'homing', 'guided', 'shield', 'spread', 'mine', 'pierce', 'bomb', 'gatling'];   // (gatling: only from its spot)
+const POWER_NAME = { laser: 'LASER', homing: 'HOMING', guided: 'GUIDED', shield: 'SHIELD', spread: 'SPREAD', mine: 'MINE', pierce: 'PIERCE', bomb: 'BOMB', gatling: 'GATLING' };
+// maps with a gatling spot in the middle, and the modes it comes in (not where shots only stun, nor gun game, nor on the hill)
+const GATLING_MAPS = new Set([0, 3, 5, 9, 11]);
 const MISSILE_TYPES = ['homing', 'guided', 'bomb'];
 
 /* ---------- helpers ---------- */
@@ -600,6 +610,8 @@ let shake = 0;
 let emptyT = 0;
 let roundT = 0, sdClosed = 0, sdStarted = false;   // play time this round; sudden-death rings closed so far
 let pickupTimer = 0, puBag = [];
+const gatPad = () => GATLING_MAPS.has(mapId) && ['classic', 'teams', 'dm', 'zombie'].includes(settings.game) ? { x: COLS / 2, y: ROWS / 2 } : null;
+let gatT = 0;                 // host: seconds until the gatling (re)appears on its spot
 let quitArm = 0;
 let LETHAL = false;
 let teamOf = [];            // team (0 red, 1 blue) of each tank in a team match
@@ -663,7 +675,7 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, stunImm: 0, vx: 0, vy: 0, dash: 0, dcool: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, stunImm: 0, gat: 0, gatT: 0, vx: 0, vy: 0, dash: 0, dcool: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, gone: false, respawn: 0, ai: null });
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
 let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], particles = [], marks = [];
@@ -1003,7 +1015,7 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0;
-    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0;
+    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.gat = 0; t.gatT = 0; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0;
   });
   ball = null; goalBy = -1;
   pot = { holder: -1, fuse: 0, wait: C.POT_WAIT, cd: 0, back: 0, from: -1, passT: 0, beep: 0 };
@@ -1012,7 +1024,7 @@ function resetEntities() {
   minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
   bullets = []; missiles = []; mines = []; pickups = []; beams = []; rings = []; particles = []; marks = [];
   netEvents = [];
-  pickupTimer = C.PICKUP_FIRST; emptyT = 0;
+  pickupTimer = C.PICKUP_FIRST; emptyT = 0; gatT = C.GAT_FIRST;
   roundT = 0; sdClosed = 0; sdStarted = false;
 }
 // every match gets an id, so the server can tell a result it already has
@@ -1356,7 +1368,7 @@ function fire(t) {
     if (t.guided.age < C.GUIDED_ARM) return false;
     t.guided.detonate = true; return true;
   }
-  if (t.charge > 0 || t.cool > 0 || t.shield > 0) return false;
+  if (t.charge > 0 || t.cool > 0 || t.shield > 0 || t.gat > 0) return false;
   if (t.power) { const ty = t.power, ok = usePower(t); if (ok && gunOn()) t.cool = Math.max(t.cool, GUN_COOL[ty] || 0.5); return ok; }
   if (shotsLeft(t) <= 0) return false;
   const s = muzzle(t, C.BULLET_R);
@@ -1388,11 +1400,14 @@ function usePower(t) {
   const type = t.power;
   t.power = null;
   const shot = extra => Object.assign({ id: ++entId, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0, extra: true }, extra);
-  netEv('sfx', type === 'spread' ? 'shoot' : type === 'pierce' ? 'pierce' : type === 'laser' ? 'charge' : type === 'shield' ? 'shield' : type === 'mine' ? 'drop' : 'launch', t.id);
+  if (type !== 'gatling') netEv('sfx', type === 'spread' ? 'shoot' : type === 'pierce' ? 'pierce' : type === 'laser' ? 'charge' : type === 'shield' ? 'shield' : type === 'mine' ? 'drop' : 'launch', t.id);
   if (type === 'spread' || type === 'pierce' || type === 'homing' || type === 'guided' || type === 'laser' || type === 'bomb') netEv('recoil', t.id);
   if (type === 'laser') {
     t.recoil = 1; t.charge = C.LASER_CHARGE; t.laserPath = tracePath(t.x, t.y, t.angle);
     sfx.charge();
+  } else if (type === 'gatling') {
+    t.gat = C.GAT_TIME; t.gatT = 0;
+    sfx.spin(); netEv('sfx', 'spin');
   } else if (type === 'shield') {
     t.shield = C.SHIELD_TIME;
     sfx.shield();
@@ -1442,6 +1457,7 @@ function hit(t, by = -1) {
   }
   if (stunMode()) {
     if (t.stunImm > 0) return false;
+    t.gat = 0;
     t.stun = C.STUN_TIME; t.stunImm = C.STUN_GUARD;
     rings.push({ x: t.x, y: t.y, r: 0.7, life: 0.3, max: 0.3, col: penOf(t.id) });
     sfx.block(); netEv('block', t.id, r2(t.x), r2(t.y));
@@ -1542,7 +1558,7 @@ function blast(m) {
 
 function kill(t, by = -1) {
   if (state === 'play' || state === 'ending') noteKill(t.id, by);
-  t.alive = false; t.charge = 0;
+  t.alive = false; t.charge = 0; t.gat = 0;
   const seed = (Math.random() * 1e9) | 0;
   marks.push({ x: t.x, y: t.y, col: penOf(t.id), seed });
   netEv('kill', t.id, r2(t.x), r2(t.y), seed);
@@ -1615,7 +1631,32 @@ function humanGone(id) {
 // how fast a tank drives: zombies are quicker, and quicker still in a dash; a stunned one stands
 function driveSpeed(t) {
   if (t.stun > 0) return 0;
-  return C.TANK_SPEED * (isZed(t.id) ? C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) : potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1);
+  return C.TANK_SPEED * (t.gat > 0 ? C.GAT_SLOW : 1) * (isZed(t.id) ? C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) : potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1);
+}
+
+/* ---------- the gatling ---------- */
+// while it runs, a shot leaves the barrels every GAT_RATE seconds, a little off line
+function gatStep(t, dt, control) {
+  t.gat = Math.max(0, t.gat - dt);
+  if (!control || t.stun > 0) return;
+  t.gatT -= dt;
+  while (t.gatT <= 0 && t.gat > 0) {
+    t.gatT += C.GAT_RATE;
+    const a = t.angle + (Math.random() - 0.5) * 2 * C.GAT_SPREAD, s = muzzle(t, C.BULLET_R);
+    bullets.push({ id: ++entId, x: s.x, y: s.y, vx: Math.cos(a) * C.BULLET_SPEED, vy: Math.sin(a) * C.BULLET_SPEED, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0, extra: true, life: C.GAT_LIFE, maxB: 1 });
+    t.recoil = 1; t.reveal = C.GRASS_REVEAL; t.inv = 0;
+    particles.push({ x: s.x, y: s.y, vx: Math.cos(a) * 2, vy: Math.sin(a) * 2, life: 0.12, max: 0.12, col: COL.graphite, size: 0.04 });
+    sfx.rattle(); netEv('recoil', t.id);
+  }
+}
+// host: the gatling appears on its spot, and comes back a while after someone takes it
+function gatSpot(dt) {
+  const pad = gatPad();
+  if (!pad || pickups.some(k => k.fixed)) return;
+  if ((gatT -= dt) > 0) return;
+  pickups.push({ x: pad.x, y: pad.y, type: 'gatling', age: 0, fixed: true });
+  rings.push({ x: pad.x, y: pad.y, r: 0.9, life: 0.4, max: 0.4, col: COL.graphite });
+  sfx.spawn(); netEv('sfx', 'spawn');
 }
 
 /* ---------- hot potato ---------- */
@@ -1726,7 +1767,7 @@ function bounceFx(b) {
 
 // Pickups appear as a mirrored pair of the same kind, so neither side is favoured.
 function spawnPickups() {
-  if (!puBag.length) { puBag = POWER_TYPES.slice(); for (let i = puBag.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [puBag[i], puBag[j]] = [puBag[j], puBag[i]]; } }
+  if (!puBag.length) { puBag = POWER_TYPES.filter(p => p !== 'gatling'); for (let i = puBag.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [puBag[i], puBag[j]] = [puBag[j], puBag[i]]; } }
   const far = q => tanks.every(t => !t.alive || Math.hypot(t.x - q.x, t.y - q.y) > 2) && pickups.every(k => Math.hypot(k.x - q.x, k.y - q.y) > 1.2);
   for (let tries = 0; tries < 80; tries++) {
     const c = (Math.random() * COLS) | 0, r = (Math.random() * ROWS) | 0;
@@ -1888,7 +1929,7 @@ function botInput(seat) {
     if (Math.hypot(t.x - cx, t.y - cy) > C.HILL_R * 0.45) { if (!(los && dFoe < 3)) { goal = { x: cx, y: cy }; fight = false; } }
     else if (!los) return hasFoe ? unitTo(foe.x - t.x, foe.y - t.y, 0.04) : IDLE;          // on the hill: stay and watch
   }
-  if (settings.powerups && !t.power && !(los && dFoe < 3.5)) {
+  if ((settings.powerups || pickups.some(k => k.fixed)) && !t.power && !isZed(seat) && !(los && dFoe < 3.5)) {
     let bd = 4.5, bk = null;
     for (const k of pickups) { const d = Math.hypot(k.x - t.x, k.y - t.y); if (d < bd) { bd = d; bk = k; } }
     if (bk) { goal = bk; fight = false; }
@@ -2080,6 +2121,7 @@ function stepPhysics(dt, lethal, control) {
     t.shield = Math.max(0, t.shield - dt);
     t.reveal = Math.max(0, t.reveal - dt);
     t.inv = Math.max(0, t.inv - dt);
+    if (t.gat > 0) gatStep(t, dt, control);
     t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt);
     if (gunOn() && !t.power && !t.guided && t.charge <= 0 && t.cool <= 0) { const w = gunWeapon(t.id); if (w !== 'shot') t.power = w; }
     const px = t.x, py = t.y;
@@ -2111,7 +2153,7 @@ function stepPhysics(dt, lethal, control) {
     if (!t.power && !t.guided && t.charge <= 0 && !isZed(t.id)) {
       for (let i = pickups.length - 1; i >= 0; i--) {
         const k = pickups[i];
-        if (Math.hypot(k.x - t.x, k.y - t.y) < C.TANK_R + 0.24) { t.power = k.type; pickups.splice(i, 1); sfx.pickup(); netEv('sfx', 'pickup', t.id); break; }
+        if (Math.hypot(k.x - t.x, k.y - t.y) < C.TANK_R + 0.24) { t.power = k.type; pickups.splice(i, 1); if (k.fixed) gatT = C.GAT_RESPAWN; sfx.pickup(); netEv('sfx', 'pickup', t.id); break; }
       }
     }
   }
@@ -2325,8 +2367,9 @@ function update(dt) {
       }
       if ((settings.powerups || mutNow === 'storm') && !gunOn()) {
         pickupTimer -= dt;
-        if (pickupTimer <= 0 && pickups.length <= (mutNow === 'storm' ? 5 : 1)) { spawnPickups(); pickupTimer = C.PICKUP_INTERVAL; }
+        if (pickupTimer <= 0 && pickups.filter(k => !k.fixed).length <= (mutNow === 'storm' ? 5 : 1)) { spawnPickups(); pickupTimer = C.PICKUP_INTERVAL; }
       }
+      gatSpot(dt);
       // "5 only" without power-ups: when nobody has a shot left and the field is clear, the round is a draw
       if (settings.ammo === 'limited' && !settings.powerups && !stunMode() && tanks.filter(t => t.alive).every(t => t.ammo <= 0) && bullets.length === 0) {
         emptyT += dt;
@@ -2910,7 +2953,7 @@ function buildSnap() {
     hl: hl ? [r2(hl.t), r2(hl.age), hl.v, hl.k, hl.b, hl.n, hl.touch ? 1 : 0, hl.goal] : null,
     pt: play && potatoOn() ? [pot.holder, r1(pot.fuse)] : null, bl: play && ball ? [r2(ball.x), r2(ball.y)] : null, gb: goalBy,
     rp: state === 'replay' && rp ? [rp.from, rp.to, rp.dur] : null,
-    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0),
+    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0),
       shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0, t.dcool > 0 ? r1(t.dcool) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
@@ -3324,6 +3367,7 @@ function burst(x, y, n, col, sp, life, size) {
 }
 function playEvent(e) {
   const kind = e[1], pen = penOf;
+  if (kind === 'recoil' && tanks[e[2]] && tanks[e[2]].gat) sfx.rattle();
   if (kind === 'shot') {
     const [, , id, x, y, a] = e;
     if (id === mySeat && localShots > 0) { localShots--; return; }   // already shown when the button was pressed
@@ -3393,7 +3437,7 @@ function applyEntities(a, b, k, dt) {
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
     t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0; t.inv = +q[11] || 0;
-    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0;
+    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0;
     t.laserPath = t.charge > 0 ? tracePath(t.x, t.y, t.angle) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -3487,7 +3531,9 @@ const sfx = {
   pierce: () => tone(300, 0.3, 'sine', 0.08, 700),
   alarm: () => { tone(660, 0.16, 'square', 0.06); tone(440, 0.24, 'square', 0.06, 0, 0.18); },
   slam: () => { noise(0.22, 0.2); tone(90, 0.18, 'sawtooth', 0.08, 50); },
-  crack: () => { noise(0.1, 0.13); tone(170, 0.09, 'triangle', 0.06, 80); }
+  crack: () => { noise(0.1, 0.13); tone(170, 0.09, 'triangle', 0.06, 80); },
+  spin: () => tone(120, 0.35, 'sawtooth', 0.05, 900),
+  rattle: () => { const now = performance.now(); if (now - (sfx.lastRattle || 0) < 60) return; sfx.lastRattle = now; tone(700, 0.04, 'square', 0.035, 300); noise(0.04, 0.05); }
 };
 
 /* ---------- layout ---------- */
@@ -3752,7 +3798,7 @@ function menuHintText(lobby) {
   if (k === 'game') return GAME_TEXT[settings.game];
   if (k === 'cpu') return settings.cpu ? `You against ${settings.cpu} computer tank${settings.cpu > 1 ? 's' : ''}, on this screen.` : 'Two players, one at each end of this screen.';
   if (k === 'ammo') return ammoText();
-  if (k === 'pu') return settings.powerups ? 'Pickups appear: laser, missiles, bombs, shield, mines and more.' : 'No pickups. Just tanks and shots.';
+  if (k === 'pu') return settings.powerups ? 'Pickups appear: laser, missiles, bombs, shield, hidden mines and more.' : 'No pickups (some maps still have a gatling spot in the middle).';
   if (k === 'soft') return [
     'Plain map: every wall stops every shot.',
     'Lightly drawn walls break when a shot hits them.',
@@ -4046,6 +4092,11 @@ function drawGlyph(type, s, col) {
     for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; ctx.moveTo(Math.cos(a) * s * 0.3, Math.sin(a) * s * 0.3); ctx.lineTo(Math.cos(a) * s * 0.64, Math.sin(a) * s * 0.64); }
     ctx.stroke();
     ctx.beginPath(); ctx.arc(0, 0, s * 0.34, 0, Math.PI * 2); ctx.fill();
+  } else if (type === 'gatling') {
+    // three barrels in a band
+    ctx.rect(-s * 0.62, -s * 0.36, s * 0.34, s * 0.72); ctx.fill();
+    ctx.beginPath(); for (const y of [-0.24, 0, 0.24]) { ctx.moveTo(-s * 0.28, y * s); ctx.lineTo(s * 0.66, y * s); } ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(s * 0.3, -s * 0.36); ctx.lineTo(s * 0.3, s * 0.36); ctx.stroke();
   } else if (type === 'bomb') {
     ctx.beginPath(); ctx.arc(-s * 0.08, s * 0.12, s * 0.44, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.moveTo(s * 0.22, -s * 0.22); ctx.quadraticCurveTo(s * 0.36, -s * 0.52, s * 0.56, -s * 0.5); ctx.stroke();
@@ -4058,11 +4109,23 @@ function drawGlyph(type, s, col) {
   }
 }
 
-function drawMine(mn) {
+// Mines hide once armed: the side that laid one sees it faintly; the other side only from right beside it.
+// Two players sharing a screen see every armed mine as the barest smudge. A replay shows them all.
+function mineAlpha(mn) {
+  if (replayView || !mn.armed) return 1;
+  const fade = clamp(1 - ((mn.age || 0) - C.MINE_ARM) / 0.6, 0, 1);       // fades out over a moment after arming
+  const eye = viewer();
+  let rest = 0;
+  if (eye < 0) rest = 0.1;
+  else if (friendOf(eye, mn.owner)) rest = 0.5;
+  else { const me = tanks[eye]; if (me && me.alive && Math.hypot(me.x - mn.x, me.y - mn.y) < C.MINE_SEE) rest = 0.85; }
+  return Math.max(rest, fade);
+}
+function drawMine(mn, alpha = 1) {
   const r = P * C.MINE_R;
   ctx.save(); ctx.translate(mn.x * P, mn.y * P);
   ctx.strokeStyle = COL.graphite; ctx.fillStyle = COL.graphite; ctx.lineWidth = Math.max(1.5, P * 0.045); ctx.lineCap = 'round';
-  ctx.globalAlpha = mn.armed ? 1 : 0.5;
+  ctx.globalAlpha = (mn.armed ? 1 : 0.5) * alpha;
   ctx.beginPath();
   for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r); ctx.lineTo(Math.cos(a) * r * 1.6, Math.sin(a) * r * 1.6); }
   ctx.stroke();
@@ -4070,6 +4133,7 @@ function drawMine(mn) {
   // a light in the colour of the tank that laid it; it blinks once the mine is armed
   const lit = !mn.armed || REDUCED || Math.floor(mn.age * 3) % 2 === 0;
   ctx.fillStyle = lit ? penOf(mn.owner) : COL.paper; ctx.beginPath(); ctx.arc(0, 0, r * 0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
@@ -4141,10 +4205,14 @@ function drawTank(t) {
     }
     return;
   }
-  // barrel (kicks back when firing)
+  // barrel (kicks back when firing); a gatling has three, which shake as it fires
   const kick = t.recoil * P * 0.06;
   ctx.fillStyle = COL.paper;
-  rrect(P * 0.04 - kick, -P * 0.055, P * 0.38, P * 0.11, P * 0.02); ctx.fill(); ctx.stroke();
+  if (t.power === 'gatling' || t.gat > 0) {
+    const spin = t.gat > 0 && !REDUCED ? Math.sin(performance.now() / 25) * P * 0.015 : 0;
+    for (const dy of [-0.075, 0, 0.075]) { rrect(P * 0.06 - kick * 0.4, dy * P - P * 0.028 + spin, P * 0.4, P * 0.056, P * 0.015); ctx.fill(); ctx.stroke(); }
+    ctx.fillStyle = col; rrect(P * 0.2, -P * 0.12, P * 0.06, P * 0.24, P * 0.01); ctx.fill();
+  } else { rrect(P * 0.04 - kick, -P * 0.055, P * 0.38, P * 0.11, P * 0.02); ctx.fill(); ctx.stroke(); }
   // turret
   ctx.fillStyle = t.power && !gunOn() ? COL.graphite : col; ctx.beginPath(); ctx.arc(0, 0, P * 0.14, 0, Math.PI * 2); ctx.fill();
   if (teamsOn() && !twoSided() && t.id === mySeat) { ctx.fillStyle = COL.paper; ctx.beginPath(); ctx.arc(0, 0, P * 0.065, 0, Math.PI * 2); ctx.fill(); }
@@ -4849,8 +4917,15 @@ function render() {
   }
   for (const m of marks) drawMark(m);
   if (structs.length && matchOn) drawBase();
+  const pad = matchOn ? gatPad() : null;
+  if (pad && !pickups.some(k => k.type === 'gatling')) {
+    ctx.save(); ctx.translate(pad.x * P, pad.y * P); ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = COL.graphite; ctx.lineWidth = Math.max(1.5, P * 0.04); ctx.setLineDash([P * 0.08, P * 0.08]);
+    ctx.beginPath(); ctx.arc(0, 0, P * 0.34, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    drawGlyph('gatling', P * 0.22, COL.graphite); ctx.restore(); ctx.globalAlpha = 1;
+  }
   for (const k of pickups) drawPickup(k);
-  for (const mn of mines) drawMine(mn);
+  for (const mn of mines) { const a = mineAlpha(mn); if (a > 0) drawMine(mn, a); }
   if (rsv) drawShotPath();
   if (ball && matchOn) drawBall(ball);
 
@@ -5136,6 +5211,7 @@ window.__tank = {
   damageStruct, spawnWave, endBase, BASEMAPS, set roundTv(v) { roundT = v; },
   get zed() { return zed; }, get infWin() { return infWin; }, infect, matchDone, get rec() { return rec; }, get hl() { return hl; }, get rp() { return rp; }, get rpT() { return rpT; },
   replayPlan, skipReplay, replayText, replayItems, drawModeIcon, get lastHuman() { return lastHuman; },
+  gatPad, mineAlpha, get gatT() { return gatT; }, set gatT(v) { gatT = v; }, GATLING_MAPS,
   get myKey() { return myKey; }, get awaySince() { return awaySince; }, get lastGame() { return lastGame; }, guestReconnect, get peer() { return peer; }, get myId() { return myId; },
   get pot() { return pot; }, get ball() { return ball; }, get goalBy() { return goalBy; }, get goalCell() { return goalCell; }, SOCCERMAPS, gunWeapon, gunLadder, potatoBoom, scoreGoal,
   lobbyFrames, paneItems, applyMut, openBoard, reportResult, get boardData() { return boardData; }, get mutNow() { return mutNow; }, MUTS, get menuStep() { return menuStep; }, set menuStep(v) { menuStep = v; }, get lobbyPane() { return lobbyPane; }, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,

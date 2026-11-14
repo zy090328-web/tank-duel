@@ -1,6 +1,6 @@
 # Ethan’s Tank Duel
 
-A tank game drawn on graph paper, for touch-screen tablets and phones.
+A tank game for touch-screen tablets and phones: a night-dark arena, raised walls, tanks and shots that glow in their player's colour.
 
 **Who plays**
 
@@ -42,6 +42,8 @@ The title menu goes one step at a time (mode → who plays → rules → START).
 
 Options for every mode: four ammo rules, power-ups (laser, homing and guided missiles, bomb, shield, spread, mine, piercing shot; an armed mine is hidden from the other side unless a tank is within 1.3 cells, faint to its own side, and a bare smudge when two share a screen), **breakable walls** (lightly drawn walls break when shot), and the map set. Three and more tanks play on the 13×13 maps, three of which are four-way symmetric. After a match a table shows each tank's score, kills, losses and hit rate.
 
+**Look and sound**: one dark theme. Walls are drawn as raised blocks (breakable ones as cracked glass, cells shut by sudden death hatched in red); tanks, shots, pickups and blasts give off light, drawn from small cached sprites that add up, so nothing is blurred per frame. The two typefaces (Latin subsets of Poppins and Inter, SIL Open Font License) are inside `index.html` as data, so the page loads nothing from another site and looks the same where Google Fonts cannot be reached. Sound is a small synth with no files: every note has a soft start, and everything passes through one compressor and a short echo.
+
 The game itself is `index.html`. `server.js` serves it and runs online rooms: each room is a copy of the same game script running on the server with drawing switched off, so every player is an equal guest (one network round trip each). Players' own tanks move at once on their device and are corrected toward the server.
 
 **Direct game** (on the game's server): one tablet hosts, and each guest opens a direct WebRTC link to it (offer/answer passed through the server). On one Wi-Fi the link stays on the local network; between different networks STUN servers that answer inside mainland China (Xiaomi, Tencent, Bilibili) plus Cloudflare/Google let the devices connect straight to each other. If a direct link can't form (some mobile networks block it), that guest keeps playing through the server.
@@ -50,4 +52,4 @@ Served from anywhere else (no `server.js`), online play falls back to [PeerJS](h
 
 Deploy: Railway builds `server.js` on push. `deploy/setup-server.sh` sets it up on a plain Ubuntu server instead.
 
-`tests/`: Playwright tests for game modes, computer tanks, teams and names (`modes.py`, needs the server on port 8790), Infection, replays and the mode cards (`infect_replay.py`), Tank Soccer, Hot Potato and Gun Game (`new_modes.py`), dropping out and coming back (`rejoin.py`), the gatling and hidden mines (`gatling_mines.py`), deflectors, portals and barrels (`gadgets.py`), random maps (`random_maps.py`), map checks (`maps_check.py`), base mode (`base.py`), party rules (`party.py`), the leaderboard (`board.py`, starts its own server), the bomb (`bomb.py`), coming back protected (`respawn.py`), grass and water (`terrain.py`), server-run rooms (`dedicated.py`, `dedicated_end.py`), tablet-hosted rooms (`run_test.py`, with `mockpeer.js` standing in for PeerJS), landscape controls (`land.py`), and latency/smoothness under simulated lag (`compare.py`, `smooth.py`, using the server's `TEST_LAG_MS` / `TEST_SPIKE`).
+`tests/`: Playwright tests for game modes, computer tanks, teams and names (`modes.py`, needs the server on port 8790), Infection, replays and the mode cards (`infect_replay.py`), Tank Soccer, Hot Potato and Gun Game (`new_modes.py`), dropping out and coming back (`rejoin.py`), the gatling and hidden mines (`gatling_mines.py`), deflectors, portals and barrels (`gadgets.py`), random maps (`random_maps.py`), sound levels (`sound.py`), map checks (`maps_check.py`), base mode (`base.py`), party rules (`party.py`), the leaderboard (`board.py`, starts its own server), the bomb (`bomb.py`), coming back protected (`respawn.py`), grass and water (`terrain.py`), server-run rooms (`dedicated.py`, `dedicated_end.py`), tablet-hosted rooms (`run_test.py`, with `mockpeer.js` standing in for PeerJS), landscape controls (`land.py`), and latency/smoothness under simulated lag (`compare.py`, `smooth.py`, using the server's `TEST_LAG_MS` / `TEST_SPIKE`).

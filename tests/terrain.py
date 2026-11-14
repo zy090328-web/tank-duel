@@ -124,7 +124,7 @@ async def main():
       await G.wait_for_timeout(250)
     check(await ev(G, '__tank.settings().terrain') is True, 'guest knows terrain is on')
     same = await ev(H, '[...__tank.water].join("") + "/" + [...__tank.grass].join("")') == await ev(G, '[...__tank.water].join("") + "/" + [...__tank.grass].join("")')
-    check(same and await ev(G, '__tank.water.reduce((a, b) => a + b, 0)') > 0, 'guest has the same water and grass as the host')
+    check(same and await ev(G, '__tank.water.reduce((a, b) => a + b, 0) + __tank.grass.reduce((a, b) => a + b, 0)') > 0, 'guest has the same water and grass as the host')   # (some maps have grass but no water)
     g = await ev(H, FIND, 'grass'); far = await ev(H, FAR, [g[0] + 0.5, g[1] + 0.5, 4])
     await ev(H, f"(() => {{ const [a, b] = __tank.tanksNow; a.x = {g[0]} + 0.5; a.y = {g[1]} + 0.5; a.reveal = 0; b.x = {far[0]} + 0.5; b.y = {far[1]} + 0.5; }})()")
     await G.wait_for_timeout(500)

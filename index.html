@@ -3161,7 +3161,7 @@ function openHostPeer(tries, again) {
     if (again) { hostLineDown(); return; }                // still trying to get the room back
     if (e && e.type === 'unavailable-id' && tries < 5) { p.destroy(); openHostPeer(tries + 1); return; }
     // a lost link to the introduction server does not cut games already connected
-    if (seats.length > 1 && state !== 'hostWait') return;
+    if (seats.length > 1 && !hostInLobby()) return;
     netLost(peerError(e));
   });
 }
@@ -3172,15 +3172,16 @@ function hostLineDown() {
   if (rejoinAt) return;
   rejoinAt = performance.now() + (rejoinTries++ ? 3000 : 300);
 }
+const hostInLobby = () => state === 'hostWait' || (state === 'skins' && skinBack === 'hostWait');
 function acceptGuest(conn) {
   conn.on('open', () => {
-    // the same player coming back (same id) keeps their name, team and seat
+    // the same player coming back (same id) keeps their name, skin, team and seat
     const old = guests.get(conn.peer);
     if (old && old.pc) try { old.pc.close(); } catch (e) {}
-    const g = { conn, inp: [0, 0, 0], fire: 0, lastFire: old ? old.lastFire : null, lastAt: performance.now(), name: old ? old.name : undefined, away: 0 };
+    const g = { conn, inp: [0, 0, 0], fire: 0, lastFire: old ? old.lastFire : null, lastAt: performance.now(), name: old ? old.name : undefined, skin: old ? old.skin : undefined, away: 0 };
     guests.set(conn.peer, g);
-    if (state === 'hostWait') reseat();
-    const s = seats.indexOf(conn.peer), t = s >= 0 && state !== 'hostWait' ? tanks[s] : null;
+    if (hostInLobby()) reseat();
+    const s = seats.indexOf(conn.peer), t = s >= 0 && !hostInLobby() ? tanks[s] : null;
     if (t && t.gone) { t.gone = false; if (respawnMode() || isZed(s)) t.respawn = 1; }     // dropped out for good earlier: back in
     hostDirect(conn.peer, g);
     sfx.pickup();
@@ -3207,7 +3208,7 @@ function hostData(id, d) {
   if (typeof d.sk === 'string') { g.skin = validSkin(d.sk); g.lastAt = performance.now(); return; }
   if (d.c === 'side') {                                    // any guest may swap its own team
     g.lastAt = performance.now();
-    if (state === 'hostWait') { const k = seats.indexOf(id); if (k >= 0) toggleTeam(k); }
+    if (hostInLobby()) { const k = seats.indexOf(id); if (k >= 0) toggleTeam(k); }
     return;
   }
   if (d.c === 'skip') { g.lastAt = performance.now(); if (state === 'replay') finishRound(); return; }   // anyone may skip a replay
@@ -3216,12 +3217,12 @@ function hostData(id, d) {
     // room commands are only taken from the player who leads a server-run room
     if (!HEADLESS || leaderId() !== id) return;
     g.lastAt = performance.now();
-    if (d.c === 'set' && state === 'hostWait') { const v = validSettings(d.v); if (v) { settings = v; mapOrder = mapPool(); } }
-    else if (d.c === 'start' && state === 'hostWait') hostStart();
+    if (d.c === 'set' && hostInLobby()) { const v = validSettings(d.v); if (v) { settings = v; mapOrder = mapPool(); } }
+    else if (d.c === 'start' && hostInLobby()) hostStart();
     else if (d.c === 'rematch' && state === 'matchEnd') hostStart();
     else if (d.c === 'lobby' && state === 'matchEnd') hostLobby();
-    else if (d.c === 'bots' && state === 'hostWait') { lobbyBots = clamp(d.v | 0, 0, MAX_PLAYERS - 1); reseat(); }
-    else if (d.c === 'team' && state === 'hostWait') toggleTeam(d.v | 0);
+    else if (d.c === 'bots' && hostInLobby()) { lobbyBots = clamp(d.v | 0, 0, MAX_PLAYERS - 1); reseat(); }
+    else if (d.c === 'team' && hostInLobby()) toggleTeam(d.v | 0);
     return;
   }
   if (!Array.isArray(d.i)) return;
@@ -3243,7 +3244,7 @@ function guestGone(id) {
   if (!guests.has(id)) return;
   try { const pc = guests.get(id).pc; if (pc) pc.close(); } catch (e) {}
   guests.delete(id);
-  if (state === 'hostWait') { reseat(); return; }
+  if (hostInLobby()) { reseat(); return; }
   const s = seats.indexOf(id);
   if (s < 0) return;
   // mid-match: the tank stays out until the next match
@@ -3279,7 +3280,7 @@ function hostStep(dt) {
   // taking the room back after our own line dropped
   if (rejoinAt && now >= rejoinAt) { rejoinAt = 0; try { if (peer) peer.destroy(); } catch (e) {} openHostPeer(0, true); }
   netAcc += dt;
-  const rate = state === 'hostWait' ? (HEADLESS ? 0.1 : 0.25) : SEND_RATE;
+  const rate = hostInLobby() ? (HEADLESS ? 0.1 : 0.25) : SEND_RATE;
   if (netAcc < rate - 1e-6) return;
   netAcc -= rate;                    // keep an even rhythm: carry the remainder instead of dropping it
   if (netAcc > rate) netAcc = 0;
@@ -3296,9 +3297,9 @@ const r1 = v => Math.round(v * 10) / 10;
 function buildSnap() {
   const now = performance.now();
   while (netEvents.length && now - netEvents[0].at > 700) netEvents.shift();
-  const play = state !== 'hostWait';
+  const play = !hostInLobby();
   return {
-    ts: r1(now), dd: HEADLESS ? 1 : 0, ld: HEADLESS ? leaderId() : null, st: state, t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
+    ts: r1(now), dd: HEADLESS ? 1 : 0, ld: HEADLESS ? leaderId() : null, st: play ? state : 'hostWait', t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
     seats, sc: scores, w: winner, dr: drawReason,
     set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0, settings.terrain ? 1 : 0, settings.mut],
     mu: mutNow,
@@ -3684,7 +3685,8 @@ function applyDiscrete(g, dt) {
     if (c !== lastCount && c >= 1) { lastCount = c; sfx.tick(); }
   }
   const wasSd = sdOn();
-  state = st; stateT = +g.t || 0; roundT = +g.rt || 0;
+  if (!(state === 'skins' && st === 'guestWait')) { state = st; stateT = +g.t || 0; }
+  roundT = +g.rt || 0;
   if (!wasSd && sdOn() && st === 'play') sfx.alarm();
   const sd = clamp(g.sd | 0, 0, ringCount());
   if (sd > localSd && st !== 'guestWait') {
@@ -5303,6 +5305,7 @@ const lobbySnap = () => (snaps.length ? snaps[snaps.length - 1].g : null) || {};
 const lobbySeats = () => mode === 'guest' ? (lobbySnap().seats || []) : seats;
 const lobbyTeams = () => mode === 'guest' ? (lobbySnap().tm || []) : seats.map(id => teamPick.get(id) ? 1 : 0);
 const lobbyNames = () => mode === 'guest' ? (lobbySnap().nm || []) : seats.map(seatLabel);
+const lobbySkins = () => mode === 'guest' ? (lobbySnap().sk || []) : seats.map(seatSkin);
 const lobbyCtl = () => mode === 'host' || (mode === 'guest' && isLeader);     // may this device change the room?
 const inLobby = () => state === 'hostWait' || (state === 'guestWait' && !netMsg);
 const seatGeo = () => lobbyCtl() ? { y0: 2.0, gap: 0.52 } : { y0: 2.5, gap: 0.55 };
@@ -5321,13 +5324,21 @@ function lobbyFrames() {
   return { L: { u: v, cx: LW / 2 - v * 3.15, y: cy - v * (l[0] + l[1]) / 2 }, R: { u: v, cx: LW / 2 + v * 4.0, y: cy - v * (r[0] + r[1]) / 2 } };
 }
 function seatRows() {
-  const cx = mcx(), { y0, gap } = seatGeo(), list = lobbySeats(), tm = lobbyTeams(), nm = lobbyNames(), teams = pickTeams();
+  const cx = mcx(), { y0, gap } = seatGeo(), list = lobbySeats(), tm = lobbyTeams(), nm = lobbyNames(), sk = lobbySkins(), teams = pickTeams();
   for (let i = 0; i < MAX_PLAYERS; i++) {
     const y = AY + U * (y0 + i * gap), has = i < list.length, id = list[i];
     const col = !has ? COL.graphite : teams ? COL.pens[tm[i] ? 1 : 0] : COL.pens[i];
-    ctx.globalAlpha = has ? 1 : 0.18; ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(cx - U * 3.7, y, U * 0.15, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
-    if (!has) { label('open seat', cx - U * 3.35, y, U * 0.28, COL.graphite, FONT_B, 0.35, 'left'); continue; }
+    if (has) {
+      const savedP = P;
+      try {
+        P = U * 0.44;
+        drawTank({ x: (cx - U * 3.7) / P, y: y / P, angle: 0, id: -1, skin: sk[i] || 'classic', pen: col, inv: 0, shield: 0, power: null, recoil: 0, stun: 0, gat: 0 });
+      } finally { P = savedP; }
+    } else {
+      ctx.globalAlpha = 0.18; ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(cx - U * 3.7, y, U * 0.15, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+      label('open seat', cx - U * 3.35, y, U * 0.28, COL.graphite, FONT_B, 0.35, 'left'); continue;
+    }
     const me = mode === 'host' ? id === 'host' : id === myId;
     const name = cleanName(nm[i]) || (me ? 'You' : id === 'host' ? 'Host' : 'Player ' + (i + 1));
     const away = mode === 'guest' ? !!(lobbySnap().aw || [])[i] : guests.has(id) && !!guests.get(id).away;
@@ -5499,13 +5510,14 @@ function drawSkins(accent) {
         P = it.h * 0.78;
         drawTank({
           x: (it.x + it.h * 0.58) / P, y: (it.y + it.h * 0.5) / P,
-          angle: ang, id: 0, skin: it.skin.id, pen: previewCol,
+          angle: ang, id: -1, skin: it.skin.id, pen: previewCol,
           inv: 0, shield: 0, power: null, recoil: 0, stun: 0, gat: 0
         });
       } finally { P = savedP; }
       const tx = it.x + it.h * 1.1;
-      label(it.skin.name, tx, it.y + it.h * 0.36, U * 0.38, it.on ? previewCol : ink, FONT_D, 1, 'left', it.x + it.w - tx - U * 0.16);
+      label(it.skin.name, tx, it.y + it.h * 0.36, U * 0.38, it.on ? previewCol : ink, FONT_D, 1, 'left', it.x + it.w - tx - U * 0.42);
       label(it.skin.desc, tx, it.y + it.h * 0.68, U * 0.22, ink, FONT_B, 0.72, 'left', it.x + it.w - tx - U * 0.16);
+      if (it.on) label('✓', it.x + it.w - U * 0.28, it.y + U * 0.3, U * 0.28, previewCol, FONT_D);
     } else if (it.kind === 'sback') {
       drawChip(it, false, previewCol);
     }
@@ -5628,7 +5640,7 @@ function drawOverlay(p, seat) {
   if (state === 'title') {
     const head = menuStep === 'mode' ? 'Ethan’s Tank Duel' : menuStep === 'who' ? `${GAME_NAME[settings.game]}: who plays?` : menuStep === 'mut' ? 'Party rules' : `${GAME_NAME[settings.game]} · ${whoShort()}`;
     const mt = menuTop();
-    label(head, cx, mt + U * 0.42, U * (menuStep === 'mode' ? 0.58 : 0.56), col, menuStep === 'mode' ? FONT_T : FONT_D);
+    label(head, cx, mt + U * 0.42, U * (menuStep === 'mode' ? 0.58 : 0.56), col, menuStep === 'mode' ? FONT_T : FONT_D, 1, 'center', menuStep === 'mode' ? U * 5.6 : AW - U * 0.4);
     label(menuHintText(false), cx, mt + U * 0.95, U * 0.27, COL.graphite, FONT_B, 1, 'center', AW - U * 0.5);
     drawItems(menuItems(), col);
   } else if (state === 'countdown') {
@@ -5978,6 +5990,16 @@ addEventListener('keydown', e => {
   if (state === 'online') { if (k === 'h') startHosting(); else if (k === 'j') { state = 'joinCode'; typedCode = ''; } return; }
   if (state === 'hostWait') { if (k === 'enter' || k === ' ') hostStart(); return; }
   if (state === 'guestWait' && isLeader) { if (k === 'enter' || k === ' ') sendCmd('start'); return; }
+  if (state === 'skins') {
+    if (k === 'tab' && skinBack === 'title') { e.preventDefault(); skinSlot = 1 - skinSlot; sfx.tick(); return; }
+    if (k >= '1' && k <= String(SKINS.length)) {
+      const id = SKINS[+k - 1].id;
+      sfx.tick(); if (skinBack === 'title' && skinSlot === 1) setP2Skin(id); else setMySkin(id);
+      return;
+    }
+    if (k === 'enter' || k === ' ') { sfx.tick(); closeSkins(); }
+    return;
+  }
   if (NET_SCREENS.includes(state)) return;
   if (state === 'matchEnd') {
     if (stateT > 1.2 && (k === ' ' || k === 'enter')) { if (mode === 'host') hostStart(); else if (mode === 'guest') { if (isLeader) sendCmd('rematch'); } else startMatch(); }
@@ -6048,7 +6070,7 @@ window.__tank = {
   get myKey() { return myKey; }, get awaySince() { return awaySince; }, get lastGame() { return lastGame; }, guestReconnect, get peer() { return peer; }, get myId() { return myId; },
   get pot() { return pot; }, get ball() { return ball; }, get goalBy() { return goalBy; }, get goalCell() { return goalCell; }, SOCCERMAPS, gunWeapon, gunLadder, potatoBoom, scoreGoal,
   lobbyFrames, paneItems, applyMut, openBoard, reportResult, get boardData() { return boardData; }, get mutNow() { return mutNow; }, MUTS, get menuStep() { return menuStep; }, set menuStep(v) { menuStep = v; }, get lobbyPane() { return lobbyPane; }, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
-  lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
+  lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get skins() { return lobbySkins(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };
 
 if (hot && hot.ready) hot.ready(start); else start((hot && hot.data) || {});

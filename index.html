@@ -767,9 +767,13 @@ const SKINS = [
 const SKIN_IDS = SKINS.map(s => s.id);
 const validSkin = id => SKIN_IDS.includes(id) ? id : 'classic';
 const skinMeta = id => SKINS.find(s => s.id === validSkin(id)) || SKINS[0];
-let mySkin = 'classic', p2Skin = 'classic', skins = [], skinSentAt = 0, skinBack = 'title', skinSlot = 0;
+let mySkin = 'classic', p2Skin = 'classic', cpuSkins = ['stealth', 'heavy', 'cyber'], skins = [], skinSentAt = 0, skinBack = 'title', skinSlot = 0;
 try { mySkin = validSkin(localStorage.getItem('tankduel-skin')); } catch (e) {}
 try { p2Skin = validSkin(localStorage.getItem('tankduel-skin-p2')); } catch (e) {}
+try {
+  const savedCpus = JSON.parse(localStorage.getItem('tankduel-skin-cpu') || 'null');
+  if (Array.isArray(savedCpus)) cpuSkins = [0, 1, 2].map(i => validSkin(savedCpus[i] || SKIN_IDS[(i + 1) % SKIN_IDS.length]));
+} catch (e) {}
 const skinOf = id => validSkin((tanks[id] && tanks[id].skin) || skins[id] || (id === 0 ? mySkin : 'classic'));
 const classOf = v => skinMeta(typeof v === 'string' ? v : v && typeof v === 'object' ? (v.skin || skinOf(v.id)) : skinOf(v));
 function setMySkin(id) {
@@ -780,6 +784,11 @@ function setMySkin(id) {
 function setP2Skin(id) {
   p2Skin = validSkin(id);
   try { localStorage.setItem('tankduel-skin-p2', p2Skin); } catch (e) {}
+}
+function setCpuSkin(idx, id) {
+  if (idx < 0 || idx >= 3) return;
+  cpuSkins[idx] = validSkin(id);
+  try { localStorage.setItem('tankduel-skin-cpu', JSON.stringify(cpuSkins)); } catch (e) {}
 }
 function openSkins() { skinBack = state; skinSlot = 0; state = 'skins'; stateT = 0; layout(); }
 function closeSkins() { state = NET_SCREENS.includes(skinBack) || skinBack === 'title' ? skinBack : 'title'; stateT = 0; layout(); }
@@ -1382,7 +1391,7 @@ function setupLocal() {
   bots = new Set(soloMatch ? tanks.slice(1).map(t => t.id) : []);
   teamOf = tanks.map(t => t.id % 2);
   names = soloMatch ? tanks.map(t => t.id ? 'CPU ' + t.id : (myName || 'You')) : [];
-  skins = tanks.map(t => t.id === 0 ? mySkin : (!soloMatch && t.id === 1 ? p2Skin : SKIN_IDS[t.id % SKIN_IDS.length]));
+  skins = tanks.map(t => t.id === 0 ? mySkin : (soloMatch ? (cpuSkins[t.id - 1] || SKIN_IDS[t.id % SKIN_IDS.length]) : (t.id === 1 ? p2Skin : SKIN_IDS[t.id % SKIN_IDS.length])));
 }
 function beginFromMenu() { if (resumeMatch) { resumeMatch = false; startRound(); } else { setupLocal(); startMatch(); } }
 function goMenu() {
@@ -3304,8 +3313,12 @@ function hostData(id, d) {
   const g = guests.get(id);
   if (!g || !d || typeof d !== 'object') return;
   if (d.sig && typeof d.sig === 'object') { hostSignal(g, d.sig); return; }
-  if (typeof d.n === 'string') { g.name = cleanName(d.n); g.lastAt = performance.now(); return; }
-  if (typeof d.sk === 'string') { g.skin = validSkin(d.sk); g.lastAt = performance.now(); return; }
+  if (typeof d.n === 'string' || typeof d.sk === 'string') {
+    if (typeof d.n === 'string') g.name = cleanName(d.n);
+    if (typeof d.sk === 'string') g.skin = validSkin(d.sk);
+    g.lastAt = performance.now();
+    return;
+  }
   if (d.c === 'side') {                                    // any guest may swap its own team
     g.lastAt = performance.now();
     if (hostInLobby()) { const k = seats.indexOf(id); if (k >= 0) toggleTeam(k); }
@@ -3433,7 +3446,7 @@ async function joinGame(code) {
   mode = 'guest'; mySeat = -1; netCode = code; state = 'guestWait'; stateT = 0;
   netMsg = 'Connecting to game ' + code + '…';
   snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1; dedicatedGame = false; isLeader = false; sentPrefs = false;
-  interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; netRttMs = 0; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; prevNetState = '';
+  interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; netRttMs = 0; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; prevNetState = ''; skinSentAt = 0;
   trails.clear(); seen.clear(); rejoinAt = 0; rejoinTries = 0; awaySince = 0; hostAwayMsg = false;
   if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'guest') return;
@@ -3451,7 +3464,7 @@ function guestConnect(code, again) {
       if (hostConn !== c) return;
       if (p.myId) myId = p.myId;                 // the server's id for this device, the same every time it joins
       netMsg = ''; connTimer = 0; awaySince = 0; rejoinTries = 0; rejoinAt = 0; lastArrival = 0;
-      try { c.send({ n: myName }); } catch (e) {}
+      try { c.send({ n: myName, sk: mySkin }); } catch (e) {}
       try { lastGame = { code, at: Date.now() }; localStorage.setItem('tankduel-last', JSON.stringify(lastGame)); } catch (e) {}
     });
     c.on('data', d => { if (hostConn === c) onHostData(d); });
@@ -4262,11 +4275,13 @@ function menuItems(top = menuTop(), buttons = null, lobby = false) {
   }
   if (menuStep === 'who') return [
     ...cardGrid([0, 1, 2, 3].map(n => ({ kind: 'cpu', v: n, text: n ? `You + ${n} CPU` : '2 players', sub: whoText(n), on: settings.cpu === n })), y0),
-    button('step', '‹ Back', cx, top + U * 4.75, U * 2.6, 'mode')];
-  const r = ruleRows(y0);
+    button('step', '‹ Back', cx - U * 2.2, top + U * 4.75, U * 2.2, 'mode'),
+    button('skins', 'Skins', cx + U * 1.4, top + U * 4.75, U * 3.8)];
+  const r = ruleRows(y0), sy = top + U * (twoSided() ? 5.08 : 5.4);
   return [...r.items,
-    button('step', '‹ Back', cx - U * 2.9, top + U * (twoSided() ? 5.08 : 5.4), U * 2.4, 'who'),
-    button('start', resumeMatch ? 'CONTINUE' : 'START', cx + U * 1.3, top + U * (twoSided() ? 5.08 : 5.4), U * 4.6)];
+    button('step', '‹ Back', cx - U * 3.55, sy, U * 2.0, 'who'),
+    button('skins', 'Skins', cx - U * 1.25, sy, U * 2.0),
+    button('start', resumeMatch ? 'CONTINUE' : 'START', cx + U * 1.95, sy, U * 3.9)];
 }
 // the waiting room's mode and rules pages (for whoever sets the game up)
 function paneItems() {
@@ -4378,8 +4393,15 @@ function applyMenu(it) {
   if (it.kind === 'bback') { sfx.tick(); closeBoard(); return; }
   if (it.kind === 'skins') { sfx.tick(); openSkins(); return; }
   if (it.kind === 'sback') { sfx.tick(); closeSkins(); return; }
-  if (it.kind === 'skinslot') { sfx.tick(); skinSlot = it.v ? 1 : 0; return; }
-  if (it.kind === 'skinpick') { sfx.tick(); if (skinBack === 'title' && skinSlot === 1) setP2Skin(it.v); else setMySkin(it.v); return; }
+  if (it.kind === 'skinslot') { sfx.tick(); skinSlot = clamp(it.v | 0, 0, settings.cpu ? settings.cpu : 1); return; }
+  if (it.kind === 'skinpick') {
+    sfx.tick();
+    if (skinBack === 'title' && skinSlot > 0) {
+      if (settings.cpu === 0) setP2Skin(it.v);
+      else setCpuSkin(skinSlot - 1, it.v);
+    } else setMySkin(it.v);
+    return;
+  }
   if (it.kind === 'brow') { boardPick = boardPick === it.v ? -1 : it.v; sfx.tick(); return; }
   if (SETTING_KINDS.includes(it.kind)) menuFocus = it.kind;
   if (it.kind === 'step') { menuStep = it.v; menuFocus = ''; sfx.tick(); return; }
@@ -5460,7 +5482,8 @@ const lobbyNames = () => mode === 'guest' ? (lobbySnap().nm || []) : seats.map(s
 const lobbySkins = () => mode === 'guest' ? (lobbySnap().sk || []) : seats.map(seatSkin);
 const lobbyCtl = () => mode === 'host' || (mode === 'guest' && isLeader);     // may this device change the room?
 const inLobby = () => state === 'hostWait' || (state === 'guestWait' && !netMsg);
-const seatGeo = () => lobbyCtl() ? { y0: 2.0, gap: 0.52 } : { y0: 2.5, gap: 0.55 };
+const lobbyGeo = () => lobbyCtl() ? { y0: 2.0, gap: 0.52 } : { y0: 2.25, gap: 0.53 };
+const seatGeo = lobbyGeo;
 const teamChip = i => { const g = seatGeo(), w = U * 1.3, h = U * 0.42; return { kind: 'team', v: i, x: mcx() + U * 2.55, y: AY + U * (g.y0 + i * g.gap) - h / 2, w, h }; };
 const nameChip = (yy, w = U * 3.9) => { const h = U * 0.54; return { kind: 'name', text: myName ? 'Name: ' + myName : 'Set your name', x: mcx() - w / 2, y: AY + U * yy - h / 2, w, h }; };
 const skinChip = (yy, w = U * 2.5) => { const h = U * 0.54; return { kind: 'skins', text: 'Skin: ' + skinMeta(mySkin).name, x: mcx() - w / 2, y: AY + U * yy - h / 2, w, h }; };
@@ -5468,7 +5491,7 @@ const skinChip = (yy, w = U * 2.5) => { const h = U * 0.54; return { kind: 'skin
 // the screen allows. Returns null when the screen is upright or the single column is just as large.
 function lobbyFrames() {
   if (!land || !inLobby() || (lobbyPane && lobbyCtl())) return null;
-  const ctl = lobbyCtl(), l = ctl ? [0.3, 5.85] : [0.5, 5.05], r = ctl ? [5.2, 8.5] : [5.4, 9.6];
+  const ctl = lobbyCtl(), l = ctl ? [0.3, 5.85] : [0.45, 5.55], r = ctl ? [5.2, 8.5] : [5.4, 8.9];
   const top = 24, hh = LH - top - 28;
   const v = Math.min(hh / Math.max(l[1] - l[0], r[1] - r[0]), LW / 14.6);
   if (v <= U * 1.05) return null;
@@ -5495,8 +5518,10 @@ function seatRows() {
     const name = cleanName(nm[i]) || (me ? 'You' : id === 'host' ? 'Host' : 'Player ' + (i + 1));
     const away = mode === 'guest' ? !!(lobbySnap().aw || [])[i] : guests.has(id) && !!guests.get(id).away;
     const tag = isBotId(id) ? 'computer' : [me && name !== 'You' ? 'you' : '', id === 'host' ? 'host' : '', dedicatedGame && i === 0 ? 'leader' : '', away ? 'away' : ''].filter(Boolean).join(', ');
+    const skName = skinMeta(sk[i] || 'classic').name;
+    const info = [skName, tag].filter(Boolean).join(' · ');
     label(name, cx - U * 3.35, y, U * 0.33, col, FONT_D, 1, 'left');
-    if (tag) label(tag, cx - U * 0.3, y, U * 0.26, COL.graphite, FONT_B, 0.7, 'left');
+    label(info, cx - U * 0.3, y, U * 0.25, COL.graphite, FONT_B, 0.78, 'left', teams ? U * 2.65 : U * 4.0);
     if (teams) {
       const it = teamChip(i), mine = lobbyCtl() || me;
       panel(it.x, it.y, it.w, it.h, it.h * 0.3, mine ? col : null, col);
@@ -5534,22 +5559,22 @@ function netItems() {
     const ctl = lobbyCtl(), n = lobbySeats().length, fr = lobbyFrames();
     withFrame(fr && fr.L, () => {
       if (pickTeams()) for (let i = 0; i < n; i++) if (ctl || i === mySeat) items.push(teamChip(i));
-      if (!ctl) return;
-      // one row: fewer / more computer tanks, this player's name and skin
-      const h = U * 0.54, yy = y(4.85) - h / 2, bw = U * 1.45, g = U * 0.12, nw = U * 2.75, sw = U * 2.15, x0 = mcx() - (bw * 2 + nw + sw + g * 3) / 2;
-      items.push({ kind: 'bots', v: -1, text: '− CPU', x: x0, y: yy, w: bw, h });
-      items.push({ kind: 'bots', v: 1, text: '+ CPU', x: x0 + bw + g, y: yy, w: bw, h });
-      items.push(Object.assign(nameChip(4.85, nw), { x: x0 + (bw + g) * 2 }));
-      items.push(Object.assign(skinChip(4.85, sw), { x: x0 + (bw + g) * 2 + nw + g }));
+      if (ctl) {
+        // one row: fewer / more computer tanks, this player's name and skin
+        const h = U * 0.54, yy = y(4.85) - h / 2, bw = U * 1.45, g = U * 0.12, nw = U * 2.75, sw = U * 2.15, x0 = mcx() - (bw * 2 + nw + sw + g * 3) / 2;
+        items.push({ kind: 'bots', v: -1, text: '− CPU', x: x0, y: yy, w: bw, h });
+        items.push({ kind: 'bots', v: 1, text: '+ CPU', x: x0 + bw + g, y: yy, w: bw, h });
+        items.push(Object.assign(nameChip(4.85, nw), { x: x0 + (bw + g) * 2 }));
+        items.push(Object.assign(skinChip(4.85, sw), { x: x0 + (bw + g) * 2 + nw + g }));
+      } else {
+        const nw = U * 3.8, sw = U * 3.2, g = U * 0.25, x0 = mcx() - (nw + sw + g) / 2;
+        items.push(Object.assign(nameChip(5.05, nw), { x: x0 }));
+        items.push(Object.assign(skinChip(5.05, sw), { x: x0 + nw + g }));
+      }
     });
     withFrame(fr && fr.R, () => {
       if (ctl) menuItems(y(5.65), [['start', 'START'], ['leave', 'Leave']], true).forEach(it => items.push(it));
-      else {
-        const nw = U * 3.1, sw = U * 2.5, g = U * 0.2, x0 = mcx() - (nw + sw + g) / 2;
-        items.push(Object.assign(nameChip(8.1, nw), { x: x0 }));
-        items.push(Object.assign(skinChip(8.1, sw), { x: x0 + nw + g }));
-        btn('leave', 'Leave', 9.1, 3);
-      }
+      else btn('leave', 'Leave', 8.25, 3);
     });
   } else if (state === 'guestWait') {
     btn('leave', 'Leave', 9.6, 3);
@@ -5561,13 +5586,14 @@ function netItems() {
     btn('bback', 'Back', 10.1, 3);
   } else if (state === 'skins') {
     if (skinBack === 'title') {
-      const sw = U * 2.5, sh = U * 0.54, g = U * 0.25, x0 = cx - (sw * 2 + g) / 2;
-      items.push({ kind: 'skinslot', v: 0, text: 'Player 1', on: skinSlot === 0, x: x0, y: y(1.65) - sh / 2, w: sw, h: sh });
-      items.push({ kind: 'skinslot', v: 1, text: 'Player 2', on: skinSlot === 1, x: x0 + sw + g, y: y(1.65) - sh / 2, w: sw, h: sh });
+      const slots = settings.cpu === 0 ? ['Player 1', 'Player 2'] : ['You', ...Array.from({ length: settings.cpu }, (_, i) => 'CPU ' + (i + 1))];
+      const g = U * 0.2, sw = Math.min(U * 2.5, (U * 9.2 - g * (slots.length - 1)) / slots.length), sh = U * 0.54;
+      const x0 = cx - (sw * slots.length + g * (slots.length - 1)) / 2;
+      slots.forEach((txt, i) => items.push({ kind: 'skinslot', v: i, text: txt, on: skinSlot === i, x: x0 + i * (sw + g), y: y(1.65) - sh / 2, w: sw, h: sh }));
     }
     const cw = U * 4.5, ch = U * 1.65, gx = U * 0.35, gy = U * 0.32;
     const x0 = cx - (cw * 2 + gx) / 2, y0 = y(skinBack === 'title' ? 2.45 : 2.15);
-    const cur = skinBack === 'title' && skinSlot === 1 ? p2Skin : mySkin;
+    const cur = skinBack === 'title' && skinSlot > 0 ? (settings.cpu === 0 ? p2Skin : cpuSkins[skinSlot - 1]) : mySkin;
     SKINS.forEach((s, i) => {
       const col = i % 2, row = (i / 2) | 0;
       items.push({ kind: 'skinpick', v: s.id, skin: s, on: cur === s.id, x: x0 + col * (cw + gx), y: y0 + row * (ch + gy), w: cw, h: ch });
@@ -5587,7 +5613,7 @@ function drawNetScreen() {
     line('Each player uses their own tablet or phone.', 2.3, 0.3);
     line(usingRelay ? 'Players can be anywhere with internet.' : 'All tablets on the same Wi-Fi.', 2.75, 0.3);
     if (!rejoinable()) line(usingRelay ? 'One creates a game; the others join with its code.' : 'One hosts; the others join with its code.', 3.2, 0.3);
-    line(usingRelay ? 'Direct game: this tablet runs it and players link straight to it, same Wi-Fi or not.' : '2 to 5 players', usingRelay ? 6.95 : 6.3, usingRelay ? 0.24 : 0.3, ink, FONT_B, 0.7);
+    line(usingRelay ? 'Direct game: this tablet runs it and players link straight to it, same Wi--Fi or not.' : '2 to 5 players', usingRelay ? 6.95 : 6.3, usingRelay ? 0.24 : 0.3, ink, FONT_B, 0.7);
     if (netMsg) line(netMsg, 7.35, 0.26, ink, FONT_B, 0.85);
     if (IS_TOUCH && LH > LW) line('Tip: turn the device sideways for the best controls.', 8.8, 0.27, accent, FONT_B);
   } else if (state === 'joinCode') {
@@ -5616,8 +5642,8 @@ function drawNetScreen() {
     withFrame(fr && fr.R, () => line(rulesSummary(), 7.12, 0.23, ink, FONT_B, 0.8));
   } else if (lobby) {
     withFrame(fr && fr.L, () => {
-      line('Joined game ' + netCode, 0.9, 0.6, accent, FONT_D);
-      line(dedicatedGame ? 'Waiting for the player who made the game to start.' : 'Waiting for the host to start.', 1.75, 0.3, ink, FONT_B, 0.85);
+      line('Joined game ' + netCode, 0.85, 0.6, accent, FONT_D);
+      line(dedicatedGame ? 'Waiting for the player who made the game to start.' : 'Waiting for the host to start.', 1.55, 0.28, ink, FONT_B, 0.85);
       seatRows();
     });
     withFrame(fr && fr.R, () => {
@@ -5647,7 +5673,12 @@ function drawSkins(accent) {
   const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite;
   const previewCol = skinBack === 'title' ? COL.pens[skinSlot] : accent;
   label('Tank Skins & Classes', cx, y(0.8), U * 0.68, previewCol, FONT_D);
-  if (skinBack !== 'title') label('Each tank has a distinct primary attack and active skill', cx, y(1.4), U * 0.25, ink, FONT_B, 0.8);
+  if (skinBack !== 'title') {
+    const sub = skinBack === 'hostWait' || skinBack === 'guestWait'
+      ? 'Pick your own skin — every player can choose any skin freely'
+      : 'Each tank has a distinct primary attack and active skill';
+    label(sub, cx, y(1.4), U * 0.25, ink, FONT_B, 0.85);
+  }
   const items = netItems();
   const ang = REDUCED ? -0.45 : performance.now() / 1300;
   for (const it of items) {
@@ -6151,10 +6182,14 @@ addEventListener('keydown', e => {
   if (state === 'hostWait') { if (k === 'enter' || k === ' ') hostStart(); return; }
   if (state === 'guestWait' && isLeader) { if (k === 'enter' || k === ' ') sendCmd('start'); return; }
   if (state === 'skins') {
-    if (k === 'tab' && skinBack === 'title') { e.preventDefault(); skinSlot = 1 - skinSlot; sfx.tick(); return; }
+    if (k === 'tab' && skinBack === 'title') { e.preventDefault(); const n = settings.cpu ? settings.cpu + 1 : 2; skinSlot = (skinSlot + 1) % n; sfx.tick(); return; }
     if (k >= '1' && k <= String(SKINS.length)) {
       const id = SKINS[+k - 1].id;
-      sfx.tick(); if (skinBack === 'title' && skinSlot === 1) setP2Skin(id); else setMySkin(id);
+      sfx.tick();
+      if (skinBack === 'title' && skinSlot > 0) {
+        if (settings.cpu === 0) setP2Skin(id);
+        else setCpuSkin(skinSlot - 1, id);
+      } else setMySkin(id);
       return;
     }
     if (k === 'enter' || k === ' ') { sfx.tick(); closeSkins(); }
@@ -6206,7 +6241,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get skins() { return skins; },
+  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; },
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint,

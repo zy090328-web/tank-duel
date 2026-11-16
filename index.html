@@ -203,7 +203,14 @@ const C = {
   GRASS_SEE: 1.6,        // a tank in grass is seen only by enemies this close (centre to centre)...
   GRASS_REVEAL: 0.8,     // ...or for this long after it fires
   FOG_SEE: 3.2,          // party rule Fog: enemy tanks further than this from your side are not shown
-  RADAR_TIME: 4.0        // seconds a full-arena radar scan reveals cloaked/hidden enemies and mines
+  RADAR_TIME: 4.0,       // seconds a full-arena radar scan reveals cloaked/hidden enemies and mines
+  MORTAR_DIST: 3.8,      // how far ahead a mortar shell lobs over walls
+  MORTAR_TIME: 0.85,     // air time of a mortar shell (s)
+  MORTAR_BLAST: 1.15,    // blast radius of a mortar impact
+  BARRICADE_R: 0.36,     // collision radius of an engineer's tactical bunker
+  BARRICADE_HP: 4,       // hits needed to destroy a tactical bunker
+  BARRICADE_LIFE: 18.0,  // seconds before a bunker decays
+  DEFUSE_RANGE: 0.72     // range at which an engineer safely defuses enemy mines
 };
 
 /* ============================================================
@@ -764,7 +771,9 @@ const SKINS = [
   { id: 'cyber', name: 'Cyber', desc: 'Twin plasma · Skill: EMP (6s)', atk: 'Twin bolts', skill: 'EMP', scool: 6.0, speed: 1.02, turn: 1.05, bSpeed: 1.12, fCool: 1.1 },
   { id: 'retro', name: 'Retro', desc: 'Super ricochet · Skill: Mine (5s)', atk: '9-bounce shot', skill: 'MINE', scool: 5.0, speed: 0.96, turn: 1.0, bSpeed: 0.95, fCool: 1.0, maxB: 9 },
   { id: 'striker', name: 'Striker', desc: 'Rapid fire · Skill: Dash (4s)', atk: 'Rapid carbine', skill: 'DASH', scool: 4.0, speed: 1.15, turn: 1.15, bSpeed: 1.05, fCool: 0.72 },
-  { id: 'recon', name: 'Recon', desc: 'Fast tracer · Skill: Radar (7s)', atk: 'Fast tracer', skill: 'RADAR', scool: 7.0, speed: 1.08, turn: 1.12, bSpeed: 1.22, fCool: 0.92 }
+  { id: 'recon', name: 'Recon', desc: 'Fast tracer · Skill: Radar (7s)', atk: 'Fast tracer', skill: 'RADAR', scool: 7.0, speed: 1.08, turn: 1.12, bSpeed: 1.22, fCool: 0.92 },
+  { id: 'mortar', name: 'Mortar', desc: 'Heavy shell · Skill: Mortar (6.5s)', atk: 'Heavy shell', skill: 'MORTAR', scool: 6.5, speed: 0.94, turn: 0.92, bSpeed: 0.9, fCool: 1.25, maxB: 2 },
+  { id: 'engineer', name: 'Engineer', desc: 'Rivet bolt · Skill: Bunker (6s) · Defuses mines', atk: 'Rivet bolt', skill: 'BUNKER', scool: 6.0, speed: 1.0, turn: 1.05, bSpeed: 1.08, fCool: 0.95, maxB: 3 }
 ];
 const SKIN_IDS = SKINS.map(s => s.id);
 const validSkin = id => SKIN_IDS.includes(id) ? id : 'classic';
@@ -887,7 +896,7 @@ let viewFlip = false;      // online: the arena is turned 180 degrees so this de
 const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, stunImm: 0, gat: 0, gatT: 0, portLock: -1, vx: 0, vy: 0, dash: 0, dcool: 0, scool: 0, cloak: 0, scan: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, skillQ: 0, gone: false, respawn: 0, ai: null });
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
-let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], radars = [], particles = [], marks = [];
+let bullets = [], missiles = [], mines = [], mortars = [], barricades = [], pickups = [], beams = [], rings = [], radars = [], particles = [], marks = [];
 // the two control strips of this screen (index = screen side: 0 near, 1 far)
 const players = [0, 1].map(id => ({ id, stickId: null, ox: 0, oy: 0, vx: 0, vy: 0, fireId: null, skillId: null }));
 const IDLE = { x: 0, y: 0, mag: 0 };
@@ -1336,7 +1345,7 @@ function resetEntities() {
   rec.frames = []; rec.t = 0; rec.tick = 0; hl = null; rp = null; shotNow = null;
   hillHolder = -1;
   minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
-  bullets = []; missiles = []; mines = []; pickups = []; beams = []; rings = []; radars = []; particles = []; marks = [];
+  bullets = []; missiles = []; mines = []; mortars = []; barricades = []; pickups = []; beams = []; rings = []; radars = []; particles = []; marks = [];
   netEvents = [];
   pickupTimer = C.PICKUP_FIRST; emptyT = 0; gatT = C.GAT_FIRST;
   roundT = 0; sdClosed = 0; sdStarted = false;
@@ -1787,8 +1796,84 @@ function useSkill(t) {
     }
     radarFx(t.id, t.x, t.y);
     sfx.radar(); netEv('radar', t.id, r2(t.x), r2(t.y));
+  } else if (sk === 'mortar') {
+    // Mortar Lob: high-arc shell flying over walls to hit behind cover
+    const pad = 0.55;
+    const tx = clamp(t.x + Math.cos(t.angle) * C.MORTAR_DIST, pad, COLS - pad);
+    const ty = clamp(t.y + Math.sin(t.angle) * C.MORTAR_DIST, pad, ROWS - pad);
+    mortars.push({ id: ++entId, sx: t.x, sy: t.y, tx, ty, owner: t.id, age: 0, dur: C.MORTAR_TIME });
+    t.recoil = 1; t.cloak = 0; t.reveal = C.GRASS_REVEAL; t.inv = 0;
+    sfx.mortar(); netEv('sfx', 'mortar', t.id); netEv('recoil', t.id);
+  } else if (sk === 'engineer') {
+    // Tactical Bunker + Local Mine Sweep: deploys a destructible bunker and safely defuses nearby enemy mines
+    const d = C.TANK_R + C.BARRICADE_R + 0.14;
+    const pad = C.BARRICADE_R + 0.05;
+    const bk = {
+      id: ++entId,
+      x: clamp(t.x + Math.cos(t.angle) * d, pad, COLS - pad),
+      y: clamp(t.y + Math.sin(t.angle) * d, pad, ROWS - pad),
+      owner: t.id, hp: C.BARRICADE_HP, max: C.BARRICADE_HP, age: 0, life: C.BARRICADE_LIFE
+    };
+    resolveCircle(bk, C.BARRICADE_R, true);
+    if (barrels.length) { pushOffBarrels(bk, C.BARRICADE_R); resolveCircle(bk, C.BARRICADE_R, true); }
+    for (const o of tanks) {
+      if (!o.alive) continue;
+      const dx = bk.x - o.x, dy = bk.y - o.y, dist = Math.hypot(dx, dy), min = C.TANK_R + C.BARRICADE_R + 0.04;
+      if (dist < min) {
+        const nx = dist > 1e-4 ? dx / dist : Math.cos(t.angle), ny = dist > 1e-4 ? dy / dist : Math.sin(t.angle);
+        bk.x = o.x + nx * min; bk.y = o.y + ny * min;
+        resolveCircle(bk, C.BARRICADE_R, true);
+      }
+    }
+    const own = barricades.filter(x => x.owner === t.id);
+    if (own.length >= 2) {
+      const old = own[0], idx = barricades.indexOf(old);
+      if (idx >= 0) { barricades.splice(idx, 1); puff(old.x, old.y, t.id); }
+    }
+    barricades.push(bk);
+    for (let i = mines.length - 1; i >= 0; i--) {
+      const mn = mines[i];
+      if (!friendOf(t.id, mn.owner) && (Math.hypot(mn.x - t.x, mn.y - t.y) < 1.4 || Math.hypot(mn.x - bk.x, mn.y - bk.y) < 1.15)) {
+        defuseMine(i, t);
+      }
+    }
+    rings.push({ x: bk.x, y: bk.y, r: 0.65, life: 0.3, max: 0.3, col });
+    sfx.bunker(); netEv('bunker', t.id, r2(bk.x), r2(bk.y));
   }
   return true;
+}
+function pushOffBarricades(o, R) {
+  for (const bk of barricades) {
+    const dx = o.x - bk.x, dy = o.y - bk.y, d = Math.hypot(dx, dy), min = R + C.BARRICADE_R;
+    if (d >= min) continue;
+    if (d < 1e-6) { o.x += min; continue; }
+    o.x = bk.x + dx / d * min; o.y = bk.y + dy / d * min;
+  }
+}
+function damageBarricade(bk, dmg, by = -1) {
+  bk.hp -= dmg;
+  const col = penOf(bk.owner);
+  if (bk.hp <= 0) {
+    const idx = barricades.indexOf(bk);
+    if (idx >= 0) barricades.splice(idx, 1);
+    rings.push({ x: bk.x, y: bk.y, r: 0.75, life: 0.3, max: 0.3, col });
+    burst(bk.x, bk.y, 14, col, 2.4, 0.35, 0.045);
+    sfx.crack(); netEv('bkDown', bk.owner, r2(bk.x), r2(bk.y));
+  } else {
+    burst(bk.x, bk.y, 6, col, 1.6, 0.22, 0.035);
+    sfx.crack(); netEv('bkHit', bk.owner, r2(bk.x), r2(bk.y));
+  }
+}
+function defuseMine(idx, t) {
+  const mn = mines[idx];
+  if (!mn) return;
+  mines.splice(idx, 1);
+  if (t) t.scool = Math.max(0, t.scool - 1.5);
+  const col = t ? penOf(t.id) : COL.graphite;
+  rings.push({ x: mn.x, y: mn.y, r: 0.65, life: 0.35, max: 0.35, col });
+  burst(mn.x, mn.y, 12, col, 2.2, 0.3, 0.04);
+  sfx.defuse();
+  if (t) netEv('defuse', t.id, r2(mn.x), r2(mn.y));
 }
 function radarFx(owner, x, y) {
   if (HEADLESS) return;
@@ -1889,6 +1974,10 @@ function fireLaser(t) {
   }
   for (const mn of mines) if (pathDist(path, mn.x, mn.y) < C.MINE_R + 0.05) mn.boom = true;
   for (const br of barrels) if (br.alive && pathDist(path, br.x, br.y) < C.BARREL_R + 0.05) lightBarrel(br, t.id, 0);
+  for (let i = barricades.length - 1; i >= 0; i--) {
+    const bk = barricades[i];
+    if (!friendOf(t.id, bk.owner) && pathDist(path, bk.x, bk.y) < C.BARRICADE_R + 0.05) damageBarricade(bk, 3, t.id);
+  }
   if (ball && pathDist(path, ball.x, ball.y) < C.BALL_R + 0.05) {
     // the ball goes the way the beam was going where it met it
     let bi = 1, bd = Infinity;
@@ -1937,7 +2026,7 @@ function puff(x, y, owner) {
   netEv('puff', r2(x), r2(y), owner);
 }
 function blast(m) {
-  const R = m.type === 'bomb' ? C.BOMB_BLAST : m.type === 'barrel' ? C.BARREL_BLAST : C.GUIDED_BLAST;
+  const R = m.type === 'bomb' ? C.BOMB_BLAST : m.type === 'barrel' ? C.BARREL_BLAST : m.type === 'mortar' ? C.MORTAR_BLAST : C.GUIDED_BLAST;
   const spare = m.type === 'bomb' && m.age < C.BOMB_ARM ? m.owner : -1;
   const pen = m.col || penOf(m.owner);
   rings.push({ x: m.x, y: m.y, r: R, life: 0.4, max: 0.4, col: pen });
@@ -1950,6 +2039,10 @@ function blast(m) {
   netEv('blast', r2(m.x), r2(m.y), m.type === 'barrel' ? -2 : m.owner, R);
   for (const mn of mines) if (Math.hypot(mn.x - m.x, mn.y - m.y) < R) mn.boom = true;     // a blast sets off mines inside it
   for (const br of barrels) if (Math.hypot(br.x - m.x, br.y - m.y) < R + C.BARREL_R) lightBarrel(br, m.owner, C.BARREL_CHAIN);   // ...and barrels
+  for (let i = barricades.length - 1; i >= 0; i--) {
+    const bk = barricades[i];
+    if (Math.hypot(bk.x - m.x, bk.y - m.y) < R + C.BARRICADE_R) damageBarricade(bk, 3, m.owner);
+  }
   if (ball) {                                                                              // ...and throws the ball
     const dx = ball.x - m.x, dy = ball.y - m.y, d = Math.hypot(dx, dy) || 0.01;
     if (d < R + 0.6) { const k = 1 + 6 * (1 - d / (R + 0.6)); ball.vx += dx / d * k; ball.vy += dy / d * k; ball.last = m.owner; ball.touchT = rec.t; }
@@ -2016,6 +2109,8 @@ function purgeNow() {
   bullets = bullets.filter(b => !ids.has(b.owner));
   missiles = missiles.filter(m => !ids.has(m.owner));
   mines = mines.filter(m => !ids.has(m.owner));
+  mortars = mortars.filter(m => !ids.has(m.owner));
+  barricades = barricades.filter(bk => !ids.has(bk.owner));
 }
 // a zombie touched a survivor: it turns where it stands, and waits a moment before it can move
 function infect(t, by) {
@@ -2146,6 +2241,7 @@ function ballStep(dt) {
   const f = Math.exp(-C.BALL_DRAG * dt); b.vx *= f; b.vy *= f;
   b.x += b.vx * dt; if (circleHitsWall(b.x, b.y, R)) { b.x -= b.vx * dt; b.vx = -b.vx * C.BALL_BOUNCE; }
   b.y += b.vy * dt; if (circleHitsWall(b.x, b.y, R)) { b.y -= b.vy * dt; b.vy = -b.vy * C.BALL_BOUNCE; }
+  if (barricades.length) { pushOffBarricades(b, R); resolveCircle(b, R); }
   b.rot += Math.hypot(b.vx, b.vy) * dt / R;
   // over the line, well into the goal
   if (goalBy >= 0 || state !== 'play') return;
@@ -2212,6 +2308,7 @@ function closeRing(k) {
   for (let i = missiles.length - 1; i >= 0; i--) if (inWall(missiles[i])) removeMissile(i);
   for (let i = pickups.length - 1; i >= 0; i--) if (inWall(pickups[i])) pickups.splice(i, 1);
   for (let i = mines.length - 1; i >= 0; i--) if (inWall(mines[i])) mines.splice(i, 1);
+  for (let i = barricades.length - 1; i >= 0; i--) if (inWall(barricades[i])) barricades.splice(i, 1);
   buildStatic();
   shake = Math.max(shake, 0.2);
   sfx.slam();
@@ -2339,7 +2436,7 @@ function botInput(seat) {
     const side = cross >= 0 ? 1 : -1;                       // step off the shot's line, to the side already nearer
     ai.da = Math.atan2(-b.vx * side, b.vy * side); ai.dodge = 0.3;
     if (t.power === 'shield') pressFire(seat);
-    else if (t.scool <= 0 && ['heavy', 'striker', 'stealth'].includes(classOf(seat).id)) pressSkill(seat);
+    else if (t.scool <= 0 && ['heavy', 'striker', 'stealth', 'engineer'].includes(classOf(seat).id)) pressSkill(seat);
     return { x: Math.cos(ai.da), y: Math.sin(ai.da), mag: 1 };
   }
   if (ai.wander > 0) { ai.wander -= dt; return { x: Math.cos(ai.wa), y: Math.sin(ai.wa), mag: 1 }; }
@@ -2390,6 +2487,8 @@ function botInput(seat) {
     else if (sk === 'retro' && hasFoe && dFoe < 5.2) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'stealth' && hasFoe && dFoe < 5.5 && !(t.cloak > 0)) { pressSkill(seat); ai.react = 0.35; }
     else if (sk === 'recon' && !(t.scan > 0) && (tanks.some(o => o.alive && !friendOf(seat, o.id) && !seenBy(seat, o)) || mines.some(mn => mn.armed && !friendOf(seat, mn.owner)))) { pressSkill(seat); ai.react = 0.4; }
+    else if (sk === 'mortar' && hasFoe && dFoe >= 1.7 && dFoe <= 5.2 && Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle)) < 0.28) { pressSkill(seat); ai.react = 0.45; }
+    else if (sk === 'engineer' && ((hasFoe && los && dFoe < 4.5) || mines.some(mn => !friendOf(seat, mn.owner) && Math.hypot(mn.x - t.x, mn.y - t.y) < 1.35))) { pressSkill(seat); ai.react = 0.45; }
   }
   if (hasFoe && los) {
     const off = Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle));
@@ -2613,6 +2712,7 @@ function stepPhysics(dt, lethal, control) {
     }
     resolveCircle(t, C.TANK_R, true);
     if (barrels.length) { pushOffBarrels(t, C.TANK_R); resolveCircle(t, C.TANK_R, true); }
+    if (barricades.length) { pushOffBarricades(t, C.TANK_R); resolveCircle(t, C.TANK_R, true); }
     if (goThrough(t, C.TANK_R)) { const p = portals[t.portLock]; portalFx(p.x, p.y, p.hue); sfx.warp(); netEv('warp', r2(p.x), r2(p.y), p.hue); }
     t.vx = (t.x - px) / dt; t.vy = (t.y - py) / dt;
     if (t.fireQ > 0 && isZed(t.id)) {
@@ -2665,6 +2765,10 @@ function stepPhysics(dt, lethal, control) {
   }
   if (lethal && ball) ballStep(dt);
   if (lethal && barrels.length) barrelStep(dt);
+  for (let i = barricades.length - 1; i >= 0; i--) {
+    barricades[i].age += dt;
+    if (barricades[i].age >= barricades[i].life) barricades.splice(i, 1);
+  }
 
   // bullets
   const hitR = C.TANK_R * 0.92 + C.BULLET_R;
@@ -2688,6 +2792,13 @@ function stepPhysics(dt, lethal, control) {
     }
     if (portals.length && goThrough(b, C.BULLET_R)) { b.trail = []; const p = portals[b.portLock]; portalFx(p.x, p.y, p.hue); }
     if (barrels.length) { const br = barrelAt(b.x, b.y, C.BULLET_R); if (br) { lightBarrel(br, b.owner, 0); bullets.splice(i, 1); continue; } }
+    if (barricades.length) {
+      const bk = barricades.find(k => !friendOf(b.owner, k.owner) && Math.hypot(b.x - k.x, b.y - k.y) < C.BARRICADE_R + C.BULLET_R);
+      if (bk) {
+        damageBarricade(bk, b.pierce ? C.BARRICADE_HP : 1, b.owner);
+        if (!b.pierce) { bullets.splice(i, 1); continue; }
+      }
+    }
     if (++b.tick % 2 === 0) { b.trail.push(b.x, b.y); if (b.trail.length > 22) b.trail.splice(0, 2); }
     if (b.age > (b.life || C.BULLET_LIFE) || b.bounces > (b.maxB ?? C.MAX_BOUNCES)) { bullets.splice(i, 1); continue; }
     // any shot sets off a mine it touches
@@ -2769,6 +2880,10 @@ function stepPhysics(dt, lethal, control) {
     if (onMine) { removeMissile(i); if (m.type !== 'homing') blast(m); else puff(m.x, m.y, m.owner); continue; }
     if (portals.length && goThrough(m, C.MISSILE_R)) { m.wp = null; const p = portals[m.portLock]; portalFx(p.x, p.y, p.hue); }
     if (barrels.length) { const br = barrelAt(m.x, m.y, C.MISSILE_R); if (br) { lightBarrel(br, m.owner, 0); removeMissile(i); if (m.type !== 'homing') blast(m); else puff(m.x, m.y, m.owner); continue; } }
+    if (barricades.length) {
+      const bk = barricades.find(k => !friendOf(m.owner, k.owner) && Math.hypot(m.x - k.x, m.y - k.y) < C.BARRICADE_R + C.MISSILE_R);
+      if (bk) { removeMissile(i); damageBarricade(bk, m.type === 'homing' ? 2 : 3, m.owner); if (m.type !== 'homing') blast(m); else puff(m.x, m.y, m.owner); continue; }
+    }
     if (ball && lethal && Math.hypot(m.x - ball.x, m.y - ball.y) < C.MISSILE_R + C.BALL_R) {
       removeMissile(i);
       if (m.type !== 'homing') blast(m);
@@ -2789,13 +2904,26 @@ function stepPhysics(dt, lethal, control) {
     }
   }
 
+  // mortar shells (arcing overhead, unobstructed by walls)
+  for (let i = mortars.length - 1; i >= 0; i--) {
+    const m = mortars[i];
+    m.age += dt;
+    if (m.age >= m.dur) {
+      mortars.splice(i, 1);
+      blast({ x: m.tx, y: m.ty, owner: m.owner, type: 'mortar', age: 9 });
+    }
+  }
+
   // mines
   for (let i = mines.length - 1; i >= 0; i--) {
     const mn = mines[i], owner = tanks[mn.owner];
     mn.age += dt;
     // a mine arms once its time is up and the tank that laid it has moved off it; after that it spares nobody
     if (!mn.armed && mn.age >= C.MINE_ARM && (!owner.alive || Math.hypot(owner.x - mn.x, owner.y - mn.y) > C.MINE_TRIGGER + 0.08)) { mn.armed = true; sfx.armed(); netEv('sfx', 'armed'); }
-    if (mn.armed && lethal && !mn.boom) for (const t of tanks) if (t.alive && !(t.inv > 0) && canHurt(mn.owner, t) && Math.hypot(t.x - mn.x, t.y - mn.y) < C.MINE_TRIGGER) mn.boom = true;
+    // Engineer safely defuses nearby enemy mines without triggering them
+    const defuser = tanks.find(t => t.alive && !isZed(t.id) && classOf(t.id).id === 'engineer' && !friendOf(t.id, mn.owner) && Math.hypot(t.x - mn.x, t.y - mn.y) < C.DEFUSE_RANGE);
+    if (defuser && !mn.boom) { defuseMine(i, defuser); continue; }
+    if (mn.armed && lethal && !mn.boom) for (const t of tanks) if (t.alive && !(t.inv > 0) && !(classOf(t.id).id === 'engineer' && !isZed(t.id)) && canHurt(mn.owner, t) && Math.hypot(t.x - mn.x, t.y - mn.y) < C.MINE_TRIGGER) mn.boom = true;
     if (mn.boom) { mines.splice(i, 1); blast(mn); }
   }
   purgeNow();
@@ -2966,7 +3094,7 @@ function stepReplay(dt) {
 function enterReplayWorld() {
   const now = rpNow(), { a, b, k } = framePair(now);
   if (!a) return null;
-  const saved = { tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells, ball, barrels };
+  const saved = { tanks, bullets, missiles, mines, mortars, barricades, beams, particles, rings, marks, pickups, minions, shells, ball, barrels };
   if (a.X) barrels = saved.barrels.map((br, i) => Object.assign({}, br, { alive: !!a.X[i], fuse: -1 }));
   ball = a.O ? { x: a.O[0] + ((b.O || a.O)[0] - a.O[0]) * k, y: a.O[1] + ((b.O || a.O)[1] - a.O[1]) * k, rot: a.O[2] || 0 } : null;
   rpHold = a.H == null ? -1 : a.H;
@@ -2989,12 +3117,12 @@ function enterReplayWorld() {
   missiles = b.M.filter(q => mA.has(q[0])).map(q => { const p = mA.get(q[0]); return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), angle: lerpA(p[3], q[3]), owner: q[4], type: q[5], target: -1, age: 1 }; });
   mines = a.N.map(q => ({ x: q[0], y: q[1], owner: q[2], armed: !!q[3], age: 2 }));
   beams = a.L.map(q => ({ path: q[0], owner: 0, pen: q[1], life: q[2], max: 1 }));
-  particles = rpParts; rings = rpRings; marks = saved.marks.slice(0, a.K); pickups = []; minions = []; shells = [];
+  particles = rpParts; rings = rpRings; marks = saved.marks.slice(0, a.K); mortars = []; barricades = []; pickups = []; minions = []; shells = [];
   replayView = true;
   return saved;
 }
 function leaveReplayWorld(sv) {
-  ({ tanks, bullets, missiles, mines, beams, particles, rings, marks, pickups, minions, shells, ball, barrels } = sv);
+  ({ tanks, bullets, missiles, mines, mortars, barricades, beams, particles, rings, marks, pickups, minions, shells, ball, barrels } = sv);
   replayView = false;
 }
 // the path the killing shot took, drawn faintly behind it as it flies
@@ -3452,6 +3580,8 @@ function buildSnap() {
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
+    MT: play && mortars.length ? mortars.map(m => [m.id, r2(m.sx), r2(m.sy), r2(m.tx), r2(m.ty), m.owner, r2(m.age), r2(m.dur)]) : [],
+    BK: play && barricades.length ? barricades.map(k => [k.id, r2(k.x), r2(k.y), k.owner, k.hp, r1(k.life - k.age)]) : [],
     P: play ? pickups.map(k => [r2(k.x), r2(k.y), POWER_TYPES.indexOf(k.type)]) : [],
     Z: play && structs.length ? structs.map(st => [st.hp, r2(st.aim)]) : null,
     Y: play && structs.length ? minions.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.team, m.hp]) : null,
@@ -3749,6 +3879,7 @@ function predictStep(dt) {
   }
   resolveCircle(pred, C.TANK_R, true);
   if (barrels.length) { pushOffBarrels(pred, C.TANK_R); resolveCircle(pred, C.TANK_R, true); }
+  if (barricades.length) { pushOffBarricades(pred, C.TANK_R); resolveCircle(pred, C.TANK_R, true); }
   if (pred.portLock === undefined) pred.portLock = -1;
   goThrough(pred, C.TANK_R);                 // through a portal at once, as the host will
   const now = performance.now();
@@ -3813,7 +3944,7 @@ function applyDiscrete(g, dt) {
   if ((g.r !== lastRound || g.m !== lastMap) && st !== 'guestWait') {
     lastRound = g.r; lastMap = g.m;
     loadMap(g.m | 0);
-    marks = []; particles = []; beams = []; rings = []; radars = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
+    marks = []; particles = []; beams = []; rings = []; radars = []; mortars = []; barricades = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
     rec.frames = []; rec.tick = 0; rp = null;
     const me = Array.isArray(g.T) && g.T[mySeat];
     viewFlip = !!me && me[1] < ROWS / 2;
@@ -3906,6 +4037,16 @@ function playEvent(e) {
     burst(e[3], e[4], 18, col, 3.2, 0.35, 0.045); sfx.zap();
   } else if (kind === 'radar') {
     radarFx(e[2], e[3], e[4]); sfx.radar();
+  } else if (kind === 'bunker') {
+    rings.push({ x: e[3], y: e[4], r: 0.65, life: 0.3, max: 0.3, col: pen(e[2]) }); sfx.bunker();
+  } else if (kind === 'bkHit') {
+    burst(e[3], e[4], 6, pen(e[2]), 1.6, 0.22, 0.035); sfx.crack();
+  } else if (kind === 'bkDown') {
+    rings.push({ x: e[3], y: e[4], r: 0.75, life: 0.3, max: 0.3, col: pen(e[2]) });
+    burst(e[3], e[4], 14, pen(e[2]), 2.4, 0.35, 0.045); sfx.crack();
+  } else if (kind === 'defuse') {
+    rings.push({ x: e[3], y: e[4], r: 0.65, life: 0.35, max: 0.35, col: pen(e[2]) });
+    burst(e[3], e[4], 12, pen(e[2]), 2.2, 0.3, 0.04); sfx.defuse();
   } else if (kind === 'puff') { burst(e[2], e[3], 8, pen(e[4]), 1.4, 0.3, 0.04); sfx.pop(); }
   else if (kind === 'blast' && e[4] === -2) {
     const R = e[5] || C.BARREL_BLAST;
@@ -3989,6 +4130,12 @@ function applyEntities(a, b, k, dt) {
     return m;
   });
   mines = (b.N || []).map(q => ({ id: q[0], x: q[1], y: q[2], owner: q[3], armed: !!q[4], age: age('n' + q[0]) }));
+  const aMT = byId(a.MT);
+  mortars = (b.MT || []).map(q => {
+    const p = aMT.get(q[0]) || q;
+    return { id: q[0], sx: q[1], sy: q[2], tx: q[3], ty: q[4], owner: q[5], age: Math.min(q[7], lerp(p[6], q[6])), dur: q[7] };
+  });
+  barricades = (b.BK || []).map(q => ({ id: q[0], x: q[1], y: q[2], owner: q[3], hp: q[4] | 0, max: C.BARRICADE_HP, rem: q[5] }));
   const aY = byId(a.Y), aQ = byId(a.Q);
   minions = (b.Y || []).map(q => { const p = aY.get(q[0]) || q; return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), angle: lerpA(p[3], q[3]), team: q[4], hp: q[5] | 0 }; });
   shells = (b.Q || []).map(q => { const p = aQ.get(q[0]) || q; return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), team: q[3] }; });
@@ -4102,6 +4249,9 @@ const sfx = {
   spin: () => voice({ f: 120, to: 900, dur: 0.35, type: 'sawtooth', vol: 0.045, lp: 2000 }),
   warp: () => { voice({ f: 300, to: 1200, dur: 0.2, type: 'sine', vol: 0.06, send: 0.6 }); voice({ f: 900, to: 200, dur: 0.2, type: 'sine', vol: 0.03, send: 0.6 }); },
   radar: () => { voice({ f: 980, to: 1480, dur: 0.16, type: 'sine', vol: 0.06, send: 0.6 }); voice({ f: 1480, to: 1960, dur: 0.24, type: 'sine', vol: 0.045, delay: 0.11, send: 0.65 }); },
+  mortar: () => { voice({ f: 160, to: 58, dur: 0.22, type: 'sine', vol: 0.16, att: 0.002 }); hiss({ dur: 0.18, vol: 0.14, kind: 'bandpass', f0: 700, f1: 220, q: 1.2, send: 0.35 }); },
+  bunker: () => { voice({ f: 220, to: 110, dur: 0.12, type: 'triangle', vol: 0.14 }); hiss({ dur: 0.09, vol: 0.11, kind: 'lowpass', f0: 900, f1: 250 }); },
+  defuse: () => { voice({ f: 920, dur: 0.045, type: 'triangle', vol: 0.05, send: 0.35 }); voice({ f: 1380, dur: 0.07, type: 'sine', vol: 0.055, delay: 0.055, send: 0.45 }); },
   rattle: () => {
     const now = performance.now(); if (!audible() || now - (sfx.lastRattle || 0) < 60) return; sfx.lastRattle = now;
     voice({ f: 640 + Math.random() * 120, to: 280, dur: 0.045, type: 'square', vol: 0.03, lp: 2600 }); hiss({ dur: 0.04, vol: 0.05, kind: 'highpass', f0: 4000, f1: 2500 });
@@ -4889,6 +5039,7 @@ function mineAlpha(mn) {
   else if (friendOf(eye, mn.owner)) rest = 0.5;
   else { const me = tanks[eye]; if (me && me.alive && Math.hypot(me.x - mn.x, me.y - mn.y) < C.MINE_SEE) rest = 0.85; }
   if (tanks.some(u => u.alive && (u.scan || 0) > 0 && (eye < 0 ? !friendOf(u.id, mn.owner) : friendOf(eye, u.id)))) rest = Math.max(rest, 0.9);
+  if (tanks.some(u => u.alive && !isZed(u.id) && classOf(u.id).id === 'engineer' && !friendOf(u.id, mn.owner) && (eye < 0 || friendOf(eye, u.id)) && Math.hypot(u.x - mn.x, u.y - mn.y) < C.MINE_SEE * 1.8)) rest = Math.max(rest, 0.9);
   return Math.max(rest, fade);
 }
 function drawMine(mn, alpha = 1) {
@@ -5040,6 +5191,21 @@ function drawTank(t) {
     for (const sy of [-1, 1]) {
       rrect(-L * 0.22, sy * W * 0.28 - P * 0.025, L * 0.36, P * 0.05, P * 0.02); ctx.fill();
     }
+  } else if (sk === 'mortar') {
+    rrect(-L * 0.5, -W * 0.36, L * 0.94, W * 0.72, P * 0.05); ctx.fill(); ctx.stroke();
+    // rear stabilizer spades and side shell racks
+    ctx.fillStyle = shade(col, -0.3);
+    for (const sy of [-1, 1]) {
+      rrect(-L * 0.6, sy * W * 0.24 - P * 0.04, P * 0.1, P * 0.08, P * 0.015); ctx.fill(); ctx.stroke();
+    }
+  } else if (sk === 'engineer') {
+    rrect(-L * 0.48, -W * 0.33, L * 0.9, W * 0.66, P * 0.04); ctx.fill(); ctx.stroke();
+    // front minesweeper plow blade
+    ctx.fillStyle = shade(col, 0.25);
+    ctx.beginPath();
+    ctx.moveTo(L * 0.44, -W * 0.44); ctx.lineTo(L * 0.55, -W * 0.28);
+    ctx.lineTo(L * 0.55, W * 0.28); ctx.lineTo(L * 0.44, W * 0.44);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
   } else {
     rrect(-L / 2 + P * 0.03, -W / 2 + W * 0.2, L - P * 0.06, W * 0.6, P * 0.05); ctx.fill(); ctx.stroke();
   }
@@ -5087,6 +5253,12 @@ function drawTank(t) {
   } else if (sk === 'recon') {
     rrect(P * 0.04 - kick, -P * 0.045, P * 0.4, P * 0.09, P * 0.02); ctx.fill(); ctx.stroke();
     ctx.fillStyle = col; rrect(P * 0.32 - kick, -P * 0.065, P * 0.06, P * 0.13, P * 0.015); ctx.fill();
+  } else if (sk === 'mortar') {
+    rrect(P * 0.02 - kick, -P * 0.1, P * 0.28, P * 0.2, P * 0.03); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = col; rrect(P * 0.25 - kick, -P * 0.125, P * 0.08, P * 0.25, P * 0.02); ctx.fill(); ctx.stroke();
+  } else if (sk === 'engineer') {
+    rrect(P * 0.04 - kick, -P * 0.055, P * 0.36, P * 0.11, P * 0.02); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = col; rrect(P * 0.22 - kick, -P * 0.085, P * 0.08, P * 0.17, P * 0.015); ctx.fill();
   } else { rrect(P * 0.04 - kick, -P * 0.055, P * 0.38, P * 0.11, P * 0.025); ctx.fill(); ctx.stroke(); }
   // turret: styled per skin (carries power-up colour when active)
   const capCol = t.power && !gunOn() ? COL.graphite : col;
@@ -5119,6 +5291,17 @@ function drawTank(t) {
     ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, P * 0.09); ctx.stroke();
     ctx.restore();
     ctx.fillStyle = capCol; ctx.beginPath(); ctx.arc(0, 0, P * 0.055, 0, Math.PI * 2); ctx.fill();
+  } else if (sk === 'mortar') {
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) { const a = Math.PI / 8 + i * Math.PI / 4; ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * P * 0.2, Math.sin(a) * P * 0.2); }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#090d1a'; ctx.strokeStyle = capCol; ctx.lineWidth = Math.max(1.4, P * 0.035);
+    ctx.beginPath(); ctx.arc(0, 0, P * 0.115, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  } else if (sk === 'engineer') {
+    rrect(-P * 0.155, -P * 0.155, P * 0.31, P * 0.31, P * 0.05); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = capCol; ctx.lineWidth = Math.max(1.4, P * 0.038); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-P * 0.08, -P * 0.08); ctx.lineTo(P * 0.08, P * 0.08); ctx.moveTo(P * 0.08, -P * 0.08); ctx.lineTo(-P * 0.08, P * 0.08); ctx.stroke();
+    ctx.fillStyle = capCol; ctx.beginPath(); ctx.arc(0, 0, P * 0.045, 0, Math.PI * 2); ctx.fill();
   } else {
     ctx.beginPath(); ctx.arc(0, 0, P * 0.165, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     ctx.fillStyle = capCol; ctx.beginPath(); ctx.arc(0, 0, P * 0.115, 0, Math.PI * 2); ctx.fill();
@@ -5232,6 +5415,54 @@ function drawMissile(m) {
   ctx.lineTo(-L * 0.6, W); ctx.lineTo(-L * 0.4, W / 2); ctx.lineTo(L * 0.15, W / 2); ctx.closePath();
   ctx.fill(); ctx.stroke();
   if (m.type === 'homing') { ctx.fillStyle = COL.dark; ctx.fillRect(-L * 0.22, -W / 2, L * 0.16, W); }
+  ctx.restore();
+}
+function drawBarricade(bk) {
+  const x = bk.x * P, y = bk.y * P, r = C.BARRICADE_R * P, col = penOf(bk.owner);
+  const rem = bk.rem != null ? bk.rem : (bk.life - bk.age);
+  const blink = rem < 2.5 && !REDUCED && Math.floor(performance.now() / 120) % 2 === 0;
+  ctx.save(); ctx.translate(x, y);
+  ctx.globalAlpha = blink ? 0.45 : 1;
+  ctx.fillStyle = '#04070e'; ctx.globalAlpha *= 0.48;
+  ctx.beginPath(); ctx.arc(r * 0.12, r * 0.18, r * 1.04, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = blink ? 0.5 : 1;
+  ctx.fillStyle = '#19243f'; ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.8, P * 0.05);
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) { const a = Math.PI / 8 + i * Math.PI / 4; ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * r, Math.sin(a) * r); }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = shade(col, -0.35); ctx.lineWidth = Math.max(1.2, P * 0.032);
+  ctx.beginPath(); ctx.moveTo(-r * 0.48, -r * 0.48); ctx.lineTo(r * 0.48, r * 0.48); ctx.moveTo(r * 0.48, -r * 0.48); ctx.lineTo(-r * 0.48, r * 0.48); ctx.stroke();
+  ctx.fillStyle = shade(col, 0.35);
+  for (const [rx, ry] of [[-0.5, 0], [0.5, 0], [0, -0.5], [0, 0.5]]) { ctx.beginPath(); ctx.arc(rx * r, ry * r, Math.max(1, P * 0.035), 0, Math.PI * 2); ctx.fill(); }
+  if (bk.hp < bk.max) {
+    const w = r * 1.5, h = Math.max(2.5, P * 0.07), f = clamp(bk.hp / Math.max(1, bk.max), 0, 1);
+    ctx.fillStyle = '#090d1a'; ctx.fillRect(-w / 2, -r - h * 2.1, w, h);
+    ctx.fillStyle = col; ctx.fillRect(-w / 2, -r - h * 2.1, w * f, h);
+  }
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+function drawMortar(m) {
+  const col = penOf(m.owner), p = clamp(m.age / Math.max(0.05, m.dur), 0, 1), h = Math.sin(p * Math.PI);
+  const tx = m.tx * P, ty = m.ty * P, br = C.MORTAR_BLAST * P;
+  // ground target warning rings
+  ctx.save(); ctx.translate(tx, ty);
+  ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.5, P * 0.04); ctx.globalAlpha = 0.25 + 0.45 * p;
+  ctx.setLineDash([P * 0.14, P * 0.1]); ctx.beginPath(); ctx.arc(0, 0, br, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  ctx.globalAlpha = 0.28 + 0.55 * p; ctx.lineWidth = Math.max(1.5, P * 0.035);
+  ctx.beginPath(); ctx.arc(0, 0, Math.max(P * 0.08, br * (1 - p)), 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = col; ctx.globalAlpha = 0.45 + 0.4 * p;
+  ctx.beginPath(); ctx.arc(0, 0, P * 0.07, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  // arcing shell + shadow
+  const gx = (m.sx + (m.tx - m.sx) * p) * P, gy = (m.sy + (m.ty - m.sy) * p) * P;
+  const sx = gx, sy = gy - h * P * 1.4, sr = P * (0.14 + 0.09 * h);
+  ctx.globalAlpha = 0.35 * (1 - 0.35 * h); ctx.fillStyle = '#04070e';
+  ctx.beginPath(); ctx.arc(gx, gy, P * (0.13 - 0.03 * h), 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+  glow(sx, sy, sr * 3.2, col, 0.85);
+  ctx.save(); ctx.translate(sx, sy); ctx.rotate(Math.atan2(m.ty - m.sy, m.tx - m.sx));
+  ctx.fillStyle = '#1b2646'; ctx.strokeStyle = shade(col, 0.45); ctx.lineWidth = Math.max(1.5, P * 0.04);
+  ctx.beginPath(); ctx.ellipse(0, 0, sr * 1.25, sr * 0.85, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = COL.white; ctx.beginPath(); ctx.arc(sr * 0.3, 0, sr * 0.34, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
 
@@ -5644,14 +5875,17 @@ function netItems() {
       const x0 = cx - (sw * slots.length + g * (slots.length - 1)) / 2;
       slots.forEach((txt, i) => items.push({ kind: 'skinslot', v: i, text: txt, on: skinSlot === i, x: x0 + i * (sw + g), y: y(1.65) - sh / 2, w: sw, h: sh }));
     }
-    const cols = 2, rows = Math.ceil(SKINS.length / cols);
-    const cw = U * 4.5, ch = rows > 3 ? U * 1.42 : U * 1.65, gx = U * 0.35, gy = rows > 3 ? U * 0.24 : U * 0.32;
-    const x0 = cx - (cw * 2 + gx) / 2, y0 = y(skinBack === 'title' ? (rows > 3 ? 2.25 : 2.45) : (rows > 3 ? 1.95 : 2.15));
+    const cols = SKINS.length > 8 ? 3 : 2, rows = Math.ceil(SKINS.length / cols);
+    const cw = cols === 3 ? U * 3.25 : U * 4.5, ch = cols === 3 ? U * 2.08 : (rows > 3 ? U * 1.42 : U * 1.65);
+    const gx = cols === 3 ? U * 0.22 : U * 0.35, gy = cols === 3 ? U * 0.2 : (rows > 3 ? U * 0.24 : U * 0.32);
+    const x0 = cx - (cw * cols + gx * (cols - 1)) / 2;
+    const y0 = y(skinBack === 'title' ? (cols === 3 ? 2.15 : rows > 3 ? 2.25 : 2.45) : (cols === 3 ? 1.88 : rows > 3 ? 1.95 : 2.15));
     const cur = skinBack === 'title' && skinSlot > 0 ? (settings.cpu === 0 ? p2Skin : cpuSkins[skinSlot - 1]) : mySkin;
     SKINS.forEach((s, i) => {
       const col = i % cols, row = (i / cols) | 0;
-      const oddLast = SKINS.length % cols === 1 && i === SKINS.length - 1;
-      items.push({ kind: 'skinpick', v: s.id, skin: s, on: cur === s.id, x: oddLast ? cx - cw / 2 : x0 + col * (cw + gx), y: y0 + row * (ch + gy), w: cw, h: ch });
+      const lastCount = SKINS.length - row * cols;
+      const rowX0 = (row === rows - 1 && lastCount < cols) ? cx - (cw * lastCount + gx * (lastCount - 1)) / 2 : x0;
+      items.push({ kind: 'skinpick', v: s.id, skin: s, on: cur === s.id, x: rowX0 + col * (cw + gx), y: y0 + row * (ch + gy), w: cw, h: ch });
     });
     btn('sback', 'Back', 9.9, 3);
   }
@@ -5743,20 +5977,30 @@ function drawSkins(accent) {
     } else if (it.kind === 'skinpick') {
       panel(it.x, it.y, it.w, it.h, U * 0.18, null, it.on ? previewCol : null);
       if (it.on) { rrect(it.x, it.y, it.w, it.h, U * 0.18); ctx.globalAlpha = 0.14; ctx.fillStyle = previewCol; ctx.fill(); ctx.globalAlpha = 1; }
+      const tall = it.h > it.w * 0.55;
       const savedP = P;
       try {
-        P = it.h * 0.78;
+        P = tall ? it.h * 0.48 : it.h * 0.78;
         drawTank({
-          x: (it.x + it.h * 0.58) / P, y: (it.y + it.h * 0.5) / P,
+          x: (tall ? it.x + it.w * 0.5 : it.x + it.h * 0.58) / P,
+          y: (tall ? it.y + it.h * 0.3 : it.y + it.h * 0.5) / P,
           angle: ang, id: -1, skin: it.skin.id, pen: previewCol,
           inv: 0, shield: 0, power: null, recoil: 0, stun: 0, gat: 0
         });
       } finally { P = savedP; }
-      const tx = it.x + it.h * 1.1;
-      label(it.skin.name, tx, it.y + it.h * 0.28, U * 0.36, it.on ? previewCol : ink, FONT_D, 1, 'left', it.x + it.w - tx - U * 0.42);
-      label(`ATK: ${it.skin.atk}`, tx, it.y + it.h * 0.56, U * 0.21, ink, FONT_B, 0.85, 'left', it.x + it.w - tx - U * 0.14);
-      label(`SKILL: ${it.skin.skill} (${it.skin.scool}s)`, tx, it.y + it.h * 0.8, U * 0.21, it.on ? previewCol : ink, FONT_B, 0.9, 'left', it.x + it.w - tx - U * 0.14);
-      if (it.on) label('✓', it.x + it.w - U * 0.28, it.y + U * 0.28, U * 0.28, previewCol, FONT_D);
+      if (tall) {
+        const cxC = it.x + it.w / 2, mw = it.w - U * 0.22;
+        label(it.skin.name, cxC, it.y + it.h * 0.59, U * 0.31, it.on ? previewCol : ink, FONT_D, 1, 'center', mw);
+        label(`ATK: ${it.skin.atk}`, cxC, it.y + it.h * 0.75, U * 0.195, ink, FONT_B, 0.85, 'center', mw);
+        label(`${it.skin.skill} (${it.skin.scool}s)`, cxC, it.y + it.h * 0.89, U * 0.195, it.on ? previewCol : ink, FONT_B, 0.9, 'center', mw);
+        if (it.on) label('✓', it.x + it.w - U * 0.24, it.y + U * 0.24, U * 0.26, previewCol, FONT_D);
+      } else {
+        const tx = it.x + it.h * 1.1;
+        label(it.skin.name, tx, it.y + it.h * 0.28, U * 0.36, it.on ? previewCol : ink, FONT_D, 1, 'left', it.x + it.w - tx - U * 0.42);
+        label(`ATK: ${it.skin.atk}`, tx, it.y + it.h * 0.56, U * 0.21, ink, FONT_B, 0.85, 'left', it.x + it.w - tx - U * 0.14);
+        label(`SKILL: ${it.skin.skill} (${it.skin.scool}s)`, tx, it.y + it.h * 0.8, U * 0.21, it.on ? previewCol : ink, FONT_B, 0.9, 'left', it.x + it.w - tx - U * 0.14);
+        if (it.on) label('✓', it.x + it.w - U * 0.28, it.y + U * 0.28, U * 0.28, previewCol, FONT_D);
+      }
     } else if (it.kind === 'sback') {
       drawChip(it, false, previewCol);
     }
@@ -5988,16 +6232,18 @@ function render() {
     ctx.beginPath(); ctx.arc(0, 0, P * 0.34, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     drawGlyph('gatling', P * 0.22, COL.graphite); ctx.restore(); ctx.globalAlpha = 1;
   }
-  if (matchOn) { for (const p of portals) drawPortal(p); for (const br of barrels) if (br.alive) drawBarrel(br); }
+  if (matchOn) { for (const p of portals) drawPortal(p); for (const br of barrels) if (br.alive) drawBarrel(br); for (const bk of barricades) drawBarricade(bk); }
   for (const k of pickups) drawPickup(k);
   const eye = viewer();
   for (const mn of mines) {
     const a = mineAlpha(mn);
     if (a > 0) drawMine(mn, a);
     const ping = mn.armed && tanks.find(u => u.alive && (u.scan || 0) > 0 && !friendOf(u.id, mn.owner) && (eye < 0 || friendOf(eye, u.id)));
-    if (ping) {
+    const spotEng = !ping && mn.armed && tanks.find(u => u.alive && !isZed(u.id) && classOf(u.id).id === 'engineer' && !friendOf(u.id, mn.owner) && (eye < 0 || friendOf(eye, u.id)) && Math.hypot(u.x - mn.x, u.y - mn.y) < C.MINE_SEE * 1.8);
+    const marker = ping || spotEng;
+    if (marker) {
       const pulse = REDUCED ? 0 : 0.05 * Math.sin(performance.now() / 110);
-      ctx.save(); ctx.strokeStyle = penOf(ping.id); ctx.lineWidth = Math.max(1.5, P * 0.038); ctx.globalAlpha = 0.85;
+      ctx.save(); ctx.strokeStyle = penOf(marker.id); ctx.lineWidth = Math.max(1.5, P * 0.038); ctx.globalAlpha = 0.85;
       ctx.setLineDash([P * 0.08, P * 0.06]); ctx.beginPath(); ctx.arc(mn.x * P, mn.y * P, P * (0.28 + pulse), 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]); ctx.restore(); ctx.globalAlpha = 1;
     }
@@ -6073,6 +6319,7 @@ function render() {
   }
   for (const m of missiles) drawMissile(m);
   if (shells.length) drawShells();
+  for (const m of mortars) drawMortar(m);
 
   // light that adds up: laser beams, the flash and ring of every blast, sparks
   ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -6342,7 +6589,7 @@ window.__tank = {
   get mapOrder() { return mapOrder; }, get crushed() { return crushed; },
   get state() { return state; }, set state(v) { state = v; stateT = 0; },
   get scores() { return scores; }, get bullets() { return bullets; }, get missiles() { return missiles; }, get pickups() { return pickups; },
-  get beams() { return beams; }, get mines() { return mines; }, hit, bulletCount, POWER_TYPES, get walls() { return walls; }, get spawn() { return spawn; }, get winner() { return winner; },
+  get beams() { return beams; }, get mines() { return mines; }, get mortars() { return mortars; }, get barricades() { return barricades; }, hit, bulletCount, POWER_TYPES, get walls() { return walls; }, get spawn() { return spawn; }, get winner() { return winner; },
   get layout() { return { LW, LH, P, AX, AY, AW, AH, S, JR, FR, JX0, FX0, CY0, rotated }; },
   net: { hostGame, joinGame, createGame, startHosting, sendCmd, get isLeader() { return isLeader; }, get dedicated() { return dedicatedGame; }, hostStart, hostLobby, goOnline, netItems, buildSnap, typeKey,
     get mode() { return mode; }, get seats() { return seats; }, get code() { return netCode; }, get msg() { return netMsg; },

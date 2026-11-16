@@ -756,6 +756,32 @@ if (nameOk && nameInput && nameOk.addEventListener) {
   nameInput.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') closeName(true); else if (e.key === 'Escape') closeName(false); });
   nameInput.addEventListener('keyup', e => e.stopPropagation());
 }
+const SKINS = [
+  { id: 'classic', name: 'Classic', desc: 'Standard issue' },
+  { id: 'stealth', name: 'Stealth', desc: 'Angular, low-profile' },
+  { id: 'heavy', name: 'Heavy', desc: 'Reinforced armor' },
+  { id: 'cyber', name: 'Cyber', desc: 'Neon core & rail' },
+  { id: 'retro', name: 'Retro', desc: 'Blocky pixel hull' },
+  { id: 'striker', name: 'Striker', desc: 'Racing stripes & fins' }
+];
+const SKIN_IDS = SKINS.map(s => s.id);
+const validSkin = id => SKIN_IDS.includes(id) ? id : 'classic';
+const skinMeta = id => SKINS.find(s => s.id === validSkin(id)) || SKINS[0];
+let mySkin = 'classic', p2Skin = 'classic', skins = [], skinSentAt = 0, skinBack = 'title', skinSlot = 0;
+try { mySkin = validSkin(localStorage.getItem('tankduel-skin')); } catch (e) {}
+try { p2Skin = validSkin(localStorage.getItem('tankduel-skin-p2')); } catch (e) {}
+const skinOf = id => validSkin(skins[id] || (id === 0 ? mySkin : 'classic'));
+function setMySkin(id) {
+  mySkin = validSkin(id);
+  try { localStorage.setItem('tankduel-skin', mySkin); } catch (e) {}
+  if (mode === 'guest') toHost({ sk: mySkin });
+}
+function setP2Skin(id) {
+  p2Skin = validSkin(id);
+  try { localStorage.setItem('tankduel-skin-p2', p2Skin); } catch (e) {}
+}
+function openSkins() { skinBack = state; skinSlot = 0; state = 'skins'; stateT = 0; layout(); }
+function closeSkins() { state = NET_SCREENS.includes(skinBack) || skinBack === 'title' ? skinBack : 'title'; stateT = 0; layout(); }
 
 /* ---------- game state ---------- */
 let walls = [], spawn = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
@@ -1355,13 +1381,14 @@ function setupLocal() {
   bots = new Set(soloMatch ? tanks.slice(1).map(t => t.id) : []);
   teamOf = tanks.map(t => t.id % 2);
   names = soloMatch ? tanks.map(t => t.id ? 'CPU ' + t.id : (myName || 'You')) : [];
+  skins = tanks.map(t => t.id === 0 ? mySkin : (!soloMatch && t.id === 1 ? p2Skin : 'classic'));
 }
 function beginFromMenu() { if (resumeMatch) { resumeMatch = false; startRound(); } else { setupLocal(); startMatch(); } }
 function goMenu() {
   if (mode !== 'local') netLeave();
   applyMut('');
   state = 'title'; stateT = 0; resumeMatch = false; mapIdx = 0; quitArm = 0; menuStep = 'mode'; menuFocus = ''; lobbyPane = '';
-  soloMatch = false; bots = new Set(); teamOf = []; names = []; stats = []; zed = []; infWin = [];
+  soloMatch = false; bots = new Set(); teamOf = []; names = []; skins = []; stats = []; zed = []; infWin = [];
   setTankCount(2); scores = [0, 0]; viewFlip = false;
   loadMap(0); resetEntities(); layout();
 }
@@ -2891,7 +2918,7 @@ const replayItems = () => {
    Devices talk directly over WebRTC (PeerJS); a public PeerJS server
    only introduces them, using the 4-digit game code.
    ============================================================ */
-const NET_SCREENS = ['online', 'joinCode', 'hostWait', 'guestWait', 'netLost', 'board'];
+const NET_SCREENS = ['online', 'joinCode', 'hostWait', 'guestWait', 'netLost', 'board', 'skins'];
 // leaderboard: what the server sent, a message instead, the player whose record is open, and where to go back to
 let boardData = null, boardMsg = '', boardPick = -1, boardBack = 'title';
 function openBoard() {
@@ -2951,6 +2978,7 @@ let lobbyBots = 0;             // computer tanks asked for in the waiting room
 const teamPick = new Map();    // waiting room: team chosen for each seat id
 const isBotId = id => typeof id === 'string' && id.startsWith('bot');
 const seatLabel = id => id === 'host' ? myName : isBotId(id) ? 'CPU ' + id.slice(3) : ((guests.get(id) || {}).name || '');
+const seatSkin = id => id === 'host' ? mySkin : isBotId(id) ? 'classic' : ((guests.get(id) || {}).skin || 'classic');
 // rebuild the seat list: this tablet (if it plays), everyone connected, then computer tanks while there is room
 function reseat() {
   const humans = seats.filter(id => id !== 'host' && !isBotId(id) && guests.has(id));
@@ -3099,7 +3127,7 @@ function netLeave() {
   try { if (hostConn) hostConn.close(); } catch (e) {}
   try { if (peer) peer.destroy(); } catch (e) {}
   peer = null; hostConn = null; guests.clear(); seats = []; snaps = []; hostOpenAt = 0;
-  lobbyBots = 0; teamPick.clear(); bots = new Set(); teamOf = []; names = []; stats = []; soloMatch = false; lobbyPane = '';
+  lobbyBots = 0; teamPick.clear(); bots = new Set(); teamOf = []; names = []; skins = []; stats = []; soloMatch = false; lobbyPane = '';
   if (savedSettings) { settings = savedSettings; savedSettings = null; }
   mode = 'local'; mySeat = 0; viewFlip = false; netMsg = ''; netCode = '';
 }
@@ -3176,6 +3204,7 @@ function hostData(id, d) {
   if (!g || !d || typeof d !== 'object') return;
   if (d.sig && typeof d.sig === 'object') { hostSignal(g, d.sig); return; }
   if (typeof d.n === 'string') { g.name = cleanName(d.n); g.lastAt = performance.now(); return; }
+  if (typeof d.sk === 'string') { g.skin = validSkin(d.sk); g.lastAt = performance.now(); return; }
   if (d.c === 'side') {                                    // any guest may swap its own team
     g.lastAt = performance.now();
     if (state === 'hostWait') { const k = seats.indexOf(id); if (k >= 0) toggleTeam(k); }
@@ -3228,13 +3257,14 @@ function hostStart() {
   bots = new Set(seats.map((id, i) => isBotId(id) ? i : -1).filter(i => i >= 0));
   teamOf = seats.map(id => teamPick.get(id) ? 1 : 0);
   names = seats.map(seatLabel);
+  skins = seats.map(seatSkin);
   startMatch();
 }
 // back to the waiting room with whoever is still connected
 function hostLobby() {
   applyMut('');
   reseat();
-  bots = new Set(); teamOf = []; names = []; stats = [];
+  bots = new Set(); teamOf = []; names = []; skins = []; stats = [];
   setTankCount(2); scores = [0, 0]; loadMap(0); resetEntities(); layout();
   state = 'hostWait'; stateT = 0;
 }
@@ -3272,7 +3302,7 @@ function buildSnap() {
     seats, sc: scores, w: winner, dr: drawReason,
     set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0, settings.terrain ? 1 : 0, settings.mut],
     mu: mutNow,
-    tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel),
+    tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel), sk: play ? skins : seats.map(seatSkin),
     hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h, v.b | 0]) : null,
     bw: baseWinner,
     zd: play && infOn() ? zed : null, iw: infWin, rc: r2(rec.t),
@@ -3612,8 +3642,10 @@ function applyDiscrete(g, dt) {
   if (n !== NP) setTankCount(n);
   teamOf = Array.isArray(g.tm) ? g.tm.map(v => v ? 1 : 0) : [];
   names = Array.isArray(g.nm) ? g.nm.map(cleanName) : [];
-  // in the waiting room, make sure the host has this player's name (the first message can arrive before the host is listening)
+  skins = Array.isArray(g.sk) ? g.sk.map(validSkin) : [];
+  // in the waiting room, make sure the host has this player's name and skin (the first message can arrive before the host is listening)
   if (g.st === 'hostWait' && mySeat >= 0 && (names[mySeat] || '') !== myName && performance.now() - nameSentAt > 1000) { nameSentAt = performance.now(); toHost({ n: myName }); }
+  if (g.st === 'hostWait' && mySeat >= 0 && (skins[mySeat] || 'classic') !== mySkin && performance.now() - skinSentAt > 1000) { skinSentAt = performance.now(); toHost({ sk: mySkin }); }
   hillHolder = typeof g.hz === 'number' ? g.hz : -1;
   if (Array.isArray(g.S)) stats = g.S.map(a => Array.isArray(a) ? { k: a[0] | 0, d: a[1] | 0, s: a[2] | 0, h: a[3] | 0, b: a[4] | 0 } : { k: 0, d: 0, s: 0, h: 0, b: 0 });
   if (typeof g.bw === 'number') baseWinner = g.bw;
@@ -4110,6 +4142,7 @@ function menuItems(top = menuTop(), buttons = null, lobby = false) {
     const ow = U * 9.65, oy = y0 + MODE_ROWS * U * 1.04 + U * 0.1;
     return [...modeCards(y0),
       { kind: 'online', bar: true, text: 'Play online', sub: 'each player on their own device', x: cx - ow / 2, y: oy, w: ow, h: U * 0.62 },
+      Object.assign(button('skins', 'Skins', cx - U * 4.15, top + U * 0.42, U * 1.7), { h: U * 0.5, y: top + U * 0.17 }),
       Object.assign(button('board', 'Leaderboard', cx + U * 4.0, top + U * 0.42, U * 2.3), { h: U * 0.5, y: top + U * 0.17 })];
   }
   if (menuStep === 'who') return [
@@ -4164,7 +4197,7 @@ function drawItems(items, col) {
       const x = it.x + it.w - it.h * 0.45, y = it.y + it.h / 2, a = it.h * 0.14;
       ctx.strokeStyle = COL.graphite; ctx.globalAlpha = 0.7; ctx.lineWidth = Math.max(1.5, U * 0.04); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.beginPath(); ctx.moveTo(x - a * 0.6, y - a); ctx.lineTo(x + a * 0.6, y); ctx.lineTo(x - a * 0.6, y + a); ctx.stroke(); ctx.globalAlpha = 1;
-    } else if (it.kind === 'step' || it.kind === 'done' || it.kind === 'board') drawChip(it, false, col);
+    } else if (it.kind === 'step' || it.kind === 'done' || it.kind === 'board' || it.kind === 'skins') drawChip(it, false, col);
     else if (SETTING_KINDS.includes(it.kind) || it.kind === 'mutpick') drawChip(it, it.on, col);
   }
 }
@@ -4228,6 +4261,10 @@ function applyMenu(it) {
   if (it.kind === 'label') return;
   if (it.kind === 'board') { sfx.tick(); openBoard(); return; }
   if (it.kind === 'bback') { sfx.tick(); closeBoard(); return; }
+  if (it.kind === 'skins') { sfx.tick(); openSkins(); return; }
+  if (it.kind === 'sback') { sfx.tick(); closeSkins(); return; }
+  if (it.kind === 'skinslot') { sfx.tick(); skinSlot = it.v ? 1 : 0; return; }
+  if (it.kind === 'skinpick') { sfx.tick(); if (skinBack === 'title' && skinSlot === 1) setP2Skin(it.v); else setMySkin(it.v); return; }
   if (it.kind === 'brow') { boardPick = boardPick === it.v ? -1 : it.v; sfx.tick(); return; }
   if (SETTING_KINDS.includes(it.kind)) menuFocus = it.kind;
   if (it.kind === 'step') { menuStep = it.v; menuFocus = ''; sfx.tick(); return; }
@@ -4720,6 +4757,7 @@ function drawPickup(k) {
 
 function drawTank(t) {
   const col = t.pen || penOf(t.id), zom = t.pen ? t.pen === COL.zombie : isZed(t.id);
+  const sk = zom ? 'classic' : validSkin(t.skin || skinOf(t.id));
   if (t.inv > 0) {
     const a = REDUCED ? 0 : performance.now() / 300;
     ctx.save(); ctx.translate(t.x * P, t.y * P); ctx.rotate(a);
@@ -4745,16 +4783,82 @@ function drawTank(t) {
   ctx.rotate(t.angle);
   const L = 0.64 * P, W = 0.52 * P, lw = Math.max(1.5, P * 0.04);
   ctx.lineJoin = 'round';
-  // treads, with cleats
-  ctx.fillStyle = shade(col, -0.35);
-  rrect(-L / 2, -W / 2, L, W * 0.26, P * 0.04); ctx.fill();
-  rrect(-L / 2, W / 2 - W * 0.26, L, W * 0.26, P * 0.04); ctx.fill();
-  ctx.strokeStyle = shade(col, -0.75); ctx.lineWidth = Math.max(1, P * 0.02); ctx.beginPath();
-  for (let i = 1; i < 8; i++) { const x = -L / 2 + L * i / 8; ctx.moveTo(x, -W / 2 + 1); ctx.lineTo(x, -W / 2 + W * 0.26 - 1); ctx.moveTo(x, W / 2 - W * 0.26 + 1); ctx.lineTo(x, W / 2 - 1); }
-  ctx.stroke();
-  // hull: dark, tinted with the tank's colour, outlined in it
+  // treads, with cleats (styled per skin)
+  if (sk === 'heavy') {
+    ctx.fillStyle = shade(col, -0.45);
+    rrect(-L * 0.54, -W * 0.56, L * 1.08, W * 0.3, P * 0.03); ctx.fill();
+    rrect(-L * 0.54, W * 0.56 - W * 0.3, L * 1.08, W * 0.3, P * 0.03); ctx.fill();
+    ctx.strokeStyle = shade(col, -0.8); ctx.lineWidth = Math.max(1, P * 0.025); ctx.beginPath();
+    for (let i = 1; i < 6; i++) { const x = -L * 0.54 + L * 1.08 * i / 6; ctx.moveTo(x, -W * 0.56 + 1); ctx.lineTo(x, -W * 0.26 - 1); ctx.moveTo(x, W * 0.26 + 1); ctx.lineTo(x, W * 0.56 - 1); }
+    ctx.stroke();
+  } else if (sk === 'retro') {
+    ctx.fillStyle = shade(col, -0.35);
+    ctx.fillRect(-L / 2, -W / 2, L, W * 0.26);
+    ctx.fillRect(-L / 2, W / 2 - W * 0.26, L, W * 0.26);
+    ctx.fillStyle = shade(col, -0.78);
+    for (let i = 0; i < 5; i++) { const x = -L / 2 + (i + 0.3) * L / 5; ctx.fillRect(x, -W / 2 + 1, L * 0.07, W * 0.24); ctx.fillRect(x, W / 2 - W * 0.25, L * 0.07, W * 0.24); }
+  } else if (sk === 'stealth') {
+    ctx.fillStyle = shade(col, -0.42);
+    for (const sy of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(-L * 0.48, sy * W * 0.24); ctx.lineTo(-L * 0.36, sy * W * 0.48);
+      ctx.lineTo(L * 0.3, sy * W * 0.46); ctx.lineTo(L * 0.48, sy * W * 0.24);
+      ctx.closePath(); ctx.fill();
+    }
+  } else {
+    ctx.fillStyle = sk === 'cyber' ? shade(col, -0.55) : shade(col, -0.35);
+    rrect(-L / 2, -W / 2, L, W * 0.26, P * 0.04); ctx.fill();
+    rrect(-L / 2, W / 2 - W * 0.26, L, W * 0.26, P * 0.04); ctx.fill();
+    ctx.strokeStyle = sk === 'cyber' ? col : shade(col, -0.75);
+    ctx.lineWidth = Math.max(1, P * 0.02); ctx.globalAlpha = sk === 'cyber' ? 0.55 : 1; ctx.beginPath();
+    for (let i = 1; i < 8; i++) { const x = -L / 2 + L * i / 8; ctx.moveTo(x, -W / 2 + 1); ctx.lineTo(x, -W / 2 + W * 0.26 - 1); ctx.moveTo(x, W / 2 - W * 0.26 + 1); ctx.lineTo(x, W / 2 - 1); }
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  // hull: styled per skin, always keeping the tank's colour as the primary outline
   ctx.lineWidth = lw; ctx.strokeStyle = col; ctx.fillStyle = shade(col, -0.7);
-  rrect(-L / 2 + P * 0.03, -W / 2 + W * 0.2, L - P * 0.06, W * 0.6, P * 0.05); ctx.fill(); ctx.stroke();
+  if (sk === 'stealth') {
+    ctx.beginPath();
+    ctx.moveTo(L * 0.54, 0); ctx.lineTo(L * 0.14, -W * 0.38); ctx.lineTo(-L * 0.44, -W * 0.32);
+    ctx.lineTo(-L * 0.34, 0); ctx.lineTo(-L * 0.44, W * 0.32); ctx.lineTo(L * 0.14, W * 0.38);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = shade(col, 0.3); ctx.lineWidth = Math.max(1, P * 0.02);
+    ctx.beginPath(); ctx.moveTo(-L * 0.22, -W * 0.18); ctx.lineTo(L * 0.3, 0); ctx.lineTo(-L * 0.22, W * 0.18); ctx.stroke();
+  } else if (sk === 'heavy') {
+    rrect(-L * 0.5, -W * 0.34, L, W * 0.68, P * 0.04); ctx.fill(); ctx.stroke();
+    // front ram plate and rear vent
+    ctx.fillStyle = shade(col, -0.35);
+    rrect(L * 0.42, -W * 0.38, P * 0.07, W * 0.76, P * 0.02); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = shade(col, 0.25); ctx.lineWidth = Math.max(1, P * 0.02);
+    ctx.beginPath(); ctx.moveTo(-L * 0.36, -W * 0.18); ctx.lineTo(-L * 0.36, W * 0.18); ctx.stroke();
+  } else if (sk === 'cyber') {
+    const ch = P * 0.08;
+    ctx.beginPath();
+    ctx.moveTo(-L * 0.46 + ch, -W * 0.32); ctx.lineTo(L * 0.46 - ch, -W * 0.32);
+    ctx.lineTo(L * 0.46, -W * 0.32 + ch); ctx.lineTo(L * 0.46, W * 0.32 - ch);
+    ctx.lineTo(L * 0.46 - ch, W * 0.32); ctx.lineTo(-L * 0.46 + ch, W * 0.32);
+    ctx.lineTo(-L * 0.46, W * 0.32 - ch); ctx.lineTo(-L * 0.46, -W * 0.32 + ch);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = shade(col, 0.5); ctx.lineWidth = Math.max(1, P * 0.02);
+    ctx.strokeRect(-L * 0.32, -W * 0.19, L * 0.64, W * 0.38);
+  } else if (sk === 'retro') {
+    ctx.fillRect(-L * 0.46, -W * 0.3, L * 0.92, W * 0.6);
+    ctx.strokeRect(-L * 0.46, -W * 0.3, L * 0.92, W * 0.6);
+    ctx.fillStyle = shade(col, -0.45);
+    ctx.fillRect(-L * 0.34, -W * 0.18, P * 0.08, W * 0.36);
+  } else if (sk === 'striker') {
+    rrect(-L / 2 + P * 0.03, -W / 2 + W * 0.2, L - P * 0.06, W * 0.6, P * 0.08); ctx.fill(); ctx.stroke();
+    // swept side winglets + twin racing stripes
+    ctx.fillStyle = shade(col, -0.45);
+    for (const sy of [-1, 1]) {
+      ctx.beginPath(); ctx.moveTo(-L * 0.1, sy * W * 0.32); ctx.lineTo(-L * 0.45, sy * W * 0.48); ctx.lineTo(-L * 0.45, sy * W * 0.28); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = shade(col, 0.45); ctx.globalAlpha = 0.75;
+    ctx.fillRect(-L * 0.4, -P * 0.055, L * 0.8, P * 0.03);
+    ctx.fillRect(-L * 0.4, P * 0.025, L * 0.8, P * 0.03);
+    ctx.globalAlpha = 1;
+  } else {
+    rrect(-L / 2 + P * 0.03, -W / 2 + W * 0.2, L - P * 0.06, W * 0.6, P * 0.05); ctx.fill(); ctx.stroke();
+  }
   if (zom) {
     // a zombie has no gun: a row of teeth across its front, crossed-out eyes, cracks when it has been hit once
     ctx.beginPath(); ctx.moveTo(L / 2 - P * 0.02, -W * 0.36);
@@ -4780,11 +4884,48 @@ function drawTank(t) {
     const spin = t.gat > 0 && !REDUCED ? Math.sin(performance.now() / 25) * P * 0.015 : 0;
     for (const dy of [-0.075, 0, 0.075]) { rrect(P * 0.06 - kick * 0.4, dy * P - P * 0.028 + spin, P * 0.4, P * 0.056, P * 0.015); ctx.fill(); ctx.stroke(); }
     ctx.fillStyle = col; rrect(P * 0.2, -P * 0.12, P * 0.06, P * 0.24, P * 0.01); ctx.fill();
+  } else if (sk === 'heavy') {
+    rrect(P * 0.04 - kick, -P * 0.07, P * 0.36, P * 0.14, P * 0.02); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = col; rrect(P * 0.35 - kick, -P * 0.09, P * 0.08, P * 0.18, P * 0.015); ctx.fill(); ctx.stroke();
+  } else if (sk === 'cyber') {
+    rrect(P * 0.05 - kick, -P * 0.065, P * 0.38, P * 0.045, P * 0.01); ctx.fill(); ctx.stroke();
+    rrect(P * 0.05 - kick, P * 0.02, P * 0.38, P * 0.045, P * 0.01); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = COL.white; ctx.fillRect(P * 0.12 - kick, -P * 0.012, P * 0.24, P * 0.024);
+  } else if (sk === 'retro') {
+    ctx.fillRect(P * 0.04 - kick, -P * 0.055, P * 0.36, P * 0.11);
+    ctx.strokeRect(P * 0.04 - kick, -P * 0.055, P * 0.36, P * 0.11);
+  } else if (sk === 'stealth') {
+    ctx.beginPath();
+    ctx.moveTo(P * 0.04 - kick, -P * 0.06); ctx.lineTo(P * 0.43 - kick, -P * 0.03);
+    ctx.lineTo(P * 0.43 - kick, P * 0.03); ctx.lineTo(P * 0.04 - kick, P * 0.06);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
   } else { rrect(P * 0.04 - kick, -P * 0.055, P * 0.38, P * 0.11, P * 0.025); ctx.fill(); ctx.stroke(); }
-  // turret: a dark base ring, a cap in the tank's colour (white while it carries a power-up), a small highlight
+  // turret: styled per skin (carries power-up colour when active)
+  const capCol = t.power && !gunOn() ? COL.graphite : col;
   ctx.fillStyle = shade(col, -0.5); ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, P * 0.025);
-  ctx.beginPath(); ctx.arc(0, 0, P * 0.165, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = t.power && !gunOn() ? COL.graphite : col; ctx.beginPath(); ctx.arc(0, 0, P * 0.115, 0, Math.PI * 2); ctx.fill();
+  if (sk === 'stealth') {
+    ctx.beginPath(); ctx.moveTo(P * 0.19, 0); ctx.lineTo(-P * 0.13, -P * 0.15); ctx.lineTo(-P * 0.07, 0); ctx.lineTo(-P * 0.13, P * 0.15); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = capCol; ctx.beginPath(); ctx.moveTo(P * 0.12, 0); ctx.lineTo(-P * 0.07, -P * 0.08); ctx.lineTo(-P * 0.07, P * 0.08); ctx.closePath(); ctx.fill();
+  } else if (sk === 'heavy') {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * P * 0.19, Math.sin(a) * P * 0.19); }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = capCol; ctx.beginPath(); ctx.arc(0, 0, P * 0.11, 0, Math.PI * 2); ctx.fill();
+  } else if (sk === 'cyber') {
+    ctx.beginPath(); ctx.moveTo(P * 0.18, 0); ctx.lineTo(0, -P * 0.18); ctx.lineTo(-P * 0.18, 0); ctx.lineTo(0, P * 0.18); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = capCol; ctx.beginPath(); ctx.arc(0, 0, P * 0.095, 0, Math.PI * 2); ctx.fill();
+  } else if (sk === 'retro') {
+    ctx.fillRect(-P * 0.15, -P * 0.15, P * 0.3, P * 0.3); ctx.strokeRect(-P * 0.15, -P * 0.15, P * 0.3, P * 0.3);
+    ctx.fillStyle = capCol; ctx.fillRect(-P * 0.09, -P * 0.09, P * 0.18, P * 0.18);
+  } else if (sk === 'striker') {
+    ctx.beginPath(); ctx.arc(0, 0, P * 0.165, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = capCol; ctx.beginPath();
+    for (let i = 0; i < 10; i++) { const r = i % 2 ? P * 0.065 : P * 0.135, a = i * Math.PI / 5; ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * r, Math.sin(a) * r); }
+    ctx.closePath(); ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.arc(0, 0, P * 0.165, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = capCol; ctx.beginPath(); ctx.arc(0, 0, P * 0.115, 0, Math.PI * 2); ctx.fill();
+  }
   if (teamsOn() && !twoSided() && t.id === mySeat) { ctx.fillStyle = COL.dark; ctx.beginPath(); ctx.arc(0, 0, P * 0.055, 0, Math.PI * 2); ctx.fill(); }
   if (t.recoil > 0.15) glow(P * 0.5, 0, P * 0.5 * t.recoil, shade(col, 0.5), t.recoil);       // muzzle flash
   ctx.restore();
@@ -5166,7 +5307,8 @@ const lobbyCtl = () => mode === 'host' || (mode === 'guest' && isLeader);     //
 const inLobby = () => state === 'hostWait' || (state === 'guestWait' && !netMsg);
 const seatGeo = () => lobbyCtl() ? { y0: 2.0, gap: 0.52 } : { y0: 2.5, gap: 0.55 };
 const teamChip = i => { const g = seatGeo(), w = U * 1.3, h = U * 0.42; return { kind: 'team', v: i, x: mcx() + U * 2.55, y: AY + U * (g.y0 + i * g.gap) - h / 2, w, h }; };
-const nameChip = yy => { const w = U * 3.9, h = U * 0.54; return { kind: 'name', text: myName ? 'Name: ' + myName : 'Set your name', x: mcx() - w / 2, y: AY + U * yy - h / 2, w, h }; };
+const nameChip = (yy, w = U * 3.9) => { const h = U * 0.54; return { kind: 'name', text: myName ? 'Name: ' + myName : 'Set your name', x: mcx() - w / 2, y: AY + U * yy - h / 2, w, h }; };
+const skinChip = (yy, w = U * 2.5) => { const h = U * 0.54; return { kind: 'skins', text: 'Skin: ' + skinMeta(mySkin).name, x: mcx() - w / 2, y: AY + U * yy - h / 2, w, h }; };
 // Held wide, the waiting room is two columns (who is in it; how the game is set), each as large as
 // the screen allows. Returns null when the screen is upright or the single column is just as large.
 function lobbyFrames() {
@@ -5212,7 +5354,9 @@ function netItems() {
       btn('join', 'Join a game', 5.5, 5);
     }
     if (rejoinable()) btn('rejoin', `Rejoin game ${lastGame.code}`, 3.55, 6);
-    items.push(nameChip(7.95));
+    const nw = U * 3.4, sw = U * 2.6, g = U * 0.2, x0 = mcx() - (nw + sw + g) / 2;
+    items.push(Object.assign(nameChip(7.95, nw), { x: x0 }));
+    items.push(Object.assign(skinChip(7.95, sw), { x: x0 + nw + g }));
     btn('board', 'Leaderboard', 8.85, 4.2);
     btn('back', 'Back', 9.8, 3);
   } else if (state === 'joinCode') {
@@ -5228,15 +5372,21 @@ function netItems() {
     withFrame(fr && fr.L, () => {
       if (pickTeams()) for (let i = 0; i < n; i++) if (ctl || i === mySeat) items.push(teamChip(i));
       if (!ctl) return;
-      // one row: fewer / more computer tanks, and this player's name
-      const h = U * 0.54, yy = y(4.85) - h / 2, bw = U * 1.75, g = U * 0.15, nw = U * 3.9, x0 = mcx() - (bw * 2 + nw + g * 2) / 2;
+      // one row: fewer / more computer tanks, this player's name and skin
+      const h = U * 0.54, yy = y(4.85) - h / 2, bw = U * 1.45, g = U * 0.12, nw = U * 2.75, sw = U * 2.15, x0 = mcx() - (bw * 2 + nw + sw + g * 3) / 2;
       items.push({ kind: 'bots', v: -1, text: '− CPU', x: x0, y: yy, w: bw, h });
       items.push({ kind: 'bots', v: 1, text: '+ CPU', x: x0 + bw + g, y: yy, w: bw, h });
-      items.push(Object.assign(nameChip(4.85), { x: x0 + (bw + g) * 2 }));
+      items.push(Object.assign(nameChip(4.85, nw), { x: x0 + (bw + g) * 2 }));
+      items.push(Object.assign(skinChip(4.85, sw), { x: x0 + (bw + g) * 2 + nw + g }));
     });
     withFrame(fr && fr.R, () => {
       if (ctl) menuItems(y(5.65), [['start', 'START'], ['leave', 'Leave']], true).forEach(it => items.push(it));
-      else { items.push(nameChip(8.1)); btn('leave', 'Leave', 9.1, 3); }
+      else {
+        const nw = U * 3.1, sw = U * 2.5, g = U * 0.2, x0 = mcx() - (nw + sw + g) / 2;
+        items.push(Object.assign(nameChip(8.1, nw), { x: x0 }));
+        items.push(Object.assign(skinChip(8.1, sw), { x: x0 + nw + g }));
+        btn('leave', 'Leave', 9.1, 3);
+      }
     });
   } else if (state === 'guestWait') {
     btn('leave', 'Leave', 9.6, 3);
@@ -5246,6 +5396,20 @@ function netItems() {
     const list = boardData ? boardData.players.slice(0, 10) : [];
     list.forEach((_, i) => items.push({ kind: 'brow', v: i, x: cx - U * 5.3, y: y(2.85 + i * 0.5) - U * 0.23, w: U * 10.6, h: U * 0.46 }));
     btn('bback', 'Back', 10.1, 3);
+  } else if (state === 'skins') {
+    if (skinBack === 'title') {
+      const sw = U * 2.5, sh = U * 0.54, g = U * 0.25, x0 = cx - (sw * 2 + g) / 2;
+      items.push({ kind: 'skinslot', v: 0, text: 'Player 1', on: skinSlot === 0, x: x0, y: y(1.65) - sh / 2, w: sw, h: sh });
+      items.push({ kind: 'skinslot', v: 1, text: 'Player 2', on: skinSlot === 1, x: x0 + sw + g, y: y(1.65) - sh / 2, w: sw, h: sh });
+    }
+    const cw = U * 4.5, ch = U * 1.65, gx = U * 0.35, gy = U * 0.32;
+    const x0 = cx - (cw * 2 + gx) / 2, y0 = y(skinBack === 'title' ? 2.45 : 2.15);
+    const cur = skinBack === 'title' && skinSlot === 1 ? p2Skin : mySkin;
+    SKINS.forEach((s, i) => {
+      const col = i % 2, row = (i / 2) | 0;
+      items.push({ kind: 'skinpick', v: s.id, skin: s, on: cur === s.id, x: x0 + col * (cw + gx), y: y0 + row * (ch + gy), w: cw, h: ch });
+    });
+    btn('sback', 'Back', 9.9, 3);
   }
   return items;
 }
@@ -5309,9 +5473,43 @@ function drawNetScreen() {
     drawBoard(accent);
     drawNetItems(netItems().filter(it => it.kind === 'bback'), accent);
     return;
+  } else if (state === 'skins') {
+    drawSkins(accent);
+    return;
   }
   const items = netItems();
   withFrame(fr && fr.R, () => drawNetItems(items, accent));
+}
+function drawSkins(accent) {
+  const cx = LW / 2, y = v => AY + U * v, ink = COL.graphite;
+  const previewCol = skinBack === 'title' ? COL.pens[skinSlot] : accent;
+  label('Tank Skins', cx, y(0.8), U * 0.72, previewCol, FONT_D);
+  if (skinBack !== 'title') label('Choose your tank style for online games', cx, y(1.4), U * 0.26, ink, FONT_B, 0.8);
+  const items = netItems();
+  const ang = REDUCED ? -0.45 : performance.now() / 1300;
+  for (const it of items) {
+    if (it.kind === 'skinslot') {
+      const slotCol = COL.pens[it.v];
+      drawChip(it, it.on, slotCol);
+    } else if (it.kind === 'skinpick') {
+      panel(it.x, it.y, it.w, it.h, U * 0.18, null, it.on ? previewCol : null);
+      if (it.on) { rrect(it.x, it.y, it.w, it.h, U * 0.18); ctx.globalAlpha = 0.14; ctx.fillStyle = previewCol; ctx.fill(); ctx.globalAlpha = 1; }
+      const savedP = P;
+      try {
+        P = it.h * 0.78;
+        drawTank({
+          x: (it.x + it.h * 0.58) / P, y: (it.y + it.h * 0.5) / P,
+          angle: ang, id: 0, skin: it.skin.id, pen: previewCol,
+          inv: 0, shield: 0, power: null, recoil: 0, stun: 0, gat: 0
+        });
+      } finally { P = savedP; }
+      const tx = it.x + it.h * 1.1;
+      label(it.skin.name, tx, it.y + it.h * 0.36, U * 0.38, it.on ? previewCol : ink, FONT_D, 1, 'left', it.x + it.w - tx - U * 0.16);
+      label(it.skin.desc, tx, it.y + it.h * 0.68, U * 0.22, ink, FONT_B, 0.72, 'left', it.x + it.w - tx - U * 0.16);
+    } else if (it.kind === 'sback') {
+      drawChip(it, false, previewCol);
+    }
+  }
 }
 const MODE_SHORT = { classic: 'Classic', teams: 'Teams', dm: 'Deathm.', hill: 'Hill', base: 'Base', zombie: 'Infect.', potato: 'Potato', gun: 'Gun', soccer: 'Soccer' };
 function drawBoard(accent) {
@@ -5430,7 +5628,7 @@ function drawOverlay(p, seat) {
   if (state === 'title') {
     const head = menuStep === 'mode' ? 'Ethan’s Tank Duel' : menuStep === 'who' ? `${GAME_NAME[settings.game]}: who plays?` : menuStep === 'mut' ? 'Party rules' : `${GAME_NAME[settings.game]} · ${whoShort()}`;
     const mt = menuTop();
-    label(head, cx - (menuStep === 'mode' ? U * 0.9 : 0), mt + U * 0.42, U * (menuStep === 'mode' ? 0.62 : 0.56), col, menuStep === 'mode' ? FONT_T : FONT_D);
+    label(head, cx, mt + U * 0.42, U * (menuStep === 'mode' ? 0.58 : 0.56), col, menuStep === 'mode' ? FONT_T : FONT_D);
     label(menuHintText(false), cx, mt + U * 0.95, U * 0.27, COL.graphite, FONT_B, 1, 'center', AW - U * 0.5);
     drawItems(menuItems(), col);
   } else if (state === 'countdown') {
@@ -5772,7 +5970,7 @@ addEventListener('keydown', e => {
     else if (k === 'c') { settings.cpu = (settings.cpu + 1) % 4; saveSettings(); menuFocus = 'cpu'; }
     return;
   }
-  if (k === 'escape') { if (state === 'joinCode') { state = 'online'; netMsg = ''; } else if (state === 'board') closeBoard(); else goMenu(); return; }
+  if (k === 'escape') { if (state === 'joinCode') { state = 'online'; netMsg = ''; } else if (state === 'board') closeBoard(); else if (state === 'skins') closeSkins(); else goMenu(); return; }
   if (state === 'joinCode') {
     if (k === 'backspace') typeKey('del'); else if (k === 'enter') typeKey('join'); else typeKey(k);
     return;
@@ -5819,7 +6017,8 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 
 // hooks for testing from the console
 window.__tank = {
-  C, MAPS, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
+  C, MAPS, SKINS, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
+  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get skins() { return skins; },
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, tracePath, castRay, planWaypoint,

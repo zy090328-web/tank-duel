@@ -199,10 +199,11 @@ const C = {
   MINION_MAX: 10,        // most minions one side can have at once
   RESPAWN_GROW: 1 / 60,  // base mode: the wait to come back grows by a second for every minute played
 
-  // terrain
+  // terrain & recon
   GRASS_SEE: 1.6,        // a tank in grass is seen only by enemies this close (centre to centre)...
   GRASS_REVEAL: 0.8,     // ...or for this long after it fires
-  FOG_SEE: 3.2           // party rule Fog: enemy tanks further than this from your side are not shown
+  FOG_SEE: 3.2,          // party rule Fog: enemy tanks further than this from your side are not shown
+  RADAR_TIME: 4.0        // seconds a full-arena radar scan reveals cloaked/hidden enemies and mines
 };
 
 /* ============================================================
@@ -762,7 +763,8 @@ const SKINS = [
   { id: 'heavy', name: 'Heavy', desc: 'Buckshot · Skill: Shield (7s)', atk: '3-pellet buckshot', skill: 'SHIELD', scool: 7.0, speed: 0.88, turn: 0.9, bSpeed: 0.92, fCool: 1.35 },
   { id: 'cyber', name: 'Cyber', desc: 'Twin plasma · Skill: EMP (6s)', atk: 'Twin bolts', skill: 'EMP', scool: 6.0, speed: 1.02, turn: 1.05, bSpeed: 1.12, fCool: 1.1 },
   { id: 'retro', name: 'Retro', desc: 'Super ricochet · Skill: Mine (5s)', atk: '9-bounce shot', skill: 'MINE', scool: 5.0, speed: 0.96, turn: 1.0, bSpeed: 0.95, fCool: 1.0, maxB: 9 },
-  { id: 'striker', name: 'Striker', desc: 'Rapid fire · Skill: Dash (4s)', atk: 'Rapid carbine', skill: 'DASH', scool: 4.0, speed: 1.15, turn: 1.15, bSpeed: 1.05, fCool: 0.72 }
+  { id: 'striker', name: 'Striker', desc: 'Rapid fire · Skill: Dash (4s)', atk: 'Rapid carbine', skill: 'DASH', scool: 4.0, speed: 1.15, turn: 1.15, bSpeed: 1.05, fCool: 0.72 },
+  { id: 'recon', name: 'Recon', desc: 'Fast tracer · Skill: Radar (7s)', atk: 'Fast tracer', skill: 'RADAR', scool: 7.0, speed: 1.08, turn: 1.12, bSpeed: 1.22, fCool: 0.92 }
 ];
 const SKIN_IDS = SKINS.map(s => s.id);
 const validSkin = id => SKIN_IDS.includes(id) ? id : 'classic';
@@ -882,10 +884,10 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, stunImm: 0, gat: 0, gatT: 0, portLock: -1, vx: 0, vy: 0, dash: 0, dcool: 0, scool: 0, cloak: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, skillQ: 0, gone: false, respawn: 0, ai: null });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, hp: 0, stun: 0, stunImm: 0, gat: 0, gatT: 0, portLock: -1, vx: 0, vy: 0, dash: 0, dcool: 0, scool: 0, cloak: 0, scan: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, skillQ: 0, gone: false, respawn: 0, ai: null });
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
-let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], particles = [], marks = [];
+let bullets = [], missiles = [], mines = [], pickups = [], beams = [], rings = [], radars = [], particles = [], marks = [];
 // the two control strips of this screen (index = screen side: 0 near, 1 far)
 const players = [0, 1].map(id => ({ id, stickId: null, ox: 0, oy: 0, vx: 0, vy: 0, fireId: null, skillId: null }));
 const IDLE = { x: 0, y: 0, mag: 0 };
@@ -1327,14 +1329,14 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0; t.skillQ = 0;
-    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0;
+    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
   });
   ball = null; goalBy = -1;
   pot = { holder: -1, fuse: 0, wait: C.POT_WAIT, cd: 0, back: 0, from: -1, passT: 0, beep: 0 };
   rec.frames = []; rec.t = 0; rec.tick = 0; hl = null; rp = null; shotNow = null;
   hillHolder = -1;
   minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
-  bullets = []; missiles = []; mines = []; pickups = []; beams = []; rings = []; particles = []; marks = [];
+  bullets = []; missiles = []; mines = []; pickups = []; beams = []; rings = []; radars = []; particles = []; marks = [];
   netEvents = [];
   pickupTimer = C.PICKUP_FIRST; emptyT = 0; gatT = C.GAT_FIRST;
   roundT = 0; sdClosed = 0; sdStarted = false;
@@ -1454,7 +1456,7 @@ function respawnTank(t) {
   if (!best) best = spawn[t.id] || spawn[0];
   t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
   t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.fireQ = 0; t.skillQ = 0;
-  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.ai = null; t.portLock = -1; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0;
+  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.ai = null; t.portLock = -1; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
   if (isZed(t.id)) { t.inv = 0; t.hp = C.ZED_HP; t.stun = 0.3; t.dash = 0; t.dcool = 0; }
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
   sfx.spawn(); netEv('spawn', t.id, r2(t.x), r2(t.y));
@@ -1775,8 +1777,24 @@ function useSkill(t) {
     // Turbo Dash: burst of speed
     t.dash = C.DASH_TIME; t.reveal = C.GRASS_REVEAL;
     sfx.launch(); netEv('sfx', 'launch', t.id);
+  } else if (sk === 'recon') {
+    // Full-Arena Radar Scan: breaks enemy cloak, reveals hidden enemies & armed mines
+    t.scan = C.RADAR_TIME;
+    for (const o of tanks) {
+      if (!o.alive || friendOf(t.id, o.id)) continue;
+      o.cloak = 0;
+      o.reveal = Math.max(o.reveal, C.RADAR_TIME);
+    }
+    radarFx(t.id, t.x, t.y);
+    sfx.radar(); netEv('radar', t.id, r2(t.x), r2(t.y));
   }
   return true;
+}
+function radarFx(owner, x, y) {
+  if (HEADLESS) return;
+  const col = penOf(owner);
+  radars.push({ x, y, owner, life: 1.4, max: 1.4, col });
+  rings.push({ x, y, r: 1.1, life: 0.4, max: 0.4, col });
 }
 
 // host -> guests: a short ring of recent events, sent with every snapshot so a dropped message loses nothing
@@ -1952,7 +1970,7 @@ function blast(m) {
 
 function kill(t, by = -1) {
   if (state === 'play' || state === 'ending') noteKill(t.id, by);
-  t.alive = false; t.charge = 0; t.gat = 0; t.cloak = 0;
+  t.alive = false; t.charge = 0; t.gat = 0; t.cloak = 0; t.scan = 0;
   const seed = (Math.random() * 1e9) | 0;
   marks.push({ x: t.x, y: t.y, col: penOf(t.id), seed });
   netEv('kill', t.id, r2(t.x), r2(t.y), seed);
@@ -2004,7 +2022,7 @@ function infect(t, by) {
   if (zed[t.id] || !t.alive) return;
   if (state === 'play' || state === 'ending') noteKill(t.id, by, true);
   zed[t.id] = 1; purgeOwned(t.id);
-  t.hp = C.ZED_HP; t.stun = C.ZED_TURN; t.inv = 0; t.reveal = 0; t.dash = 0; t.dcool = C.DASH_COOL * 0.5; t.scool = 0; t.cloak = 0; t.skillQ = 0; t.ai = null;
+  t.hp = C.ZED_HP; t.stun = C.ZED_TURN; t.inv = 0; t.reveal = 0; t.dash = 0; t.dcool = C.DASH_COOL * 0.5; t.scool = 0; t.cloak = 0; t.scan = 0; t.skillQ = 0; t.ai = null;
   if (stats[t.id]) stats[t.id].d++;
   if (by >= 0 && stats[by]) stats[by].k++;
   rings.push({ x: t.x, y: t.y, r: 0.9, life: 0.45, max: 0.45, col: COL.zombie });
@@ -2371,6 +2389,7 @@ function botInput(seat) {
     else if (sk === 'classic' && hasFoe && los && Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle)) < 0.22 && dFoe < 4.5 && !barrelInWay(t, foe.x, foe.y)) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'retro' && hasFoe && dFoe < 5.2) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'stealth' && hasFoe && dFoe < 5.5 && !(t.cloak > 0)) { pressSkill(seat); ai.react = 0.35; }
+    else if (sk === 'recon' && !(t.scan > 0) && (tanks.some(o => o.alive && !friendOf(seat, o.id) && !seenBy(seat, o)) || mines.some(mn => mn.armed && !friendOf(seat, mn.owner)))) { pressSkill(seat); ai.react = 0.4; }
   }
   if (hasFoe && los) {
     const off = Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle));
@@ -2570,7 +2589,8 @@ function stepPhysics(dt, lethal, control) {
     t.reveal = Math.max(0, t.reveal - dt);
     t.inv = Math.max(0, t.inv - dt);
     if (t.gat > 0) gatStep(t, dt, control);
-    t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt); t.scool = Math.max(0, t.scool - dt); t.cloak = Math.max(0, t.cloak - dt);
+    t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt); t.scool = Math.max(0, t.scool - dt); t.cloak = Math.max(0, t.cloak - dt); t.scan = Math.max(0, t.scan - dt);
+    if (tanks.some(u => u !== t && u.alive && (u.scan || 0) > 0 && !friendOf(u.id, t.id))) { t.cloak = 0; t.reveal = Math.max(t.reveal, 0.2); }
     if (gunOn() && !t.power && !t.guided && t.charge <= 0 && t.cool <= 0) { const w = gunWeapon(t.id); if (w !== 'shot') t.power = w; }
     const px = t.x, py = t.y;
     if (t.reload > 0) { t.reload -= dt; if (t.reload <= 0) { t.reload = 0; t.ammo = clipSize(); sfx.reloaded(); netEv('sfx', 'reloaded', t.id); } }
@@ -2793,6 +2813,7 @@ function update(dt) {
   }
   for (let i = beams.length - 1; i >= 0; i--) { beams[i].life -= dt; if (beams[i].life <= 0) beams.splice(i, 1); }
   for (let i = rings.length - 1; i >= 0; i--) { rings[i].life -= dt; if (rings[i].life <= 0) rings.splice(i, 1); }
+  for (let i = radars.length - 1; i >= 0; i--) { radars[i].life -= dt; if (radars[i].life <= 0) radars.splice(i, 1); }
   for (const k of pickups) k.age += dt;
   for (const st of structs) st.flash = Math.max(0, st.flash - dt);
   if (state === 'replay') stepReplay(dt); else if (rpPrev >= 0) { rpPrev = -1; rpParts = []; rpRings = []; rpT = 0; }
@@ -3427,7 +3448,7 @@ function buildSnap() {
     pt: play && potatoOn() ? [pot.holder, r1(pot.fuse)] : null, bl: play && ball ? [r2(ball.x), r2(ball.y)] : null, gb: goalBy,
     rp: state === 'replay' && rp ? [rp.from, rp.to, rp.dur] : null,
     T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0) | (t.cloak > 0 ? 128 : 0),
-      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0, t.dcool > 0 ? r1(t.dcool) : 0, t.scool > 0 ? r1(t.scool) : 0]) : [],
+      shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0, t.dcool > 0 ? r1(t.dcool) : 0, t.scool > 0 ? r1(t.scool) : 0, t.scan > 0 ? r1(t.scan) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
@@ -3792,7 +3813,7 @@ function applyDiscrete(g, dt) {
   if ((g.r !== lastRound || g.m !== lastMap) && st !== 'guestWait') {
     lastRound = g.r; lastMap = g.m;
     loadMap(g.m | 0);
-    marks = []; particles = []; beams = []; rings = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
+    marks = []; particles = []; beams = []; rings = []; radars = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
     rec.frames = []; rec.tick = 0; rp = null;
     const me = Array.isArray(g.T) && g.T[mySeat];
     viewFlip = !!me && me[1] < ROWS / 2;
@@ -3883,6 +3904,8 @@ function playEvent(e) {
     const col = pen(e[2]);
     rings.push({ x: e[3], y: e[4], r: 2.6, life: 0.45, max: 0.45, col });
     burst(e[3], e[4], 18, col, 3.2, 0.35, 0.045); sfx.zap();
+  } else if (kind === 'radar') {
+    radarFx(e[2], e[3], e[4]); sfx.radar();
   } else if (kind === 'puff') { burst(e[2], e[3], 8, pen(e[4]), 1.4, 0.3, 0.04); sfx.pop(); }
   else if (kind === 'blast' && e[4] === -2) {
     const R = e[5] || C.BARREL_BLAST;
@@ -3939,7 +3962,7 @@ function applyEntities(a, b, k, dt) {
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
     t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0; t.inv = +q[11] || 0;
-    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0;
+    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0; t.scan = +q[14] || 0;
     t.laserPath = t.charge > 0 ? tracePath(t.x, t.y, t.angle) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -4078,6 +4101,7 @@ const sfx = {
   crack: () => { hiss({ dur: 0.1, vol: 0.13, kind: 'bandpass', f0: 2400, f1: 500, q: 1 }); voice({ f: 170, to: 80, dur: 0.09, type: 'triangle', vol: 0.06 }); },
   spin: () => voice({ f: 120, to: 900, dur: 0.35, type: 'sawtooth', vol: 0.045, lp: 2000 }),
   warp: () => { voice({ f: 300, to: 1200, dur: 0.2, type: 'sine', vol: 0.06, send: 0.6 }); voice({ f: 900, to: 200, dur: 0.2, type: 'sine', vol: 0.03, send: 0.6 }); },
+  radar: () => { voice({ f: 980, to: 1480, dur: 0.16, type: 'sine', vol: 0.06, send: 0.6 }); voice({ f: 1480, to: 1960, dur: 0.24, type: 'sine', vol: 0.045, delay: 0.11, send: 0.65 }); },
   rattle: () => {
     const now = performance.now(); if (!audible() || now - (sfx.lastRattle || 0) < 60) return; sfx.lastRattle = now;
     voice({ f: 640 + Math.random() * 120, to: 280, dur: 0.045, type: 'square', vol: 0.03, lp: 2600 }); hiss({ dur: 0.04, vol: 0.05, kind: 'highpass', f0: 4000, f1: 2500 });
@@ -4864,6 +4888,7 @@ function mineAlpha(mn) {
   if (eye < 0) rest = 0.1;
   else if (friendOf(eye, mn.owner)) rest = 0.5;
   else { const me = tanks[eye]; if (me && me.alive && Math.hypot(me.x - mn.x, me.y - mn.y) < C.MINE_SEE) rest = 0.85; }
+  if (tanks.some(u => u.alive && (u.scan || 0) > 0 && (eye < 0 ? !friendOf(u.id, mn.owner) : friendOf(eye, u.id)))) rest = Math.max(rest, 0.9);
   return Math.max(rest, fade);
 }
 function drawMine(mn, alpha = 1) {
@@ -5004,6 +5029,17 @@ function drawTank(t) {
     ctx.fillRect(-L * 0.4, -P * 0.055, L * 0.8, P * 0.03);
     ctx.fillRect(-L * 0.4, P * 0.025, L * 0.8, P * 0.03);
     ctx.globalAlpha = cAlpha;
+  } else if (sk === 'recon') {
+    const ch = P * 0.1;
+    ctx.beginPath();
+    ctx.moveTo(L * 0.5, 0); ctx.lineTo(L * 0.28, -W * 0.34); ctx.lineTo(-L * 0.42, -W * 0.34);
+    ctx.lineTo(-L * 0.48, -W * 0.34 + ch); ctx.lineTo(-L * 0.48, W * 0.34 - ch); ctx.lineTo(-L * 0.42, W * 0.34);
+    ctx.lineTo(L * 0.28, W * 0.34); ctx.closePath(); ctx.fill(); ctx.stroke();
+    // side sensor pods
+    ctx.fillStyle = shade(col, 0.35);
+    for (const sy of [-1, 1]) {
+      rrect(-L * 0.22, sy * W * 0.28 - P * 0.025, L * 0.36, P * 0.05, P * 0.02); ctx.fill();
+    }
   } else {
     rrect(-L / 2 + P * 0.03, -W / 2 + W * 0.2, L - P * 0.06, W * 0.6, P * 0.05); ctx.fill(); ctx.stroke();
   }
@@ -5048,6 +5084,9 @@ function drawTank(t) {
     ctx.moveTo(P * 0.04 - kick, -P * 0.06); ctx.lineTo(P * 0.43 - kick, -P * 0.03);
     ctx.lineTo(P * 0.43 - kick, P * 0.03); ctx.lineTo(P * 0.04 - kick, P * 0.06);
     ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else if (sk === 'recon') {
+    rrect(P * 0.04 - kick, -P * 0.045, P * 0.4, P * 0.09, P * 0.02); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = col; rrect(P * 0.32 - kick, -P * 0.065, P * 0.06, P * 0.13, P * 0.015); ctx.fill();
   } else { rrect(P * 0.04 - kick, -P * 0.055, P * 0.38, P * 0.11, P * 0.025); ctx.fill(); ctx.stroke(); }
   // turret: styled per skin (carries power-up colour when active)
   const capCol = t.power && !gunOn() ? COL.graphite : col;
@@ -5071,6 +5110,15 @@ function drawTank(t) {
     ctx.fillStyle = capCol; ctx.beginPath();
     for (let i = 0; i < 10; i++) { const r = i % 2 ? P * 0.065 : P * 0.135, a = i * Math.PI / 5; ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * r, Math.sin(a) * r); }
     ctx.closePath(); ctx.fill();
+  } else if (sk === 'recon') {
+    ctx.beginPath(); ctx.arc(0, 0, P * 0.165, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    const spin = REDUCED ? 0.5 : performance.now() / ((t.scan || 0) > 0 ? 130 : 420);
+    ctx.save(); ctx.rotate(spin - t.angle);
+    ctx.strokeStyle = (t.scan || 0) > 0 ? COL.white : capCol; ctx.lineWidth = Math.max(1.5, P * 0.038); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-P * 0.11, -P * 0.05); ctx.quadraticCurveTo(0, P * 0.03, P * 0.11, -P * 0.05); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, P * 0.09); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = capCol; ctx.beginPath(); ctx.arc(0, 0, P * 0.055, 0, Math.PI * 2); ctx.fill();
   } else {
     ctx.beginPath(); ctx.arc(0, 0, P * 0.165, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     ctx.fillStyle = capCol; ctx.beginPath(); ctx.arc(0, 0, P * 0.115, 0, Math.PI * 2); ctx.fill();
@@ -5596,12 +5644,14 @@ function netItems() {
       const x0 = cx - (sw * slots.length + g * (slots.length - 1)) / 2;
       slots.forEach((txt, i) => items.push({ kind: 'skinslot', v: i, text: txt, on: skinSlot === i, x: x0 + i * (sw + g), y: y(1.65) - sh / 2, w: sw, h: sh }));
     }
-    const cw = U * 4.5, ch = U * 1.65, gx = U * 0.35, gy = U * 0.32;
-    const x0 = cx - (cw * 2 + gx) / 2, y0 = y(skinBack === 'title' ? 2.45 : 2.15);
+    const cols = 2, rows = Math.ceil(SKINS.length / cols);
+    const cw = U * 4.5, ch = rows > 3 ? U * 1.42 : U * 1.65, gx = U * 0.35, gy = rows > 3 ? U * 0.24 : U * 0.32;
+    const x0 = cx - (cw * 2 + gx) / 2, y0 = y(skinBack === 'title' ? (rows > 3 ? 2.25 : 2.45) : (rows > 3 ? 1.95 : 2.15));
     const cur = skinBack === 'title' && skinSlot > 0 ? (settings.cpu === 0 ? p2Skin : cpuSkins[skinSlot - 1]) : mySkin;
     SKINS.forEach((s, i) => {
-      const col = i % 2, row = (i / 2) | 0;
-      items.push({ kind: 'skinpick', v: s.id, skin: s, on: cur === s.id, x: x0 + col * (cw + gx), y: y0 + row * (ch + gy), w: cw, h: ch });
+      const col = i % cols, row = (i / cols) | 0;
+      const oddLast = SKINS.length % cols === 1 && i === SKINS.length - 1;
+      items.push({ kind: 'skinpick', v: s.id, skin: s, on: cur === s.id, x: oddLast ? cx - cw / 2 : x0 + col * (cw + gx), y: y0 + row * (ch + gy), w: cw, h: ch });
     });
     btn('sback', 'Back', 9.9, 3);
   }
@@ -5940,7 +5990,18 @@ function render() {
   }
   if (matchOn) { for (const p of portals) drawPortal(p); for (const br of barrels) if (br.alive) drawBarrel(br); }
   for (const k of pickups) drawPickup(k);
-  for (const mn of mines) { const a = mineAlpha(mn); if (a > 0) drawMine(mn, a); }
+  const eye = viewer();
+  for (const mn of mines) {
+    const a = mineAlpha(mn);
+    if (a > 0) drawMine(mn, a);
+    const ping = mn.armed && tanks.find(u => u.alive && (u.scan || 0) > 0 && !friendOf(u.id, mn.owner) && (eye < 0 || friendOf(eye, u.id)));
+    if (ping) {
+      const pulse = REDUCED ? 0 : 0.05 * Math.sin(performance.now() / 110);
+      ctx.save(); ctx.strokeStyle = penOf(ping.id); ctx.lineWidth = Math.max(1.5, P * 0.038); ctx.globalAlpha = 0.85;
+      ctx.setLineDash([P * 0.08, P * 0.06]); ctx.beginPath(); ctx.arc(mn.x * P, mn.y * P, P * (0.28 + pulse), 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]); ctx.restore(); ctx.globalAlpha = 1;
+    }
+  }
   if (rsv) drawShotPath();
   if (ball && matchOn) drawBall(ball);
 
@@ -5982,7 +6043,6 @@ function render() {
   ctx.globalAlpha = 1;
 
   // a ring marks the tank a homing missile is hunting
-  const eye = viewer();
   for (const m of missiles) {
     const tg = tanks[m.target];
     if (m.type !== 'homing' || !tg || !tg.alive || tg.id === m.owner || !seenBy(eye, tg)) continue;
@@ -5993,6 +6053,16 @@ function render() {
   }
   if (!NET_SCREENS.includes(state)) for (const t of tanks) if (t.alive && seenBy(eye, t)) {
     drawTank(t); if (settings.terrain && !replayView) grassOver(t);
+    const scannedBy = t.reveal > 0 && tanks.find(u => u !== t && u.alive && (u.scan || 0) > 0 && !friendOf(u.id, t.id) && (eye < 0 || friendOf(eye, u.id)));
+    if (scannedBy) {
+      const rCol = penOf(scannedBy.id), rot = REDUCED ? 0 : performance.now() / 360, rad = P * 0.56;
+      ctx.save(); ctx.translate(t.x * P, t.y * P); ctx.rotate(rot);
+      ctx.strokeStyle = rCol; ctx.lineWidth = Math.max(1.5, P * 0.042); ctx.globalAlpha = 0.88;
+      ctx.setLineDash([P * 0.16, P * 0.12]); ctx.beginPath(); ctx.arc(0, 0, rad, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; ctx.beginPath(); ctx.moveTo(Math.cos(a) * rad * 0.82, Math.sin(a) * rad * 0.82); ctx.lineTo(Math.cos(a) * rad * 1.15, Math.sin(a) * rad * 1.15); ctx.stroke(); }
+      ctx.restore(); ctx.globalAlpha = 1;
+    }
     if (potatoOn() && t.id === potHolder() && matchOn) drawPotato(t);
   }
   if (state === 'countdown' && !twoSided() && tanks[mySeat]) {
@@ -6018,6 +6088,23 @@ function render() {
     ctx.strokeStyle = r.col; ctx.globalAlpha = k * 0.3; ctx.lineWidth = Math.max(4, P * 0.16);
     ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.stroke();
     ctx.strokeStyle = shade(r.col, 0.45); ctx.globalAlpha = k * 0.95; ctx.lineWidth = Math.max(1.5, P * 0.05); ctx.stroke();
+  }
+  if (radars.length) {
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, COLS * P, ROWS * P); ctx.clip();
+    const maxR = Math.hypot(COLS, ROWS) * P;
+    for (const rd of radars) {
+      const k = 1 - rd.life / rd.max, x = rd.x * P, y = rd.y * P, fade = Math.max(0, 1 - k * 0.85);
+      for (const off of [0, 0.14]) {
+        const p = k - off;
+        if (p <= 0 || p > 1) continue;
+        const rad = maxR * p;
+        ctx.strokeStyle = rd.col; ctx.globalAlpha = fade * (off ? 0.28 : 0.48); ctx.lineWidth = Math.max(3, P * (off ? 0.1 : 0.18));
+        ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = shade(rd.col, 0.55); ctx.globalAlpha = fade * (off ? 0.5 : 0.9); ctx.lineWidth = Math.max(1.5, P * 0.045);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
   for (const p of particles) {
     // a spark: a short streak along its way

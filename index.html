@@ -3287,7 +3287,7 @@ function acceptGuest(conn) {
     // the same player coming back (same id) keeps their name, skin, team and seat
     const old = guests.get(conn.peer);
     if (old && old.pc) try { old.pc.close(); } catch (e) {}
-    const g = { conn, inp: [0, 0, 0], fire: 0, lastFire: old ? old.lastFire : null, lastAt: performance.now(), name: old ? old.name : undefined, skin: old ? old.skin : undefined, away: 0 };
+    const g = { conn, inp: [0, 0, 0], fire: 0, lastFire: old ? old.lastFire : null, lastSkill: old ? old.lastSkill : null, lastAt: performance.now(), name: old ? old.name : undefined, skin: old ? old.skin : undefined, away: 0 };
     guests.set(conn.peer, g);
     if (hostInLobby()) reseat();
     const s = seats.indexOf(conn.peer), t = s >= 0 && !hostInLobby() ? tanks[s] : null;
@@ -3344,8 +3344,11 @@ function hostData(id, d) {
   if (typeof d.p === 'number' && isFinite(d.p)) g.echo = Math.round(d.p * 10) / 10;
   g.inp = [num(d.i[0], -1, 1), num(d.i[1], -1, 1), num(d.i[2], 0, 1)];
   const f = Math.floor(num(d.i[3], 0, 1e9));
-  if (g.lastFire === null) g.lastFire = f;
-  if (f > g.lastFire) { g.lastFire = f; const s = seats.indexOf(id); if (s >= hostSeats().length) pressFire(s); }
+  if (g.lastFire === null || f < g.lastFire) g.lastFire = f;
+  else if (f > g.lastFire) { g.lastFire = f; const s = seats.indexOf(id); if (s >= hostSeats().length) pressFire(s); }
+  const sk = Math.floor(num(d.i[4], 0, 1e9));
+  if (g.lastSkill === null || sk < g.lastSkill) g.lastSkill = sk;
+  else if (sk > g.lastSkill) { g.lastSkill = sk; const s = seats.indexOf(id); if (s >= hostSeats().length) pressSkill(s); }
 }
 function remoteInput(seat) {
   const g = guests.get(seats[seat]);
@@ -3446,7 +3449,7 @@ async function joinGame(code) {
   mode = 'guest'; mySeat = -1; netCode = code; state = 'guestWait'; stateT = 0;
   netMsg = 'Connecting to game ' + code + '…';
   snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1; dedicatedGame = false; isLeader = false; sentPrefs = false;
-  interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; netRttMs = 0; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; prevNetState = ''; skinSentAt = 0;
+  interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; netRttMs = 0; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; mySkill = 0; lastSent = ''; lastSentAt = 0; prevNetState = ''; skinSentAt = 0;
   trails.clear(); seen.clear(); rejoinAt = 0; rejoinTries = 0; awaySince = 0; hostAwayMsg = false;
   if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'guest') return;
@@ -3465,6 +3468,7 @@ function guestConnect(code, again) {
       if (p.myId) myId = p.myId;                 // the server's id for this device, the same every time it joins
       netMsg = ''; connTimer = 0; awaySince = 0; rejoinTries = 0; rejoinAt = 0; lastArrival = 0;
       try { c.send({ n: myName, sk: mySkin }); } catch (e) {}
+      sendInput(true);
       try { lastGame = { code, at: Date.now() }; localStorage.setItem('tankduel-last', JSON.stringify(lastGame)); } catch (e) {}
     });
     c.on('data', d => { if (hostConn === c) onHostData(d); });
@@ -3868,6 +3872,7 @@ function playEvent(e) {
   else if (kind === 'sfx') {
     const name = e[2];
     if (name === 'reloaded' && e[3] !== mySeat) return;
+    if (name === 'warp' && tanks[e[3]]) rings.push({ x: tanks[e[3]].x, y: tanks[e[3]].y, r: 0.75, life: 0.3, max: 0.3, col: pen(e[3]) });
     if (sfx[name] && name !== 'shoot') sfx[name](); else if (name === 'shoot') sfx.shoot(e[3] | 0);
   } else if (kind === 'block') {
     rings.push({ x: e[3], y: e[4], r: 0.75, life: 0.3, max: 0.3, col: pen(e[2]) }); sfx.block();

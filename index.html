@@ -221,7 +221,11 @@ const C = {
   TRAP_R: 0.22,          // visual radius of a snare trap
   TRAP_TIME: 3.0,        // seconds a triggered snare trap binds the target
   TRAP_MAX: 3,           // max active stealth snare traps per trapper
-  INVULN_TIME: 2.0       // seconds Titan's invulnerability lasts (can still attack)
+  INVULN_TIME: 2.0,      // seconds Titan's invulnerability lasts (can still attack)
+  MINI_BLAST: 0.68,      // splash radius of Mortar primary HE shell on wall impact
+  CHILL_TIME: 0.9,       // seconds Trapper bolt chills/slows an enemy on graze or shield hit
+  CHILL_SPEED: 0.72,     // movement speed multiplier while chilled
+  CHILL_GRAZE: 0.56      // graze radius around a Trapper bolt that chills an enemy
 };
 
 /* ============================================================
@@ -910,17 +914,17 @@ if (nameOk && nameInput && nameOk.addEventListener) {
   nameInput.addEventListener('keyup', e => e.stopPropagation());
 }
 const SKINS = [
-  { id: 'classic', name: 'Classic', desc: 'Balanced · Skill: Spread (5s)', atk: 'Standard shot', skill: 'SPREAD', scool: 5.0, speed: 1.0, turn: 1.0, bSpeed: 1.0, fCool: 1.0 },
-  { id: 'stealth', name: 'Stealth', desc: 'Sniper shot · Skill: Cloak (6s) · Phase through walls', atk: 'Fast sniper', skill: 'CLOAK', scool: 6.0, speed: 1.08, turn: 1.12, bSpeed: 1.38, fCool: 1.25, maxB: 3 },
-  { id: 'heavy', name: 'Heavy', desc: 'Buckshot · Skill: Shield (7s)', atk: '3-pellet buckshot', skill: 'SHIELD', scool: 7.0, speed: 0.88, turn: 0.9, bSpeed: 0.92, fCool: 1.35 },
-  { id: 'cyber', name: 'Cyber', desc: 'Twin plasma · Skill: EMP (6s)', atk: 'Twin bolts', skill: 'EMP', scool: 6.0, speed: 1.02, turn: 1.05, bSpeed: 1.12, fCool: 1.1 },
-  { id: 'retro', name: 'Retro', desc: 'Super ricochet · Skill: Mine (5s)', atk: '9-bounce shot', skill: 'MINE', scool: 5.0, speed: 0.96, turn: 1.0, bSpeed: 0.95, fCool: 1.0, maxB: 9 },
-  { id: 'striker', name: 'Striker', desc: 'Rapid fire · Skill: Dash (4s)', atk: 'Rapid carbine', skill: 'DASH', scool: 4.0, speed: 1.15, turn: 1.15, bSpeed: 1.05, fCool: 0.72 },
-  { id: 'recon', name: 'Recon', desc: 'Fast tracer · Skill: Radar (7s)', atk: 'Fast tracer', skill: 'RADAR', scool: 7.0, speed: 1.08, turn: 1.12, bSpeed: 1.22, fCool: 0.92 },
-  { id: 'mortar', name: 'Mortar', desc: 'Heavy shell · Skill: Mortar (8.5s)', atk: 'Heavy shell', skill: 'MORTAR', scool: 8.5, speed: 0.94, turn: 0.92, bSpeed: 0.9, fCool: 1.25, maxB: 2 },
-  { id: 'engineer', name: 'Engineer', desc: 'Rivet bolt · Skill: Bunker (6s) · Link shields into Big Shield', atk: 'Rivet bolt', skill: 'BUNKER', scool: 6.0, speed: 1.0, turn: 1.05, bSpeed: 1.08, fCool: 0.95, maxB: 3 },
-  { id: 'trapper', name: 'Trapper', desc: 'Bolt gun · Skill: Snare Trap (6.5s) · Invisible trap binds 3s', atk: 'Bolt gun', skill: 'TRAP', scool: 6.5, speed: 1.04, turn: 1.08, bSpeed: 1.15, fCool: 0.92, maxB: 3 },
-  { id: 'titan', name: 'Titan', desc: 'Autocannon · Skill: Invuln (8s) · Immune 2s while attacking', atk: 'Autocannon', skill: 'INVULN', scool: 8.0, speed: 0.98, turn: 1.0, bSpeed: 1.06, fCool: 0.9 }
+  { id: 'classic', name: 'Classic', desc: 'Balanced · Skill: Spread (5s)', atk: 'Balanced (5b)', skill: 'SPREAD', scool: 5.0, speed: 1.02, turn: 1.04, bSpeed: 1.04, fCool: 0.95 },
+  { id: 'stealth', name: 'Stealth', desc: 'Fast sniper · Skill: Cloak (6s) · Phase walls', atk: 'Hyper sniper (2b)', skill: 'CLOAK', scool: 6.0, speed: 1.12, turn: 1.15, bSpeed: 1.55, fCool: 1.30, maxB: 2 },
+  { id: 'heavy', name: 'Heavy', desc: 'Armored buckshot · Skill: Shield (7s)', atk: '3-pellet buckshot', skill: 'SHIELD', scool: 7.0, speed: 0.84, turn: 0.88, bSpeed: 0.92, fCool: 1.35 },
+  { id: 'cyber', name: 'Cyber', desc: 'Twin plasma · 2x vs shields · Skill: EMP (6s)', atk: 'Twin bolts (2x shld)', skill: 'EMP', scool: 6.0, speed: 1.04, turn: 1.08, bSpeed: 1.14, fCool: 1.08 },
+  { id: 'retro', name: 'Retro', desc: 'Super ricochet · Skill: Mine (5s)', atk: '9-bounce shot', skill: 'MINE', scool: 5.0, speed: 0.98, turn: 1.02, bSpeed: 0.96, fCool: 1.0, maxB: 9 },
+  { id: 'striker', name: 'Striker', desc: 'Fastest · Rapid carbine · Skill: Dash (4s)', atk: 'Rapid carbine (3b)', skill: 'DASH', scool: 4.0, speed: 1.20, turn: 1.22, bSpeed: 1.10, fCool: 0.65, maxB: 3 },
+  { id: 'recon', name: 'Recon', desc: 'Quick · 2-round burst · Skill: Radar (7s)', atk: '2-round burst', skill: 'RADAR', scool: 7.0, speed: 1.16, turn: 1.20, bSpeed: 1.28, fCool: 0.88 },
+  { id: 'mortar', name: 'Mortar', desc: 'HE wall-blast · Skill: Mortar (8.5s)', atk: 'HE wall-blast', skill: 'MORTAR', scool: 8.5, speed: 0.88, turn: 0.88, bSpeed: 0.85, fCool: 1.40, maxB: 0 },
+  { id: 'engineer', name: 'Engineer', desc: 'Siege/repair rivet · Skill: Bunker (6s) · Link Big Shield', atk: 'Rivet (2x/repair)', skill: 'BUNKER', scool: 6.0, speed: 0.96, turn: 1.05, bSpeed: 1.10, fCool: 1.0, maxB: 3 },
+  { id: 'trapper', name: 'Trapper', desc: 'Chilling bolt · Skill: Snare Trap (6.5s) · Invisible trap binds 3s', atk: 'Chilling bolt', skill: 'TRAP', scool: 6.5, speed: 1.06, turn: 1.12, bSpeed: 1.18, fCool: 0.95, maxB: 3 },
+  { id: 'titan', name: 'Titan', desc: 'Heavy cannon · Skill: Invuln (8s) · Immune 2s while attacking', atk: 'Heavy cannon (2x)', skill: 'INVULN', scool: 8.0, speed: 0.86, turn: 0.90, bSpeed: 1.12, fCool: 1.15, maxB: 2 }
 ];
 const SKIN_IDS = SKINS.map(s => s.id);
 const validSkin = id => SKIN_IDS.includes(id) ? id : 'classic';
@@ -1040,7 +1044,7 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, invuln: 0, hp: 0, stun: 0, stunImm: 0, snare: 0, gat: 0, gatT: 0, portLock: -1, vx: 0, vy: 0, dash: 0, dcool: 0, scool: 0, cloak: 0, scan: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, skillQ: 0, gone: false, respawn: 0, ai: null });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, invuln: 0, hp: 0, stun: 0, stunImm: 0, snare: 0, chill: 0, gat: 0, gatT: 0, portLock: -1, vx: 0, vy: 0, dash: 0, dcool: 0, scool: 0, cloak: 0, scan: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, skillQ: 0, gone: false, respawn: 0, ai: null });
 const isInvuln = t => !!t && ((t.inv || 0) > 0 || (t.invuln || 0) > 0);
 const canPhase = t => !!t && !isZed(t.id) && (t.cloak || 0) > 0;
 let tanks = [0, 1].map(makeTank);
@@ -1313,7 +1317,7 @@ function strike(b) {
   const k = structAt(b.x, b.y, C.BULLET_R + 0.01);
   if (k < 0) return false;
   const s = structs[k];
-  if (teamOf[b.owner] !== s.team) damageStruct(s, 1, b.owner);
+  if (teamOf[b.owner] !== s.team) damageStruct(s, (b.heavy || b.rivet) ? 2 : 1, b.owner);
   fizz(b.x, b.y);
   return true;
 }
@@ -1523,7 +1527,7 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0; t.skillQ = 0;
-    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.invuln = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.snare = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
+    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.invuln = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.snare = 0; t.chill = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
   });
   ball = null; goalBy = -1;
   pot = { holder: -1, fuse: 0, wait: C.POT_WAIT, cd: 0, back: 0, from: -1, passT: 0, beep: 0 };
@@ -1652,7 +1656,7 @@ function respawnTank(t) {
   if (!best) best = spawn[t.id] || spawn[0];
   t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
   t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.fireQ = 0; t.skillQ = 0;
-  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.invuln = 0; t.ai = null; t.portLock = -1; t.snare = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
+  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.invuln = 0; t.ai = null; t.portLock = -1; t.snare = 0; t.chill = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
   if (isZed(t.id)) { t.inv = 0; t.hp = C.ZED_HP; t.stun = 0.3; t.dash = 0; t.dcool = 0; }
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
   sfx.spawn(); netEv('spawn', t.id, r2(t.x), r2(t.y));
@@ -1904,10 +1908,24 @@ function fire(t) {
       const useX = circleHitsWall(bx, by, C.BULLET_R) ? s.x : bx, useY = circleHitsWall(bx, by, C.BULLET_R) ? s.y : by;
       bullets.push({ id: ++entId, x: useX, y: useY, vx: s.dx * bsp, vy: s.dy * bsp, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0, extra: k > 0, life: 3.4, maxB: 4 });
     }
+  } else if (sk === 'recon' && !gunOn()) {
+    bullets.push({ id: ++entId, x: s.x, y: s.y, vx: s.dx * bsp, vy: s.dy * bsp, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0 });
+    const bx = s.x - s.dx * 0.22, by = s.y - s.dy * 0.22;
+    const clear = !circleHitsWall(bx, by, C.BULLET_R);
+    const a2 = t.angle + (clear ? 0 : 0.035);
+    bullets.push({ id: ++entId, x: clear ? bx : s.x, y: clear ? by : s.y, vx: Math.cos(a2) * bsp, vy: Math.sin(a2) * bsp, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0, extra: true });
   } else {
-    const maxB = !gunOn() && cls.maxB !== undefined ? cls.maxB : undefined;
-    const life = !gunOn() && sk === 'retro' ? 6.5 : undefined;
-    bullets.push({ id: ++entId, x: s.x, y: s.y, vx: s.dx * bsp, vy: s.dy * bsp, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0, maxB, life });
+    const gun = gunOn();
+    const maxB = !gun && sk === 'mortar' ? (mutNow === 'bank' ? 1 : 0) : !gun && cls.maxB !== undefined ? cls.maxB : undefined;
+    const life = !gun ? (sk === 'retro' ? 6.5 : sk === 'striker' ? 2.8 : sk === 'mortar' ? 1.15 : undefined) : undefined;
+    bullets.push({
+      id: ++entId, x: s.x, y: s.y, vx: s.dx * bsp, vy: s.dy * bsp, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0, maxB, life,
+      he: !gun && sk === 'mortar',
+      heavy: !gun && sk === 'titan',
+      rivet: !gun && sk === 'engineer',
+      chill: !gun && sk === 'trapper',
+      chilled: !gun && sk === 'trapper' ? new Set() : null
+    });
   }
   if (stats[t.id]) stats[t.id].s++;
   if (settings.ammo !== 'unlimited') {
@@ -2309,9 +2327,45 @@ function blast(m) {
   shotNow = was;
 }
 
+function miniBlast(b, R = C.MINI_BLAST, skipId = -1) {
+  const spare = b.age < C.SELF_SAFE_TIME ? b.owner : -1;
+  const pen = penOf(b.owner);
+  rings.push({ x: b.x, y: b.y, r: R, life: 0.34, max: 0.34, col: pen });
+  for (let i = 0; i < 16; i++) {
+    const a = Math.random() * Math.PI * 2, s = 0.8 + Math.random() * 3.2, life = 0.2 + Math.random() * 0.32;
+    particles.push({ x: b.x, y: b.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 3 ? pen : COL.graphite, size: 0.035 + Math.random() * 0.04 });
+  }
+  shake = Math.max(shake, 0.16);
+  sfx.boom();
+  netEv('blast', r2(b.x), r2(b.y), b.owner, R);
+  for (const mn of mines) if (Math.hypot(mn.x - b.x, mn.y - b.y) < R) mn.boom = true;
+  for (let i = traps.length - 1; i >= 0; i--) if (Math.hypot(traps[i].x - b.x, traps[i].y - b.y) < R) traps.splice(i, 1);
+  for (const br of barrels) if (Math.hypot(br.x - b.x, br.y - b.y) < R + C.BARREL_R) lightBarrel(br, b.owner, C.BARREL_CHAIN);
+  for (let i = barricades.length - 1; i >= 0; i--) {
+    const bk = barricades[i];
+    if (Math.hypot(bk.x - b.x, bk.y - b.y) < R + (bk.r || C.BARRICADE_R)) damageBarricade(bk, 2, b.owner);
+  }
+  if (ball) {
+    const dx = ball.x - b.x, dy = ball.y - b.y, d = Math.hypot(dx, dy) || 0.01;
+    if (d < R + 0.45) { const k = 0.8 + 3.5 * (1 - d / (R + 0.45)); ball.vx += dx / d * k; ball.vy += dy / d * k; ball.last = b.owner; ball.touchT = rec.t; }
+  }
+  if (settings.soft) {
+    for (let i = 0; i < soft.length; i++) if (soft[i] && Math.hypot(i % COLS + 0.5 - b.x, ((i / COLS) | 0) + 0.5 - b.y) < R + 0.25) breakWall(i);
+  }
+  if (!LETHAL) return;
+  if (structs.length) {
+    const ot = teamOf[b.owner];
+    for (const s of structs) if (s.team !== ot && s.hp > 0 && Math.hypot(s.x - b.x, s.y - b.y) < R + 0.45) damageStruct(s, 2, b.owner);
+    for (let j = minions.length - 1; j >= 0; j--) if (minions[j].team !== ot && Math.hypot(minions[j].x - b.x, minions[j].y - b.y) < R + C.MINION_R) killMinion(j);
+  }
+  const was = shotNow; shotNow = { age: b.age || 0, id: b.id, n: b.bounces || 0 };
+  for (const t of tanks) if (t.alive && t.id !== spare && t.id !== skipId && canHurt(b.owner, t) && !isInvuln(t) && Math.hypot(t.x - b.x, t.y - b.y) < R) hit(t, b.owner);
+  shotNow = was;
+}
+
 function kill(t, by = -1) {
   if (state === 'play' || state === 'ending') noteKill(t.id, by);
-  t.alive = false; t.charge = 0; t.gat = 0; t.snare = 0; t.cloak = 0; t.scan = 0; t.inv = 0; t.invuln = 0;
+  t.alive = false; t.charge = 0; t.gat = 0; t.snare = 0; t.chill = 0; t.cloak = 0; t.scan = 0; t.inv = 0; t.invuln = 0;
   const seed = (Math.random() * 1e9) | 0;
   marks.push({ x: t.x, y: t.y, col: penOf(t.id), seed });
   netEv('kill', t.id, r2(t.x), r2(t.y), seed);
@@ -2366,7 +2420,7 @@ function infect(t, by) {
   if (zed[t.id] || !t.alive) return;
   if (state === 'play' || state === 'ending') noteKill(t.id, by, true);
   zed[t.id] = 1; purgeOwned(t.id);
-  t.hp = C.ZED_HP; t.stun = C.ZED_TURN; t.snare = 0; t.inv = 0; t.invuln = 0; t.reveal = 0; t.dash = 0; t.dcool = C.DASH_COOL * 0.5; t.scool = 0; t.cloak = 0; t.scan = 0; t.skillQ = 0; t.ai = null;
+  t.hp = C.ZED_HP; t.stun = C.ZED_TURN; t.snare = 0; t.chill = 0; t.inv = 0; t.invuln = 0; t.reveal = 0; t.dash = 0; t.dcool = C.DASH_COOL * 0.5; t.scool = 0; t.cloak = 0; t.scan = 0; t.skillQ = 0; t.ai = null;
   if (stats[t.id]) stats[t.id].d++;
   if (by >= 0 && stats[by]) stats[by].k++;
   rings.push({ x: t.x, y: t.y, r: 0.9, life: 0.45, max: 0.45, col: COL.zombie });
@@ -2387,9 +2441,10 @@ function humanGone(id) {
 // how fast a tank drives: zombies are quicker, and quicker still in a dash; a stunned one stands
 function driveSpeed(t) {
   if (t.stun > 0) return 0;
-  if (isZed(t.id)) return C.TANK_SPEED * C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1);
+  const chill = (t.chill || 0) > 0 ? C.CHILL_SPEED : 1;
+  if (isZed(t.id)) return C.TANK_SPEED * C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) * chill;
   const cls = classOf(t.id);
-  return C.TANK_SPEED * (cls.speed || 1) * (t.gat > 0 ? C.GAT_SLOW : 1) * (t.dash > 0 ? C.DASH_SPEED : 1) * (t.cloak > 0 ? 1.22 : 1) * (potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1);
+  return C.TANK_SPEED * (cls.speed || 1) * (t.gat > 0 ? C.GAT_SLOW : 1) * (t.dash > 0 ? C.DASH_SPEED : 1) * (t.cloak > 0 ? 1.22 : 1) * (potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1) * chill;
 }
 
 /* ---------- the gatling ---------- */
@@ -2942,7 +2997,7 @@ function stepPhysics(dt, lethal, control) {
     t.inv = Math.max(0, t.inv - dt);
     t.invuln = Math.max(0, (t.invuln || 0) - dt);
     if (t.gat > 0) gatStep(t, dt, control);
-    t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.snare = Math.max(0, t.snare - dt); if (t.snare > 0) t.dash = 0; t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt); t.scool = Math.max(0, t.scool - dt); t.cloak = Math.max(0, t.cloak - dt); t.scan = Math.max(0, t.scan - dt);
+    t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.snare = Math.max(0, t.snare - dt); t.chill = Math.max(0, (t.chill || 0) - dt); if (t.snare > 0) t.dash = 0; t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt); t.scool = Math.max(0, t.scool - dt); t.cloak = Math.max(0, t.cloak - dt); t.scan = Math.max(0, t.scan - dt);
     if (tanks.some(u => u !== t && u.alive && (u.scan || 0) > 0 && !friendOf(u.id, t.id))) { t.cloak = 0; t.reveal = Math.max(t.reveal, 0.2); }
     if (wasCloaked && !(t.cloak > 0)) unstickFromWall(t, C.TANK_R);
     if (gunOn() && !t.power && !t.guided && t.charge <= 0 && t.cool <= 0) { const w = gunWeapon(t.id); if (w !== 'shot') t.power = w; }
@@ -3044,25 +3099,52 @@ function stepPhysics(dt, lethal, control) {
       // move on each axis separately: hitting a wall while moving in x flips vx, in y flips vy
       const px = b.x, py = b.y;
       b.x += b.vx * dt;
-      if (circleHitsWall(b.x, b.y, C.BULLET_R, false, true)) { if (strike(b) || crack(b)) { bullets.splice(i, 1); continue; } b.x -= b.vx * dt; b.vx = -b.vx; b.bounces++; bounceFx(b); }
+      if (circleHitsWall(b.x, b.y, C.BULLET_R, false, true)) {
+        if (strike(b)) { if (b.he) miniBlast(b); bullets.splice(i, 1); continue bulletLoop; }
+        if (crack(b)) { if (b.he) { miniBlast(b); bullets.splice(i, 1); continue bulletLoop; } if (b.heavy && !b.crushedSoft) b.crushedSoft = true; else { bullets.splice(i, 1); continue bulletLoop; } }
+        else {
+          if (b.he && b.bounces + 1 > (b.maxB ?? C.MAX_BOUNCES)) { b.x -= b.vx * dt * 0.5; miniBlast(b); bullets.splice(i, 1); continue bulletLoop; }
+          b.x -= b.vx * dt; b.vx = -b.vx; b.bounces++; bounceFx(b);
+        }
+      }
       b.y += b.vy * dt;
-      if (circleHitsWall(b.x, b.y, C.BULLET_R, false, true)) { if (strike(b) || crack(b)) { bullets.splice(i, 1); continue; } b.y -= b.vy * dt; b.vy = -b.vy; b.bounces++; bounceFx(b); }
-      if (mirror.length && mirrorBounce(b, px, py)) { b.bounces++; bounceFx(b); }
+      if (circleHitsWall(b.x, b.y, C.BULLET_R, false, true)) {
+        if (strike(b)) { if (b.he) miniBlast(b); bullets.splice(i, 1); continue bulletLoop; }
+        if (crack(b)) { if (b.he) { miniBlast(b); bullets.splice(i, 1); continue bulletLoop; } if (b.heavy && !b.crushedSoft) b.crushedSoft = true; else { bullets.splice(i, 1); continue bulletLoop; } }
+        else {
+          if (b.he && b.bounces + 1 > (b.maxB ?? C.MAX_BOUNCES)) { b.y -= b.vy * dt * 0.5; miniBlast(b); bullets.splice(i, 1); continue bulletLoop; }
+          b.y -= b.vy * dt; b.vy = -b.vy; b.bounces++; bounceFx(b);
+        }
+      }
+      if (mirror.length && mirrorBounce(b, px, py)) {
+        if (b.he && b.bounces + 1 > (b.maxB ?? C.MAX_BOUNCES)) { miniBlast(b); bullets.splice(i, 1); continue bulletLoop; }
+        b.bounces++; bounceFx(b);
+      }
     }
     if (portals.length && goThrough(b, C.BULLET_R)) { b.trail = []; const p = portals[b.portLock]; portalFx(p.x, p.y, p.hue); }
-    if (barrels.length) { const br = barrelAt(b.x, b.y, C.BULLET_R); if (br) { lightBarrel(br, b.owner, 0); bullets.splice(i, 1); continue; } }
+    if (barrels.length) { const br = barrelAt(b.x, b.y, C.BULLET_R); if (br) { lightBarrel(br, b.owner, 0); if (b.he) miniBlast(b); bullets.splice(i, 1); continue; } }
     if (barricades.length) {
+      if (b.rivet) {
+        const allyBk = barricades.find(k => friendOf(b.owner, k.owner) && k.hp < (k.max || C.BARRICADE_HP) && Math.hypot(b.x - k.x, b.y - k.y) < (k.r || C.BARRICADE_R) + C.BULLET_R);
+        if (allyBk) {
+          allyBk.hp = Math.min(allyBk.max || C.BARRICADE_HP, allyBk.hp + 1);
+          burst(allyBk.x, allyBk.y, 7, penOf(b.owner), 1.6, 0.24, 0.035);
+          sfx.bunker(); netEv('bkHit', allyBk.owner, r2(allyBk.x), r2(allyBk.y));
+          bullets.splice(i, 1); continue;
+        }
+      }
       const bk = barricades.find(k => !friendOf(b.owner, k.owner) && Math.hypot(b.x - k.x, b.y - k.y) < (k.r || C.BARRICADE_R) + C.BULLET_R);
       if (bk) {
-        damageBarricade(bk, b.pierce ? C.BARRICADE_HP : 1, b.owner);
+        damageBarricade(bk, b.pierce ? C.BARRICADE_HP : (b.heavy || b.rivet || b.he) ? 2 : 1, b.owner);
+        if (b.he) miniBlast(b);
         if (!b.pierce) { bullets.splice(i, 1); continue; }
       }
     }
     if (++b.tick % 2 === 0) { b.trail.push(b.x, b.y); if (b.trail.length > 22) b.trail.splice(0, 2); }
-    if (b.age > (b.life || C.BULLET_LIFE) || b.bounces > (b.maxB ?? C.MAX_BOUNCES)) { bullets.splice(i, 1); continue; }
+    if (b.age > (b.life || C.BULLET_LIFE) || b.bounces > (b.maxB ?? C.MAX_BOUNCES)) { if (b.he) miniBlast(b); bullets.splice(i, 1); continue; }
     // any shot sets off a mine it touches
     for (const mn of mines) {
-      if (!mn.boom && Math.hypot(b.x - mn.x, b.y - mn.y) < C.MINE_R + C.BULLET_R) { mn.boom = true; bullets.splice(i, 1); continue bulletLoop; }
+      if (!mn.boom && Math.hypot(b.x - mn.x, b.y - mn.y) < C.MINE_R + C.BULLET_R) { mn.boom = true; if (b.he) miniBlast(b); bullets.splice(i, 1); continue bulletLoop; }
     }
     // a bullet shoots down the other player's missile
     for (let j = missiles.length - 1; j >= 0; j--) {
@@ -3081,18 +3163,28 @@ function stepPhysics(dt, lethal, control) {
     }
     for (let j = minions.length - 1; j >= 0; j--) {
       const m = minions[j];
-      if (teamOf[b.owner] !== m.team && Math.hypot(b.x - m.x, b.y - m.y) < C.MINION_R + C.BULLET_R) { hurtMinion(j, 1); bullets.splice(i, 1); continue bulletLoop; }
+      if (teamOf[b.owner] !== m.team && Math.hypot(b.x - m.x, b.y - m.y) < C.MINION_R + C.BULLET_R) { hurtMinion(j, (b.heavy || b.rivet) ? 2 : 1); if (b.he) miniBlast(b); bullets.splice(i, 1); continue bulletLoop; }
     }
     for (const t of tanks) {
       if (!t.alive) continue;
       if (b.owner === t.id && b.age < C.SELF_SAFE_TIME) continue;
       if (!canHurt(b.owner, t) || isInvuln(t)) continue;     // shots pass through team-mates, and through a tank that is invulnerable
       if (mutNow === 'bank' && !b.pierce && !b.bounces) continue;   // party rule: only a shot that has bounced hurts
-      const dx = b.x - t.x, dy = b.y - t.y;
-      if (dx * dx + dy * dy < hitR * hitR) {
+      const dx = b.x - t.x, dy = b.y - t.y, d2 = dx * dx + dy * dy;
+      if (d2 < hitR * hitR) {
         if (b.owner !== t.id && !b.extra && stats[b.owner]) stats[b.owner].h++;
         shotNow = { age: b.age, id: b.id, n: b.bounces };
-        hit(t, b.owner); shotNow = null; bullets.splice(i, 1); break;
+        const died = hit(t, b.owner); shotNow = null;
+        if (b.chill && !died && t.alive) {
+          t.chill = Math.max(t.chill || 0, C.CHILL_TIME);
+          if (!b.chilled) b.chilled = new Set(); b.chilled.add(t.id);
+        }
+        if (b.he) miniBlast(b, C.MINI_BLAST, t.id);
+        bullets.splice(i, 1); break;
+      } else if (b.chill && b.owner !== t.id && d2 < C.CHILL_GRAZE * C.CHILL_GRAZE && !(b.chilled && b.chilled.has(t.id))) {
+        if (!b.chilled) b.chilled = new Set(); b.chilled.add(t.id);
+        t.chill = Math.max(t.chill || 0, C.CHILL_TIME);
+        rings.push({ x: t.x, y: t.y, r: 0.62, life: 0.25, max: 0.25, col: '#7ee8fa' });
       }
     }
   }
@@ -3304,8 +3396,8 @@ function noteKill(v, by, touch) {
 }
 function recFrame() {
   rec.frames.push({ t: rec.t,
-    T: tanks.map(o => [o.x, o.y, o.angle, (o.alive ? 1 : 0) | (o.shield > 0 ? 2 : 0) | (o.power ? 4 : 0) | (o.gone ? 8 : 0) | (o.snare > 0 ? 16 : 0) | (o.invuln > 0 ? 32 : 0) | (o.cloak > 0 ? 64 : 0), penOf(o.id)]),
-    B: bullets.map(b => [b.id, b.x, b.y, penOf(b.owner), b.pierce ? 1 : 0]),
+    T: tanks.map(o => [o.x, o.y, o.angle, (o.alive ? 1 : 0) | (o.shield > 0 ? 2 : 0) | (o.power ? 4 : 0) | (o.gone ? 8 : 0) | (o.snare > 0 ? 16 : 0) | (o.invuln > 0 ? 32 : 0) | (o.cloak > 0 ? 64 : 0) | ((o.chill || 0) > 0 ? 128 : 0), penOf(o.id)]),
+    B: bullets.map(b => [b.id, b.x, b.y, penOf(b.owner), b.pierce ? 1 : b.he ? 2 : b.heavy ? 3 : b.rivet ? 4 : b.chill ? 5 : 0]),
     M: missiles.map(m => [m.id, m.x, m.y, m.angle, m.owner, m.type]),
     N: mines.map(n => [n.id, n.x, n.y, n.owner, n.armed ? 1 : 0]),
     TP: traps.map(tp => [tp.x, tp.y, tp.owner, tp.armed ? 1 : 0]),
@@ -3376,6 +3468,8 @@ function stepReplay(dt) {
           rpRings.push({ x: r[0], y: r[1], r: 1.0, life: 0.7, max: 0.7, col: r[4] }); sfx.crack();
         }
       });
+      const bB = new Set((frB.B || []).map(b => b[0]));
+      for (const b of (frA.B || [])) if (b[4] === 2 && !bB.has(b[0])) rpBoom(b[1], b[2], C.MINI_BLAST, b[3]);
       const mtB = new Set((frB.MT || []).map(m => m[0]));
       for (const m of (frA.MT || [])) if (!mtB.has(m[0]) && (!infOn() || m[6] >= m[7] - 0.15)) rpBoom(m[3], m[4], C.MORTAR_BLAST, penOf(m[5]));
       const mB = new Set((frB.M || []).map(m => m[0]));
@@ -3419,7 +3513,7 @@ function enterReplayWorld() {
   tanks = a.T.map((q, i) => {
     const r = b.T[i] || q, o = makeTank(i);
     o.x = lerp(q[0], r[0]); o.y = lerp(q[1], r[1]); o.angle = lerpA(q[2], r[2]);
-    o.alive = !!(q[3] & 1) && !(q[3] & 8); o.shield = q[3] & 2 ? 1 : 0; o.power = q[3] & 4 ? 'laser' : null; o.snare = q[3] & 16 ? 1 : 0; o.invuln = q[3] & 32 ? 1 : 0; o.cloak = q[3] & 64 ? 1 : 0; o.pen = q[4];
+    o.alive = !!(q[3] & 1) && !(q[3] & 8); o.shield = q[3] & 2 ? 1 : 0; o.power = q[3] & 4 ? 'laser' : null; o.snare = q[3] & 16 ? 1 : 0; o.invuln = q[3] & 32 ? 1 : 0; o.cloak = q[3] & 64 ? 1 : 0; o.chill = q[3] & 128 ? 1 : 0; o.pen = q[4];
     return o;
   });
   // bullets, with trails from the frames before
@@ -3428,7 +3522,8 @@ function enterReplayWorld() {
   bullets = b.B.filter(q => byA.has(q[0])).map(q => {
     const p = byA.get(q[0]), trail = [];
     for (let j = idx; j >= 0 && now - f[j].t < 0.4; j--) { const e = f[j].B.find(x => x[0] === q[0]); if (!e || (trail.length && Math.hypot(trail[0] - e[1], trail[1] - e[2]) > 1.5)) break; trail.unshift(e[1], e[2]); }
-    return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), owner: 0, pen: q[3], pierce: !!q[4], age: 0, life: 99, trail };
+    const knd = q[4];
+    return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), owner: 0, pen: q[3], pierce: knd === 1, he: knd === 2, heavy: knd === 3, rivet: knd === 4, chill: knd === 5, age: 0, life: 99, trail };
   });
   const mB = new Map((b.M || []).map(q => [q[0], q]));
   missiles = (a.M || []).map(q => {
@@ -3902,9 +3997,9 @@ function buildSnap() {
     hl: hl ? [r2(hl.t), r2(hl.age), hl.v, hl.k, hl.b, hl.n, hl.touch ? 1 : 0, hl.goal] : null,
     pt: play && potatoOn() ? [pot.holder, r1(pot.fuse)] : null, bl: play && ball ? [r2(ball.x), r2(ball.y)] : null, gb: goalBy,
     rp: state === 'replay' && rp ? [rp.from, rp.to, rp.dur] : null,
-    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0) | (t.cloak > 0 ? 128 : 0),
+    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0) | (t.cloak > 0 ? 128 : 0) | ((t.chill || 0) > 0 ? 256 : 0),
       shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0, t.dcool > 0 ? r1(t.dcool) : 0, t.scool > 0 ? r1(t.scool) : 0, t.scan > 0 ? r1(t.scan) : 0, t.snare > 0 ? r1(t.snare) : 0, t.invuln > 0 ? r1(t.invuln) : 0]) : [],
-    B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.extra ? 1 : 0, b.life || 0]) : [],
+    B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.he ? 3 : b.heavy ? 4 : b.rivet ? 5 : b.chill ? 6 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
     N: play ? mines.map(n => [n.id, r2(n.x), r2(n.y), n.owner, n.armed ? 1 : 0]) : [],
     TP: play && traps.length ? traps.map(tp => [tp.id, r2(tp.x), r2(tp.y), tp.owner, tp.armed ? 1 : 0]) : [],
@@ -4447,7 +4542,7 @@ function applyEntities(a, b, k, dt) {
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
     t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0; t.inv = +q[11] || 0;
-    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0; t.scan = +q[14] || 0; t.snare = +q[15] || 0; t.invuln = +q[16] || 0;
+    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.chill = q[3] & 256 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0; t.scan = +q[14] || 0; t.snare = +q[15] || 0; t.invuln = +q[16] || 0;
     t.laserPath = t.charge > 0 ? tracePath(t.x, t.y, t.angle) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -4464,7 +4559,8 @@ function applyEntities(a, b, k, dt) {
     if (n && Math.hypot(tr.pts[n - 2] - x, tr.pts[n - 1] - y) > 1.5) tr.pts.length = 0;
     if (++tr.tick % 2 === 0) { tr.pts.push(x, y); if (tr.pts.length > 22) tr.pts.splice(0, 2); }
     live.add(q[0]);
-    bullets.push({ id: q[0], x, y, owner: q[3], pierce: q[4] === 2, extra: q[4] === 1, life: q[5] || 0, age: age('b' + q[0]), trail: tr.pts });
+    const knd = q[4];
+    bullets.push({ id: q[0], x, y, owner: q[3], extra: knd === 1, pierce: knd === 2, he: knd === 3, heavy: knd === 4, rivet: knd === 5, chill: knd === 6, life: q[5] || 0, age: age('b' + q[0]), trail: tr.pts });
   }
   for (const id of trails.keys()) if (!live.has(id)) trails.delete(id);
   const aM = byId(a.M);
@@ -5992,6 +6088,7 @@ function drawTank(t) {
   ctx.fillStyle = COL.white; ctx.globalAlpha = 0.5 * cAlpha; ctx.beginPath(); ctx.arc(t.x * P - P * 0.04, t.y * P - P * 0.045, P * 0.035, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
   stunDots(t, col);
   snareRing(t);
+  chillRing(t);
 }
 // stunned: dots going round the tank
 function stunDots(t, col) {
@@ -6020,6 +6117,15 @@ function snareRing(t) {
     ctx.stroke();
   }
   ctx.restore(); ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+}
+// chilled: faint cyan slow ring from Trapper bolt
+function chillRing(t) {
+  if (!(t.chill > 0)) return;
+  ctx.save(); ctx.translate(t.x * P, t.y * P);
+  ctx.strokeStyle = '#7ee8fa'; ctx.lineWidth = Math.max(1.4, P * 0.036); ctx.globalAlpha = 0.65;
+  ctx.setLineDash([P * 0.07, P * 0.07]);
+  ctx.beginPath(); ctx.arc(0, 0, P * 0.48, 0, Math.PI * 2); ctx.stroke();
+  ctx.setLineDash([]); ctx.restore(); ctx.globalAlpha = 1;
 }
 
 // a portal: two turning dashed rings and a soft wash in its pair's colour
@@ -7010,13 +7116,25 @@ function render() {
   }
   ctx.globalCompositeOperation = 'source-over';
   for (const b of bullets) {
-    const pen = b.pen || penOf(b.owner), r = Math.max(2.2, C.BULLET_R * P * 0.9);
-    glow(b.x * P, b.y * P, r * 4, pen, 0.9 * b.fade);
-    ctx.globalAlpha = b.fade; ctx.fillStyle = COL.white;
+    const pen = b.pen || penOf(b.owner), r = Math.max(2.2, C.BULLET_R * P * (b.he ? 1.45 : b.heavy ? 1.32 : 0.9));
+    glow(b.x * P, b.y * P, r * 4, b.chill ? '#7ee8fa' : pen, 0.9 * b.fade);
+    ctx.globalAlpha = b.fade; ctx.fillStyle = b.he ? '#ffd280' : COL.white;
     ctx.beginPath(); ctx.arc(b.x * P, b.y * P, r, 0, Math.PI * 2); ctx.fill();
     if (b.pierce) {                                      // a piercing shot wears a ring, so it reads as different from a bullet
       ctx.strokeStyle = pen; ctx.lineWidth = Math.max(1.5, P * 0.04);
       ctx.beginPath(); ctx.arc(b.x * P, b.y * P, C.BULLET_R * P * 2.2, 0, Math.PI * 2); ctx.stroke();
+    } else if (b.he) {
+      ctx.strokeStyle = pen; ctx.lineWidth = Math.max(1.4, P * 0.038);
+      ctx.beginPath(); ctx.arc(b.x * P, b.y * P, r * 1.45, 0, Math.PI * 2); ctx.stroke();
+    } else if (b.heavy) {
+      ctx.strokeStyle = '#ffe28a'; ctx.lineWidth = Math.max(1.3, P * 0.035);
+      ctx.beginPath(); ctx.arc(b.x * P, b.y * P, r * 1.35, 0, Math.PI * 2); ctx.stroke();
+    } else if (b.chill) {
+      ctx.strokeStyle = '#7ee8fa'; ctx.lineWidth = Math.max(1.1, P * 0.028);
+      ctx.beginPath(); ctx.arc(b.x * P, b.y * P, r * 1.55, 0, Math.PI * 2); ctx.stroke();
+    } else if (b.rivet) {
+      ctx.strokeStyle = '#ffb84d'; ctx.lineWidth = Math.max(1.1, P * 0.028);
+      ctx.strokeRect(b.x * P - r * 1.1, b.y * P - r * 1.1, r * 2.2, r * 2.2);
     }
   }
   ctx.globalAlpha = 1;
@@ -7323,7 +7441,7 @@ window.__tank = {
   get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; },
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
-  loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint,
+  loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,
   spawnPickups, menuItems, endItems, startRound, startMatch, goMenu, closeRing, ringCount,
   get roundT() { return roundT; }, set roundT(v) { roundT = v; }, get sdClosed() { return sdClosed; },
   get mapOrder() { return mapOrder; }, get crushed() { return crushed; },

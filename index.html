@@ -204,9 +204,9 @@ const C = {
   GRASS_REVEAL: 0.8,     // ...or for this long after it fires
   FOG_SEE: 3.2,          // party rule Fog: enemy tanks further than this from your side are not shown
   RADAR_TIME: 4.0,       // seconds a full-arena radar scan reveals cloaked/hidden enemies and mines
-  MORTAR_DIST: 3.8,      // how far ahead a mortar shell lobs over walls
+  MORTAR_DIST: 4.0,      // how far ahead a mortar shell lobs over walls
   MORTAR_TIME: 0.85,     // air time of a mortar shell (s)
-  MORTAR_BLAST: 1.15,    // blast radius of a mortar impact
+  MORTAR_BLAST: 2.0,     // blast radius of a mortar impact (4-cell diameter)
   BARRICADE_R: 0.36,     // collision radius of an engineer's tactical bunker
   BARRICADE_HP: 4,       // hits needed to destroy a tactical bunker
   BARRICADE_LIFE: 18.0,  // seconds before a bunker decays
@@ -906,7 +906,7 @@ const SKINS = [
   { id: 'retro', name: 'Retro', desc: 'Super ricochet · Skill: Mine (5s)', atk: '9-bounce shot', skill: 'MINE', scool: 5.0, speed: 0.96, turn: 1.0, bSpeed: 0.95, fCool: 1.0, maxB: 9 },
   { id: 'striker', name: 'Striker', desc: 'Rapid fire · Skill: Dash (4s)', atk: 'Rapid carbine', skill: 'DASH', scool: 4.0, speed: 1.15, turn: 1.15, bSpeed: 1.05, fCool: 0.72 },
   { id: 'recon', name: 'Recon', desc: 'Fast tracer · Skill: Radar (7s)', atk: 'Fast tracer', skill: 'RADAR', scool: 7.0, speed: 1.08, turn: 1.12, bSpeed: 1.22, fCool: 0.92 },
-  { id: 'mortar', name: 'Mortar', desc: 'Heavy shell · Skill: Mortar (6.5s)', atk: 'Heavy shell', skill: 'MORTAR', scool: 6.5, speed: 0.94, turn: 0.92, bSpeed: 0.9, fCool: 1.25, maxB: 2 },
+  { id: 'mortar', name: 'Mortar', desc: 'Heavy shell · Skill: Mortar (8.5s)', atk: 'Heavy shell', skill: 'MORTAR', scool: 8.5, speed: 0.94, turn: 0.92, bSpeed: 0.9, fCool: 1.25, maxB: 2 },
   { id: 'engineer', name: 'Engineer', desc: 'Rivet bolt · Skill: Bunker (6s) · Defuses mines', atk: 'Rivet bolt', skill: 'BUNKER', scool: 6.0, speed: 1.0, turn: 1.05, bSpeed: 1.08, fCool: 0.95, maxB: 3 }
 ];
 const SKIN_IDS = SKINS.map(s => s.id);
@@ -2634,7 +2634,7 @@ function botInput(seat) {
     else if (sk === 'retro' && hasFoe && dFoe < 5.2) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'stealth' && hasFoe && dFoe < 5.5 && !(t.cloak > 0)) { pressSkill(seat); ai.react = 0.35; }
     else if (sk === 'recon' && !(t.scan > 0) && (tanks.some(o => o.alive && !friendOf(seat, o.id) && !seenBy(seat, o)) || mines.some(mn => mn.armed && !friendOf(seat, mn.owner)))) { pressSkill(seat); ai.react = 0.4; }
-    else if (sk === 'mortar' && hasFoe && dFoe >= 1.7 && dFoe <= 5.2 && Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle)) < 0.28) { pressSkill(seat); ai.react = 0.45; }
+    else if (sk === 'mortar' && hasFoe && dFoe >= 2.1 && dFoe <= 5.8 && Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle)) < 0.28) { pressSkill(seat); ai.react = 0.45; }
     else if (sk === 'engineer' && ((hasFoe && los && dFoe < 4.5) || mines.some(mn => !friendOf(seat, mn.owner) && Math.hypot(mn.x - t.x, mn.y - t.y) < 1.35))) { pressSkill(seat); ai.react = 0.45; }
   }
   if (hasFoe && los) {

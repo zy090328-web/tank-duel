@@ -920,6 +920,37 @@ const gst = document.createElement('canvas');  // grass, drawn over the tanks
 const arenaSt = document.createElement('canvas');  // scrolling static arena when viewport follows camera
 const VIEW_CELLS = 12;                         // viewport side in cells on 23x23 maps
 const cam = { x: 0, y: 0, init: false, lastState: '' };
+let arenaK = 1;                                // arena picture pixels per CSS pixel (see buildStatic)
+// The arena picture and its grass are cut into tiles: browsers handle a canvas of a few thousand pixels a side
+// badly as a source to draw from (it can cost several milliseconds every frame on a tablet), small ones well.
+const TILE = 512;
+let arenaTiles = null, grassTiles = null;
+function cutTiles(src) {
+  const t = { w: src.width, h: src.height, rows: [] };
+  for (let y = 0; y < src.height; y += TILE) {
+    const row = [];
+    for (let x = 0; x < src.width; x += TILE) {
+      const c = document.createElement('canvas');
+      c.width = Math.min(TILE, src.width - x); c.height = Math.min(TILE, src.height - y);
+      c.getContext('2d').drawImage(src, -x, -y);
+      row.push(c);
+    }
+    t.rows.push(row);
+  }
+  return t;
+}
+// like drawImage(source, sx, sy, sw, sh, dx, dy, dw, dh), from the tiles a picture was cut into
+function drawTiles(g, t, sx, sy, sw, sh, dx, dy, dw, dh) {
+  const kx = dw / sw, ky = dh / sh;
+  for (let ty = Math.max(0, Math.floor(sy / TILE)); ty < t.rows.length && ty * TILE < sy + sh; ty++) {
+    const row = t.rows[ty];
+    for (let tx = Math.max(0, Math.floor(sx / TILE)); tx < row.length && tx * TILE < sx + sw; tx++) {
+      const c = row[tx], x0 = Math.max(sx, tx * TILE), y0 = Math.max(sy, ty * TILE);
+      const x1 = Math.min(sx + sw, tx * TILE + c.width), y1 = Math.min(sy + sh, ty * TILE + c.height);
+      if (x1 > x0 && y1 > y0) g.drawImage(c, x0 - tx * TILE, y0 - ty * TILE, x1 - x0, y1 - y0, dx + (x0 - sx) * kx, dy + (y0 - sy) * ky, (x1 - x0) * kx, (y1 - y0) * ky);
+    }
+  }
+}
 
 /* ---------- settings ---------- */
 const AMMO_MODES = ['unlimited', 'reload', 'limited', 'single'];
@@ -5441,11 +5472,11 @@ function grassCell(h, r, c) {
 }
 // draw the grass of the cells under a tank again, over the tank
 function grassOver(t) {
-  if (gst.width <= 1) return;
-  const k = gst.width / (COLS * P);
+  if (!grassTiles) return;
+  const k = arenaK;
   for (let r = Math.floor(t.y - 0.45); r <= Math.floor(t.y + 0.45); r++) for (let c = Math.floor(t.x - 0.45); c <= Math.floor(t.x + 0.45); c++) {
     if (r < 0 || c < 0 || r >= ROWS || c >= COLS || !grass[r * COLS + c]) continue;
-    ctx.drawImage(gst, c * P * k, r * P * k, P * k, P * k, c * P, r * P, P, P);
+    drawTiles(ctx, grassTiles, c * P * k, r * P * k, P * k, P * k, c * P, r * P, P, P);
   }
 }
 function drawArenaLayer(g, ox, oy, aw, ah, sDpr) {
@@ -5786,6 +5817,7 @@ function buildStatic() {
   if (!LW) return;
   const follow = camOn();
   const arDpr = follow ? Math.min(dpr, 3600 / Math.max(1, COLS * P, ROWS * P)) : dpr;
+  arenaK = arDpr;
   st.width = Math.max(1, Math.round(LW * dpr)); st.height = Math.max(1, Math.round(LH * dpr));
   const g = st.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -5834,6 +5866,9 @@ function buildStatic() {
     grassCell(h, r, c);
     h.restore();
   }
+  arenaTiles = follow ? cutTiles(arenaSt) : null;
+  grassTiles = cutTiles(gst);
+  arenaSt.width = arenaSt.height = 1; gst.width = gst.height = 1;   // only the tiles are kept
 }
 // a small tile of faint specks, made once
 let grainTile = null;
@@ -7460,13 +7495,17 @@ function render() {
     ctx.beginPath(); ctx.rect(AX, AY, AW, AH); ctx.clip();
     ctx.fillStyle = '#0b1122'; ctx.fillRect(AX, AY, AW, AH);
     const uCam = (viewFlip ? COLS - cam.x : cam.x) * P, vCam = (viewFlip ? ROWS - cam.y : cam.y) * P;
-    const sxScale = arenaSt.width / (COLS * P), syScale = arenaSt.height / (ROWS * P);
-    const sx = clamp((uCam - AW / 2) * sxScale, 0, Math.max(0, arenaSt.width - AW * sxScale));
-    const sy = clamp((vCam - AH / 2) * syScale, 0, Math.max(0, arenaSt.height - AH * syScale));
-    if (arenaSt.width > 1) ctx.drawImage(arenaSt, sx, sy, AW * sxScale, AH * syScale, AX + shx, AY + shy, AW, AH);
-    ctx.translate(AX + AW / 2 + shx, AY + AH / 2 + shy);
-    if (viewFlip) ctx.rotate(Math.PI);
-    ctx.translate(-cam.x * P, -cam.y * P);
+    // Copy the arena picture pixel for pixel, at whole-pixel offsets: any scaling or fractional offset makes
+    // the browser resample the whole picture every frame (slow on tablets) and makes thin lines flicker as
+    // they scroll. Everything drawn on top uses the same rounded offset, so it stays exactly on its cells.
+    const aw = arenaTiles ? arenaTiles.w : 1, ah = arenaTiles ? arenaTiles.h : 1;
+    const k = arenaK, swp = Math.min(aw, Math.round(AW * k)), shp = Math.min(ah, Math.round(AH * k));
+    const sx = clamp(Math.round((uCam - AW / 2) * k), 0, Math.max(0, aw - swp));
+    const sy = clamp(Math.round((vCam - AH / 2) * k), 0, Math.max(0, ah - shp));
+    const ox = Math.round((AX + shx) * dpr) / dpr, oy = Math.round((AY + shy) * dpr) / dpr;
+    if (arenaTiles) drawTiles(ctx, arenaTiles, sx, sy, swp, shp, ox, oy, swp / k, shp / k);
+    if (viewFlip) { ctx.translate(ox + COLS * P - sx / k, oy + ROWS * P - sy / k); ctx.rotate(Math.PI); }
+    else ctx.translate(ox - sx / k, oy - sy / k);
   } else {
     if (viewFlip) { ctx.translate(AX + AW + shx, AY + AH + shy); ctx.rotate(Math.PI); }
     else ctx.translate(AX + shx, AY + shy);
@@ -7698,13 +7737,49 @@ function render() {
 }
 
 /* ---------- main loop: fixed time step ---------- */
+// The screen refreshes at its own rate (60, 90, 120 Hz, never exactly even), so one frame can hold one physics
+// step and the next two. Drawn as they are, positions then move by uneven amounts each frame; with a follow
+// camera the whole map judders. So each step remembers where things were before it, and a frame is drawn
+// between that and where they are now, by how far it is into the next step.
 let last = 0, acc = 0;
+const prevB = new Map(), prevM = new Map();     // bullets and missiles by id: a guest makes new objects every step
+function keepPrev() {
+  cam.px = cam.x; cam.py = cam.y;
+  for (const t of tanks) { t.px = t.x; t.py = t.y; t.pa = t.angle; }
+  prevB.clear(); prevM.clear();
+  for (const b of bullets) prevB.set(b.id != null ? b.id : b, [b.x, b.y]);
+  for (const m of missiles) prevM.set(m.id != null ? m.id : m, [m.x, m.y, m.angle]);
+}
+const blendBack = [];
+function blendIn(f) {
+  blendBack.length = 0;
+  if (state === 'replay' || !(f > 0)) return;
+  const mix = (o, px, py, pa) => {
+    if (px === undefined) return;
+    const dx = o.x - px, dy = o.y - py;
+    if (dx * dx + dy * dy > 1) return;             // a jump (respawn, portal, camera snap): draw where it is
+    blendBack.push(o, o.x, o.y, o.angle);
+    o.x = px + dx * f; o.y = py + dy * f;
+    if (pa !== undefined && o.angle !== undefined) o.angle = pa + wrapAngle(o.angle - pa) * f;
+  };
+  if (cam.init) mix(cam, cam.px, cam.py);
+  for (const t of tanks) mix(t, t.px, t.py, t.pa);
+  for (const b of bullets) { const q = prevB.get(b.id != null ? b.id : b); if (q) mix(b, q[0], q[1]); }
+  for (const m of missiles) { const q = prevM.get(m.id != null ? m.id : m); if (q) mix(m, q[0], q[1], q[2]); }
+}
+function blendOut() {
+  for (let i = 0; i < blendBack.length; i += 4) {
+    const o = blendBack[i]; o.x = blendBack[i + 1]; o.y = blendBack[i + 2];
+    if (blendBack[i + 3] !== undefined) o.angle = blendBack[i + 3];
+  }
+  blendBack.length = 0;
+}
 function frame(now) {
   if (wantKey() !== layoutKey) resize();
   if (!last) last = now;
   acc += Math.min(0.1, (now - last) / 1000); last = now;
-  while (acc >= C.STEP) { update(C.STEP); acc -= C.STEP; }
-  if (!HEADLESS) render();
+  while (acc >= C.STEP) { keepPrev(); update(C.STEP); acc -= C.STEP; }
+  if (!HEADLESS) { blendIn(acc / C.STEP); try { render(); } finally { blendOut(); } }
   requestAnimationFrame(frame);
 }
 

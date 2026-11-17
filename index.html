@@ -1751,6 +1751,7 @@ function resetEntities() {
   hillHolder = -1;
   minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
   bullets = []; missiles = []; mines = []; traps = []; mortars = []; barricades = []; pickups = []; beams = []; rings = []; radars = []; pings = []; particles = []; marks = []; decoys = [];
+  decalReset();
   netEvents = [];
   pickupTimer = C.PICKUP_FIRST; emptyT = 0; gatT = C.GAT_FIRST;
   roundT = 0; sdClosed = 0; sdStarted = false;
@@ -2610,6 +2611,7 @@ function blast(m) {
   shake = Math.max(shake, m.type === 'barrel' ? 0.35 : 0.25);
   sfx.boom();
   netEv('blast', r2(m.x), r2(m.y), m.type === 'barrel' ? -2 : m.owner, R);
+  scorch(m.x, m.y, R);
   for (const mn of mines) if (Math.hypot(mn.x - m.x, mn.y - m.y) < R) mn.boom = true;     // a blast sets off mines inside it
   popDecoysNear(m.x, m.y, R);
   for (let i = traps.length - 1; i >= 0; i--) if (Math.hypot(traps[i].x - m.x, traps[i].y - m.y) < R) traps.splice(i, 1);
@@ -2649,6 +2651,7 @@ function miniBlast(b, R = C.MINI_BLAST, skipId = -1) {
   shake = Math.max(shake, 0.16);
   sfx.boom();
   netEv('blast', r2(b.x), r2(b.y), b.owner, R);
+  scorch(b.x, b.y, R);
   for (const mn of mines) if (Math.hypot(mn.x - b.x, mn.y - b.y) < R) mn.boom = true;
   popDecoysNear(b.x, b.y, R);
   for (let i = traps.length - 1; i >= 0; i--) if (Math.hypot(traps[i].x - b.x, traps[i].y - b.y) < R) traps.splice(i, 1);
@@ -3731,6 +3734,7 @@ function update(dt) {
   for (let i = rings.length - 1; i >= 0; i--) { rings[i].life -= dt; if (rings[i].life <= 0) rings.splice(i, 1); }
   for (let i = radars.length - 1; i >= 0; i--) { radars[i].life -= dt; if (radars[i].life <= 0) radars.splice(i, 1); }
   for (let i = pings.length - 1; i >= 0; i--) { pings[i].life -= dt; if (pings[i].life <= 0) pings.splice(i, 1); }
+  stepDecals(dt);
   for (const k of pickups) k.age += dt;
   for (const st of structs) st.flash = Math.max(0, st.flash - dt);
   if (state === 'replay') stepReplay(dt); else if (rpPrev >= 0) { rpPrev = -1; rpParts = []; rpRings = []; rpT = 0; }
@@ -4844,7 +4848,7 @@ function applyDiscrete(g, dt) {
   if ((g.r !== lastRound || g.m !== lastMap) && st !== 'guestWait') {
     lastRound = g.r; lastMap = g.m;
     loadMap(g.m | 0);
-    marks = []; particles = []; beams = []; rings = []; radars = []; pings = []; decoys = []; traps = []; mortars = []; barricades = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
+    marks = []; particles = []; beams = []; rings = []; radars = []; pings = []; decoys = []; decalReset(); traps = []; mortars = []; barricades = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
     rec.frames = []; rec.tick = 0; rp = null;
     const me = Array.isArray(g.T) && g.T[mySeat];
     if (Array.isArray(me) && tanks[mySeat]) { tanks[mySeat].x = me[0]; tanks[mySeat].y = me[1]; tanks[mySeat].alive = !!(me[3] & 1); }
@@ -4976,6 +4980,7 @@ function playEvent(e) {
   } else if (kind === 'blast') {
     rings.push({ x: e[2], y: e[3], r: e[5] || C.GUIDED_BLAST, life: 0.4, max: 0.4, col: pen(e[4]) });
     burst(e[2], e[3], (e[5] || 0) > 1 ? 30 : 22, pen(e[4]), 3, 0.45, 0.06); shake = Math.max(shake, 0.25); sfx.boom();
+    scorch(e[2], e[3], e[5] || C.GUIDED_BLAST);
   } else if (kind === 'kill') {
     marks.push({ x: e[3], y: e[4], col: pen(e[2]), seed: e[5] | 0 });
     burst(e[3], e[4], 30, pen(e[2]), 3.2, 0.6, 0.07); shake = 0.35; sfx.boom();
@@ -5661,6 +5666,7 @@ function drawArenaLayer(g, ox, oy, aw, ah, sDpr) {
   const dot = Math.max(1, P * 0.028);
   for (let r = 1; r < ROWS; r++) for (let c = 1; c < COLS; c++) g.fillRect(Math.round(ox + c * P) + 0.5 - dot, Math.round(oy + r * P) + 0.5 - dot, dot * 2, dot * 2);
   g.globalAlpha = 1; g.fillStyle = g.createPattern(grain(), 'repeat'); g.fillRect(ox, oy, aw, ah);
+  wornFloor(g, ox, oy, aw, ah);
   g.restore();
 
   // halfway line
@@ -5760,6 +5766,7 @@ function drawArenaLayer(g, ox, oy, aw, ah, sDpr) {
     g.save(); g.translate(x, y); grassCell(g, r, c); g.restore();
   }
 
+  rubble(g, ox, oy);
   drawWalls(g, ox, oy, aw, ah, sDpr);
 
   // deflectors: a bright bar along the cell's diagonal, its shadow on the ground; the cell outlined faintly
@@ -6046,6 +6053,52 @@ function buildStatic() {
   arenaTiles = follow ? cutTiles(arenaSt) : null;
   grassTiles = cutTiles(gst);
   arenaSt.width = arenaSt.height = 1; gst.width = gst.height = 1;   // only the tiles are kept
+}
+// the floor is worn, the same way on every screen for a map: patches lighter and darker, hairline cracks, a few stains
+function wornFloor(g, ox, oy, aw, ah) {
+  const rnd = mulberry32(5 + mapId * 131 + COLS * 7);
+  const at = (c, r) => [ox + (viewFlip ? COLS - c : c) * P, oy + (viewFlip ? ROWS - r : r) * P];
+  const n = Math.round(COLS * ROWS * 0.22);
+  for (let i = 0; i < n; i++) {                               // broad patches
+    const [x, y] = at(rnd() * COLS, rnd() * ROWS), rad = P * (0.8 + rnd() * 1.8);
+    g.globalAlpha = 0.05 + rnd() * 0.07;
+    g.drawImage(glowSprite(rnd() < 0.6 ? '#000000' : '#5d76b8'), x - rad, y - rad, rad * 2, rad * 2);
+  }
+  g.strokeStyle = '#04070f'; g.lineCap = 'round'; g.lineJoin = 'round';
+  for (let i = 0, nc = Math.round(COLS * ROWS / 9); i < nc; i++) {   // cracks
+    let [x, y] = at(rnd() * COLS, rnd() * ROWS), a = rnd() * Math.PI * 2;
+    g.globalAlpha = 0.35 + rnd() * 0.3; g.lineWidth = Math.max(0.8, P * (0.012 + rnd() * 0.012));
+    g.beginPath(); g.moveTo(x, y);
+    for (let k = 0, steps = 3 + (rnd() * 5 | 0); k < steps; k++) {
+      a += (rnd() - 0.5) * 1.1; x += Math.cos(a) * P * (0.15 + rnd() * 0.3); y += Math.sin(a) * P * (0.15 + rnd() * 0.3); g.lineTo(x, y);
+      if (rnd() < 0.25) { const b = a + (rnd() < 0.5 ? 1 : -1) * (0.6 + rnd() * 0.6); g.moveTo(x, y); g.lineTo(x + Math.cos(b) * P * 0.18, y + Math.sin(b) * P * 0.18); g.moveTo(x, y); }
+    }
+    g.stroke();
+  }
+  for (let i = 0, ns = Math.max(2, Math.round(COLS * ROWS / 40)); i < ns; i++) {   // oil stains
+    const [x, y] = at(rnd() * COLS, rnd() * ROWS), rx = P * (0.18 + rnd() * 0.25);
+    g.globalAlpha = 0.28; g.fillStyle = '#03050b';
+    g.beginPath(); g.ellipse(x, y, rx, rx * (0.55 + rnd() * 0.35), rnd() * Math.PI, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 0.07; g.strokeStyle = '#8fa8ff'; g.lineWidth = Math.max(1, P * 0.015);
+    g.beginPath(); g.ellipse(x - rx * 0.2, y - rx * 0.15, rx * 0.45, rx * 0.25, rnd() * Math.PI, 0, Math.PI * 2); g.stroke();
+  }
+  g.globalAlpha = 1;
+}
+// where a glass wall was broken: shards and dust on the floor of its cell
+function rubble(g, ox, oy) {
+  for (const idx of broken) {
+    const r = (idx / COLS) | 0, c = idx % COLS, rnd = mulberry32(77 + idx * 13 + mapId);
+    const x = ox + (viewFlip ? COLS - 1 - c : c) * P, y = oy + (viewFlip ? ROWS - 1 - r : r) * P;
+    g.globalAlpha = 0.35; g.drawImage(glowSprite('#000000'), x - P * 0.1, y - P * 0.1, P * 1.2, P * 1.2);
+    for (let i = 0; i < 11; i++) {
+      const px = x + P * (0.12 + rnd() * 0.76), py = y + P * (0.12 + rnd() * 0.76), s = P * (0.03 + rnd() * 0.06), a = rnd() * Math.PI;
+      g.save(); g.translate(px, py); g.rotate(a);
+      g.globalAlpha = 0.45 + rnd() * 0.35; g.fillStyle = rnd() < 0.7 ? 'rgba(150,190,255,0.55)' : '#2a3b6c';
+      g.beginPath(); g.moveTo(-s, -s * 0.4); g.lineTo(s, -s * 0.6); g.lineTo(s * 0.4, s * 0.7); g.closePath(); g.fill();
+      g.restore();
+    }
+  }
+  g.globalAlpha = 1;
 }
 // a small tile of faint specks, made once
 let grainTile = null;
@@ -7051,10 +7104,131 @@ function drawPath(path) {
   ctx.stroke();
 }
 
+/* ---------- a lived-in floor: tread marks, scorches, smoking wrecks ----------
+   Two small layers in grid cells (DECAL_PX a cell, so even a 23x23 map stays small): tread marks that fade, and
+   scorches that stay for the round. Each screen draws its own from what it sees: nothing goes over the network.
+   A tank nobody on this screen can see (grass, cloak) leaves nothing, or its marks would give it away; a decoy
+   leaves marks like a tank. */
+const DECAL_PX = 24;
+let trackCv = null, scarCv = null, decalCv = null, decalDirty = false, decalAny = false, trackFade = 0, smoke = [];
+const treadLast = new Map();
+function decalReset() {
+  if (HEADLESS || typeof document === 'undefined') return;
+  for (const k of ['t', 's', 'd']) {
+    let cv = k === 't' ? trackCv : k === 's' ? scarCv : decalCv;
+    if (!cv) { cv = document.createElement('canvas'); if (k === 't') trackCv = cv; else if (k === 's') scarCv = cv; else decalCv = cv; }
+    cv.width = Math.max(1, COLS * DECAL_PX); cv.height = Math.max(1, ROWS * DECAL_PX);     // setting the size clears it
+  }
+  treadLast.clear(); smoke = []; trackFade = 0; decalDirty = false; decalAny = false;
+}
+function decalsReady() { return trackCv && trackCv.width === COLS * DECAL_PX && trackCv.height === ROWS * DECAL_PX; }
+function stepDecals(dt) {
+  if (HEADLESS || !(state === 'play' || state === 'ending' || state === 'countdown' || state === 'result')) return;
+  if (!decalsReady()) decalReset();
+  const g = trackCv.getContext('2d'), eye = viewer(), K = DECAL_PX;
+  // the old marks fade: about half gone in 5 s
+  if ((trackFade += dt) >= 0.25) {
+    trackFade = 0;
+    g.globalCompositeOperation = 'destination-out'; g.globalAlpha = 0.035; g.fillStyle = '#000'; g.fillRect(0, 0, trackCv.width, trackCv.height);
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+    decalDirty = true;
+  }
+  const tread = (key, x, y, a) => {
+    const last = treadLast.get(key);
+    if (!last || Math.hypot(x - last.x, y - last.y) > 0.7) { treadLast.set(key, { x, y, a }); return; }   // a jump: start again
+    if (Math.hypot(x - last.x, y - last.y) < 0.1) return;
+    const c = Math.floor(x), r = Math.floor(y), i = r * COLS + c;
+    if (grass[i] && settings.terrain) { treadLast.set(key, { x, y, a }); return; }
+    const onMud = settings.terrain && mud[i], onIce = settings.terrain && ice[i];
+    g.lineCap = 'round';
+    g.strokeStyle = onIce ? 'rgba(225,250,255,0.38)' : onMud ? 'rgba(18,10,3,0.9)' : 'rgba(1,2,6,0.8)';
+    g.lineWidth = K * (onMud ? 0.14 : onIce ? 0.045 : 0.1);
+    for (const side of [-1, 1]) {
+      const o = 0.2 * side;
+      g.beginPath();
+      g.moveTo((last.x - Math.sin(last.a) * o) * K, (last.y + Math.cos(last.a) * o) * K);
+      g.lineTo((x - Math.sin(a) * o) * K, (y + Math.cos(a) * o) * K);
+      g.stroke();
+    }
+    treadLast.set(key, { x, y, a }); decalDirty = decalAny = true;
+  };
+  for (const t of tanks) {
+    if (!t.alive || (t.cloak || 0) > 0 || !seenBy(eye, t)) { treadLast.delete('t' + t.id); continue; }
+    tread('t' + t.id, t.x, t.y, t.angle);
+  }
+  for (const d of decoys) if (decoySeen(eye, d)) tread('d' + d.id, d.x, d.y, d.angle);
+  // wrecks smoke for a while after the tank goes up
+  const now = performance.now();
+  for (const m of marks) {
+    if (!m.born || now - m.born > 6000 || REDUCED) continue;
+    if (Math.random() < dt * 5) smoke.push({ x: m.x + (Math.random() - 0.5) * 0.25, y: m.y + (Math.random() - 0.5) * 0.25, vx: 0.12 + Math.random() * 0.1, vy: -0.18 - Math.random() * 0.12, life: 2.2, max: 2.2, r: 0.22 + Math.random() * 0.1 });
+  }
+  for (let i = smoke.length - 1; i >= 0; i--) { const p = smoke[i]; p.life -= dt; if (p.life <= 0) { smoke.splice(i, 1); continue; } p.x += p.vx * dt; p.y += p.vy * dt; p.r += dt * 0.28; }
+}
+// a blast scorches the floor for the rest of the round
+function scorch(x, y, R) {
+  if (HEADLESS || typeof document === 'undefined') return;
+  if (!decalsReady()) decalReset();
+  const g = scarCv.getContext('2d'), K = DECAL_PX, rad = Math.max(0.35, R * 0.85) * K;
+  const gr = g.createRadialGradient(x * K, y * K, 0, x * K, y * K, rad);
+  gr.addColorStop(0, 'rgba(0,0,0,0.6)'); gr.addColorStop(0.55, 'rgba(4,4,8,0.35)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr; g.beginPath(); g.arc(x * K, y * K, rad, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = 'rgba(0,0,0,0.4)'; g.lineCap = 'round'; g.lineWidth = Math.max(1, K * 0.05);
+  const n = 7 + ((x * 13 + y * 7) | 0) % 4;
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2 + Math.random() * 0.5, r0 = rad * 0.35, r1 = rad * (0.85 + Math.random() * 0.4);
+    g.beginPath(); g.moveTo(x * K + Math.cos(a) * r0, y * K + Math.sin(a) * r0); g.lineTo(x * K + Math.cos(a) * r1, y * K + Math.sin(a) * r1); g.stroke();
+  }
+  decalDirty = decalAny = true;
+}
+// both layers, under everything that moves; with a follow camera only the part on screen. The two are first put
+// together on one small canvas (only when something changed), so the screen takes one picture, not two.
+function drawDecals() {
+  if (!decalsReady() || !decalAny) return;
+  if (decalDirty) {
+    const g = decalCv.getContext('2d');
+    g.clearRect(0, 0, decalCv.width, decalCv.height); g.drawImage(scarCv, 0, 0); g.drawImage(trackCv, 0, 0);
+    decalDirty = false;
+  }
+  const K = DECAL_PX;
+  let c0 = 0, r0 = 0, c1 = COLS, r1 = ROWS;
+  if (camOn()) {
+    const hw = AW / P / 2 + 1, hh = AH / P / 2 + 1;
+    c0 = clamp(Math.floor(cam.x - hw), 0, COLS); c1 = clamp(Math.ceil(cam.x + hw), 0, COLS);
+    r0 = clamp(Math.floor(cam.y - hh), 0, ROWS); r1 = clamp(Math.ceil(cam.y + hh), 0, ROWS);
+  }
+  if (c1 <= c0 || r1 <= r0) return;
+  ctx.globalAlpha = 1;
+  ctx.drawImage(decalCv, c0 * K, r0 * K, (c1 - c0) * K, (r1 - r0) * K, c0 * P, r0 * P, (c1 - c0) * P, (r1 - r0) * P);
+}
+function drawSmoke() {
+  if (!smoke.length) return;
+  const sp = glowSprite('#4a5470');
+  for (const p of smoke) {
+    const k = p.life / p.max;
+    ctx.globalAlpha = 0.5 * k * Math.min(1, (1 - k) * 6);
+    ctx.drawImage(sp, (p.x - p.r) * P, (p.y - p.r) * P, p.r * 2 * P, p.r * 2 * P);
+  }
+  ctx.globalAlpha = 1;
+}
 function drawMark(m) {
   // where a tank went up: a scorch on the floor, with flecks in its colour
+  if (!m.born) m.born = performance.now();
   const rnd = mulberry32(m.seed), x = m.x * P, y = m.y * P;
   ctx.globalAlpha = 0.55; ctx.drawImage(glowSprite('#000000'), x - P * 0.75, y - P * 0.75, P * 1.5, P * 1.5);
+  // the burnt-out hull, turned however it came to rest
+  const ang = rnd() * Math.PI * 2, age = (performance.now() - m.born) / 1000;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+  ctx.globalAlpha = 0.9; ctx.fillStyle = '#0d0f16'; ctx.strokeStyle = '#2a2f3e'; ctx.lineWidth = Math.max(1, P * 0.02);
+  rrect(-P * 0.3, -P * 0.24, P * 0.6, P * 0.48, P * 0.06); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#161a24'; ctx.beginPath(); ctx.arc(-P * 0.03, 0, P * 0.13, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.save(); ctx.rotate(rnd() * 1.6 - 0.8); ctx.fillStyle = '#161a24'; rrect(P * 0.06, -P * 0.035, P * 0.3, P * 0.07, P * 0.015); ctx.fill(); ctx.restore();
+  if (age < 9 && !REDUCED) {                         // embers, dying down
+    const glowA = Math.max(0, 1 - age / 9) * (0.6 + 0.4 * Math.sin(performance.now() / 160 + m.seed));
+    ctx.globalAlpha = glowA; ctx.fillStyle = '#ff8a3d';
+    for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc((rnd() - 0.5) * P * 0.4, (rnd() - 0.5) * P * 0.3, Math.max(1, P * 0.028), 0, Math.PI * 2); ctx.fill(); }
+  }
+  ctx.restore();
   ctx.fillStyle = m.col;
   for (let i = 0; i < 9; i++) {
     const a = rnd() * Math.PI * 2, r = P * (0.1 + rnd() * 0.36);
@@ -7795,6 +7969,7 @@ function render() {
     ctx.strokeStyle = hc; ctx.globalAlpha = held ? 0.9 : 0.5; ctx.lineWidth = Math.max(2, P * 0.06);
     ctx.setLineDash([P * 0.26, P * 0.18]); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
+  if (matchOn) drawDecals();
   for (const m of marks) drawMark(m);
   if (structs.length && matchOn) drawBase();
   const pad = matchOn ? gatPad() : null;
@@ -7909,6 +8084,7 @@ function render() {
   }
   if (!NET_SCREENS.includes(state)) {
     for (const d of decoys) if (decoySeen(eye, d)) drawDecoy(d, eye);
+    drawSmoke();
     if (!replayView) for (const t of tanks) if (t.alive && (eye < 0 || t.id === eye) && classOf(t.id).id === 'rewind' && t.past && t.past.length > 2) drawRewindGhost(t);
   }
   if (state === 'countdown' && !twoSided() && tanks[mySeat]) {

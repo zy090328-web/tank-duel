@@ -225,7 +225,18 @@ const C = {
   MINI_BLAST: 0.68,      // splash radius of Mortar primary HE shell on wall impact
   CHILL_TIME: 0.9,       // seconds Trapper bolt chills/slows an enemy on graze or shield hit
   CHILL_SPEED: 0.72,     // movement speed multiplier while chilled
-  CHILL_GRAZE: 0.56      // graze radius around a Trapper bolt that chills an enemy
+  CHILL_GRAZE: 0.56,     // graze radius around a Trapper bolt that chills an enemy
+  ICE_TURN: 1.35,        // faster drift turn rate on ice
+  MUD_SPEED: 0.62,       // movement speed multiplier in mud
+  MUD_BULLET_FLOOR: 0.45,// minimum bullet speed ratio in mud
+  SANDBAG_HP: 2,         // hits a sandbag cover absorbs before breaking
+  BOOST_SPEED: 1.65,     // speed multiplier from a boost strip
+  BOOST_TIME: 0.35,      // duration of boost strip dash
+  BEACON_R: 0.95,        // capture radius of a watchtower beacon
+  BEACON_TIME: 6.0,      // seconds a captured beacon reveals enemies
+  BEACON_COOL: 10.0,     // seconds before a beacon can be captured again
+  GATE_PERIOD: 10.0,     // seconds per timed gate open/close cycle
+  BRIDGE_HP: 3           // crossings/hits before a cracked bridge collapses into water
 };
 
 /* ============================================================
@@ -665,6 +676,78 @@ for (const m of [
     "..~~...............~~..",
     "..~~....##.1.##....~~..",
     "......................." ],
+  // Archipelago Valley: large water channels, cracked bridges (=), sandbag cover (S), sparse grass (,) and beacons (W)
+  [ ".......................",
+    "..##...,,.....,,...##..",
+    "..#..~~~~~~=~~~~~~..#..",
+    ".....~~~~~~=~~~~~~.....",
+    "..S..~~~.......~~~..S..",
+    ".....~~~.S...S.~~~.....",
+    ".~~..=.....W.....=..~~.",
+    ".~~.....##...##.....~~.",
+    ".~~..S..#.....#..S..~~.",
+    ".....~~~...B...~~~.....",
+    "..=..~~~..,,,..~~~..=..",
+    ".....===..,,,..===.....",
+    "..=..~~~..,,,..~~~..=..",
+    ".....~~~...B...~~~.....",
+    ".~~..S..#.....#..S..~~.",
+    ".~~.....##...##.....~~.",
+    ".~~..=.....W.....=..~~.",
+    ".....~~~.S...S.~~~.....",
+    "..S..~~~.......~~~..S..",
+    ".....~~~~~~=~~~~~~.....",
+    "..#..~~~~~~=~~~~~~..#..",
+    "..##...,,..1..,,...##..",
+    "......................." ],
+  // Misty Jungle: dense connected grass (,), mud bogs (M), explosive barrels (B), beacons (W) and boost strips (^/v)
+  [ ".......................",
+    "..#...,,,,...,,,,...#..",
+    ".....,,,,,,B,,,,,,.....",
+    ".##..,,,,MMMMM,,,,..##.",
+    ".....,,,MM,,,MM,,,.....",
+    "..B..,,,,M,,,M,,,,..B..",
+    ".....,,,,..^..,,,,.....",
+    ".###....,,,,,,,....###.",
+    ".....B..,,,,,,,..B.....",
+    "..,,,...,,MMM,,...,,,..",
+    "..,,,..W,,MMM,,W..,,,..",
+    "..,,,.....,,,.....,,,..",
+    "..,,,..W,,MMM,,W..,,,..",
+    "..,,,...,,MMM,,...,,,..",
+    ".....B..,,,,,,,..B.....",
+    ".###....,,,,,,,....###.",
+    ".....,,,,..v..,,,,.....",
+    "..B..,,,,M,,,M,,,,..B..",
+    ".....,,,MM,,,MM,,,.....",
+    ".##..,,,,MMMMM,,,,..##.",
+    ".....,,,,,,B,,,,,,.....",
+    "..#...,,,,.1.,,,,...#..",
+    "......................." ],
+  // Mirror Reactor: 45-degree deflectors (/ \), diagonal portals (O), ice corridors (I), timed gates (D) and boost strips (>/<)
+  [ ".......................",
+    "..###..II.....II..###..",
+    "..#.../..IIIII..\\...#..",
+    "....#..I..>>>..I..#....",
+    ".O....II..#D#..II....O.",
+    "...##.I.../..\\..I.##...",
+    "......I.........I......",
+    ".##..D..##...##..D..##.",
+    ".....I..#.....#..I.....",
+    "..\\..I..../..\\...I../..",
+    ".....II..I...I..II.....",
+    "..>>>..D.II.II.D..<<<..",
+    ".....II..I...I..II.....",
+    "../..I....\\../...I..\\..",
+    ".....I..#.....#..I.....",
+    ".##..D..##...##..D..##.",
+    "......I.........I......",
+    "...##.I...\\./...I.##...",
+    ".O....II..#D#..II....O.",
+    "....#..I..<<<..I..#....",
+    "..#...\\..IIIII../...#..",
+    "..###..II..1..II..###..",
+    "......................." ],
 ]) { BIG_MAPS.add(MAPS.length); MAPS.push(m); }
 // Gadgets added to some of the older maps when Map extras include terrain (same notation; row, column, in the bottom half,
 // each repeated on the cell the map turns it onto)
@@ -987,6 +1070,11 @@ let soloMatch = false;      // one person on this screen against computer tanks
 let stats = [];             // per tank, this match: kills, deaths, shots, hits
 let soft = new Uint8Array(0), broken = [];     // breakable wall cells; the ones broken this round, in order
 let water = new Uint8Array(0), grass = new Uint8Array(0);   // terrain: water stops tanks but not shots; grass hides tanks
+let ice = new Uint8Array(0), mud = new Uint8Array(0), boosts = new Int8Array(0); // ice: low-friction slide; mud: slow tanks & bullets; boosts: 1=R,2=L,3=D,4=U
+let sandbags = [], sandbagCell = new Int16Array(0); // destructible low cover: blocks tanks & normal shots (mortars fly over)
+let bridges = [], bridgeCell = new Int16Array(0);   // cracked bridges over water: collapse into water after several crossings/blasts
+let gates = [], gateCell = new Int16Array(0);       // timed gates: periodically open and close
+let beacons = [];                                   // watchtower beacons: neutral capture points that trigger area radar
 // gadgets: deflector cells (1 '/', 2 '\'): a wall to tanks and missiles, a 45-degree mirror to shots and lasers;
 // portals { x, y, to }; barrels { x, y, alive, fuse (-1 unlit), by, back }; cells no tank or pickup starts on
 let mirror = new Int8Array(0), portals = [], barrels = [], noSpawn = new Uint8Array(0);
@@ -1044,7 +1132,7 @@ let mode = 'local';
 let NP = 2;                // tanks in the current match (2 on one screen, 2-5 online)
 let mySeat = 0;            // which tank this device drives online (-1 = watching)
 let viewFlip = false;      // online: the arena is turned 180 degrees so this device's tank starts at the bottom
-const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, invuln: 0, hp: 0, stun: 0, stunImm: 0, snare: 0, chill: 0, gat: 0, gatT: 0, portLock: -1, vx: 0, vy: 0, dash: 0, dcool: 0, scool: 0, cloak: 0, scan: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, skillQ: 0, gone: false, respawn: 0, ai: null });
+const makeTank = id => ({ id, x: 0, y: 0, angle: 0, reveal: 0, inv: 0, invuln: 0, hp: 0, stun: 0, stunImm: 0, snare: 0, chill: 0, gat: 0, gatT: 0, portLock: -1, vx: 0, vy: 0, svx: 0, svy: 0, boost: 0, boostDir: 0, dash: 0, dcool: 0, scool: 0, cloak: 0, scan: 0, alive: true, cool: 0, recoil: 0, ammo: C.CLIP_SIZE, reload: 0, power: null, charge: 0, laserPath: null, guided: null, shield: 0, fireQ: 0, skillQ: 0, gone: false, respawn: 0, ai: null });
 const isInvuln = t => !!t && ((t.inv || 0) > 0 || (t.invuln || 0) > 0);
 const canPhase = t => !!t && !isZed(t.id) && (t.cloak || 0) > 0;
 let tanks = [0, 1].map(makeTank);
@@ -1061,6 +1149,11 @@ function loadMap(i) {
   ROWS = m.length; COLS = m[0].length;
   crushed = new Uint8Array(COLS * ROWS); soft = new Uint8Array(COLS * ROWS); broken = [];
   water = new Uint8Array(COLS * ROWS); grass = new Uint8Array(COLS * ROWS);
+  ice = new Uint8Array(COLS * ROWS); mud = new Uint8Array(COLS * ROWS); boosts = new Int8Array(COLS * ROWS);
+  sandbags = []; sandbagCell = new Int16Array(COLS * ROWS).fill(-1);
+  bridges = []; bridgeCell = new Int16Array(COLS * ROWS).fill(-1);
+  gates = []; gateCell = new Int16Array(COLS * ROWS).fill(-1);
+  beacons = [];
   structs = []; structCell = new Int16Array(COLS * ROWS).fill(-1);
   const rot4 = ROT4.has(mapId), N = ROWS - 1, M = COLS - 1;
   const mark = (r, c) => m[r][c] === '#';
@@ -1104,12 +1197,19 @@ function loadMap(i) {
     baseAnchor = [{ c: sc, r: sr }, { c: M - sc, r: N - sr }];
   }
   if (BIG_MAPS.has(mapId) && settings.terrain && !pitch) {
-    const blocked = (r, c) => walls[r][c] || mirror[r * COLS + c] || keep.some(([kr, kc]) => kr === r && kc === c)
+    const blocked = (r, c) => walls[r][c] || mirror[r * COLS + c] || sandbagCell[r * COLS + c] >= 0 || gateCell[r * COLS + c] >= 0 || keep.some(([kr, kc]) => kr === r && kc === c)
       || (settings.game === 'hill' && Math.hypot(c + 0.5 - COLS / 2, r + 0.5 - ROWS / 2) < C.HILL_R + 0.8);
+    const boostDir = { '>': 1, '<': 2, 'v': 3, '^': 4 }, flipBoost = [0, 2, 1, 4, 3];
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-      const ch = m[r][c], idx = r * COLS + c;
-      if ((ch === '~' || m[N - r][M - c] === '~') && !blocked(r, c)) water[idx] = 1;
-      else if ((ch === ',' || m[N - r][M - c] === ',') && !blocked(r, c) && !water[idx]) grass[idx] = 1;
+      const ch = m[r][c], ch2 = m[N - r][M - c], idx = r * COLS + c;
+      if ((ch === '~' || ch2 === '~') && !blocked(r, c) && bridgeCell[idx] < 0) water[idx] = 1;
+      else if ((ch === ',' || ch2 === ',') && !blocked(r, c) && !water[idx]) grass[idx] = 1;
+      else if ((ch === 'I' || ch2 === 'I') && !blocked(r, c) && !water[idx]) ice[idx] = 1;
+      else if ((ch === 'M' || ch2 === 'M') && !blocked(r, c) && !water[idx]) mud[idx] = 1;
+      if (!blocked(r, c) && !water[idx]) {
+        if (boostDir[ch]) boosts[idx] = boostDir[ch];
+        else if (boostDir[ch2]) boosts[idx] = flipBoost[boostDir[ch2]];
+      }
     }
   }
   if (settings.terrain && !pitch) addTerrain(rot4, keep);
@@ -1126,8 +1226,9 @@ function loadMap(i) {
 function placeGadgets(m, keep, sc, sr) {
   mirror = new Int8Array(COLS * ROWS); noSpawn = new Uint8Array(COLS * ROWS); portals = []; barrels = [];
   const N = ROWS - 1, M = COLS - 1, list = [];
-  if (GADGET_MAPS.has(mapId) || BIG_MAPS.has(mapId) || (isRandomMap(mapId) && settings.terrain)) { for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if ('/\\OB'.includes(m[r][c])) list.push([r, c, m[r][c]]); }
-  else if (settings.terrain && GADGETS[mapId] && !ROT4.has(mapId) && !BASEMAPS.has(mapId) && !SOCCERMAPS.has(mapId)) list.push(...GADGETS[mapId]);
+  if (GADGET_MAPS.has(mapId) || BIG_MAPS.has(mapId) || (isRandomMap(mapId) && settings.terrain)) {
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if ('/\\OBS=DW'.includes(m[r][c])) list.push([r, c, m[r][c]]);
+  } else if (settings.terrain && GADGETS[mapId] && !ROT4.has(mapId) && !BASEMAPS.has(mapId) && !SOCCERMAPS.has(mapId)) list.push(...GADGETS[mapId]);
   const hill = settings.game === 'hill', taken = new Set();
   for (const [r, c, ch] of list) {
     const a = r * COLS + c, b = (N - r) * COLS + (M - c);
@@ -1144,6 +1245,31 @@ function placeGadgets(m, keep, sc, sr) {
     } else if (ch === 'B') {
       for (const i of a === b ? [a] : [a, b]) barrels.push({ x: i % COLS + 0.5, y: ((i / COLS) | 0) + 0.5, alive: true, fuse: -1, by: -1, back: 0 });
       noSpawn[a] = noSpawn[b] = 1;
+    } else if (ch === 'S' && settings.terrain) {
+      for (const i of a === b ? [a] : [a, b]) {
+        const rr = (i / COLS) | 0, cc = i % COLS;
+        sandbagCell[i] = sandbags.length;
+        sandbags.push({ id: sandbags.length, r: rr, c: cc, x: cc + 0.5, y: rr + 0.5, hp: C.SANDBAG_HP, max: C.SANDBAG_HP });
+        noSpawn[i] = 1;
+      }
+    } else if (ch === '=' && settings.terrain) {
+      for (const i of a === b ? [a] : [a, b]) {
+        const rr = (i / COLS) | 0, cc = i % COLS;
+        bridgeCell[i] = bridges.length;
+        bridges.push({ id: bridges.length, r: rr, c: cc, x: cc + 0.5, y: rr + 0.5, hp: C.BRIDGE_HP, max: C.BRIDGE_HP, on: 0 });
+        noSpawn[i] = 1;
+      }
+    } else if (ch === 'D' && settings.terrain) {
+      for (const i of a === b ? [a] : [a, b]) {
+        const rr = (i / COLS) | 0, cc = i % COLS;
+        gateCell[i] = gates.length;
+        gates.push({ id: gates.length, r: rr, c: cc, x: cc + 0.5, y: rr + 0.5, open: true, warn: false });
+        noSpawn[i] = 1;
+      }
+    } else if (ch === 'W' && settings.terrain) {
+      for (const i of a === b ? [a] : [a, b]) {
+        beacons.push({ id: beacons.length, x: i % COLS + 0.5, y: ((i / COLS) | 0) + 0.5, owner: -1, timer: 0, cool: 0 });
+      }
     }
   }
 }
@@ -1191,6 +1317,7 @@ function lightBarrel(br, by, delay) {
 }
 function barrelStep(dt) {
   for (const br of barrels) {
+    if (br.alive && br.fuse >= 0 && mudAt(br.x, br.y)) { br.fuse = -1; continue; }
     if (br.alive && br.fuse >= 0 && (br.fuse -= dt) < 0) {
       br.alive = false; br.fuse = -1; br.back = respawnMode() ? C.BARREL_BACK : 0;
       blast({ x: br.x, y: br.y, owner: br.by, type: 'barrel', age: 9, col: COL.pens[3] });
@@ -1274,6 +1401,28 @@ function addTerrain(rot4, starts) {
   }
 }
 const grassAt = (x, y) => { const c = Math.floor(x), r = Math.floor(y); return c >= 0 && r >= 0 && c < COLS && r < ROWS && grass[r * COLS + c] === 1; };
+const iceAt = (x, y) => { if (!settings.terrain) return false; const c = Math.floor(x), r = Math.floor(y); return c >= 0 && r >= 0 && c < COLS && r < ROWS && ice[r * COLS + c] === 1; };
+const mudAt = (x, y) => { if (!settings.terrain) return false; const c = Math.floor(x), r = Math.floor(y); return c >= 0 && r >= 0 && c < COLS && r < ROWS && mud[r * COLS + c] === 1; };
+const boostAt = (x, y) => { if (!settings.terrain) return 0; const c = Math.floor(x), r = Math.floor(y); return c >= 0 && r >= 0 && c < COLS && r < ROWS ? (boosts[r * COLS + c] || 0) : 0; };
+const BOOST_VEC = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
+function damageSandbag(sb, dmg) {
+  if (!sb || sb.hp <= 0) return;
+  sb.hp = Math.max(0, sb.hp - dmg);
+  if (sb.hp <= 0) crackFx(sb.x, sb.y); else sfx.crack();
+}
+function collapseBridge(br) {
+  if (!br) return;
+  br.hp = 0;
+  water[br.r * COLS + br.c] = 1;
+  crackFx(br.x, br.y);
+  buildStatic();
+}
+function damageBridge(br, dmg) {
+  if (!br || br.hp <= 0) return;
+  const nhp = Math.max(0, br.hp - dmg);
+  if (nhp <= 0) collapseBridge(br);
+  else { br.hp = nhp; sfx.crack(); }
+}
 // in grass (or active optical cloak) and not given away by a recent shot
 const concealed = t => t.alive && !(t.reveal > 0) && ((t.cloak || 0) > 0 || (settings.terrain && grassAt(t.x, t.y)));
 const friendOf = (a, b) => a === b || (infOn() ? (zed[a] | 0) === (zed[b] | 0) : teamsOn() && teamOf[a] === teamOf[b]);
@@ -1374,8 +1523,11 @@ function circleHitsWall(x, y, rad, wet = false, shot = false, phase = false) {
   const c0 = Math.floor(x - rad), c1 = Math.min(COLS - 1, Math.floor(x + rad));
   const r0 = Math.floor(y - rad), r1 = Math.min(ROWS - 1, Math.floor(y + rad));
   for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-    const isWall = walls[r][c] && (!phase || crushed[r * COLS + c]);
-    if (!isWall && !(wet && water[r * COLS + c]) && !(!shot && !phase && mirror[r * COLS + c])) continue;
+    const idx = r * COLS + c;
+    const isWall = walls[r][c] && (!phase || crushed[idx]);
+    const isBag = !shot && !phase && sandbagCell[idx] >= 0 && sandbags[sandbagCell[idx]].hp > 0;
+    const isGate = !phase && gateCell[idx] >= 0 && !gates[gateCell[idx]].open;
+    if (!isWall && !isBag && !isGate && !(wet && water[idx]) && !(!shot && !phase && mirror[idx])) continue;
     const dx = x - clamp(x, c, c + 1), dy = y - clamp(y, r, r + 1);
     if (dx * dx + dy * dy < rad * rad) return true;
   }
@@ -1389,8 +1541,11 @@ function resolveCircle(o, R, wet = false, phase = false) {
     const c0 = Math.floor(o.x - R), c1 = Math.min(COLS - 1, Math.floor(o.x + R));
     const r0 = Math.floor(o.y - R), r1 = Math.min(ROWS - 1, Math.floor(o.y + R));
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-      const isWall = walls[r][c] && (!phase || crushed[r * COLS + c]);
-      if (!isWall && !(wet && water[r * COLS + c]) && !(!phase && mirror[r * COLS + c])) continue;
+      const idx = r * COLS + c;
+      const isWall = walls[r][c] && (!phase || crushed[idx]);
+      const isBag = !phase && sandbagCell[idx] >= 0 && sandbags[sandbagCell[idx]].hp > 0;
+      const isGate = !phase && gateCell[idx] >= 0 && !gates[gateCell[idx]].open;
+      if (!isWall && !isBag && !isGate && !(wet && water[idx]) && !(!phase && mirror[idx])) continue;
       const dx = o.x - clamp(o.x, c, c + 1), dy = o.y - clamp(o.y, r, r + 1);
       const d2 = dx * dx + dy * dy;
       if (d2 >= R * R || d2 < 1e-12) continue;
@@ -1487,8 +1642,8 @@ function distField(tc, tr, wet = true) {
     const i = q[h], c = i % COLS, r = (i / COLS) | 0;
     for (const [dc, dr] of DIRS4) {
       const nc = c + dc, nr = r + dr;
-      if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS || walls[nr][nc] || (wet && water[nr * COLS + nc]) || mirror[nr * COLS + nc]) continue;
       const j = nr * COLS + nc;
+      if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS || walls[nr][nc] || (wet && water[j]) || mirror[j] || (sandbagCell[j] >= 0 && sandbags[sandbagCell[j]].hp > 0)) continue;
       if (d[j] >= 0) continue;
       d[j] = d[i] + 1; q.push(j);
     }
@@ -1527,7 +1682,7 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0; t.skillQ = 0;
-    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.invuln = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.snare = 0; t.chill = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
+    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.invuln = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.snare = 0; t.chill = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
   });
   ball = null; goalBy = -1;
   pot = { holder: -1, fuse: 0, wait: C.POT_WAIT, cd: 0, back: 0, from: -1, passT: 0, beep: 0 };
@@ -1656,7 +1811,7 @@ function respawnTank(t) {
   if (!best) best = spawn[t.id] || spawn[0];
   t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
   t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.fireQ = 0; t.skillQ = 0;
-  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.invuln = 0; t.ai = null; t.portLock = -1; t.snare = 0; t.chill = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
+  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.invuln = 0; t.ai = null; t.portLock = -1; t.snare = 0; t.chill = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
   if (isZed(t.id)) { t.inv = 0; t.hp = C.ZED_HP; t.stun = 0.3; t.dash = 0; t.dcool = 0; }
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
   sfx.spawn(); netEv('spawn', t.id, r2(t.x), r2(t.y));
@@ -2309,6 +2464,8 @@ function blast(m) {
     const bk = barricades[i];
     if (Math.hypot(bk.x - m.x, bk.y - m.y) < R + (bk.r || C.BARRICADE_R)) damageBarricade(bk, 3, m.owner);
   }
+  for (const sb of sandbags) if (sb.hp > 0 && Math.hypot(sb.x - m.x, sb.y - m.y) < R + 0.4) damageSandbag(sb, C.SANDBAG_HP);
+  for (const br of bridges) if (br.hp > 0 && Math.hypot(br.x - m.x, br.y - m.y) < R + 0.4) damageBridge(br, 2);
   if (ball) {                                                                              // ...and throws the ball
     const dx = ball.x - m.x, dy = ball.y - m.y, d = Math.hypot(dx, dy) || 0.01;
     if (d < R + 0.6) { const k = 1 + 6 * (1 - d / (R + 0.6)); ball.vx += dx / d * k; ball.vy += dy / d * k; ball.last = m.owner; ball.touchT = rec.t; }
@@ -2345,6 +2502,8 @@ function miniBlast(b, R = C.MINI_BLAST, skipId = -1) {
     const bk = barricades[i];
     if (Math.hypot(bk.x - b.x, bk.y - b.y) < R + (bk.r || C.BARRICADE_R)) damageBarricade(bk, 2, b.owner);
   }
+  for (const sb of sandbags) if (sb.hp > 0 && Math.hypot(sb.x - b.x, sb.y - b.y) < R + 0.4) damageSandbag(sb, 2);
+  for (const br of bridges) if (br.hp > 0 && Math.hypot(br.x - b.x, br.y - b.y) < R + 0.4) damageBridge(br, 1);
   if (ball) {
     const dx = ball.x - b.x, dy = ball.y - b.y, d = Math.hypot(dx, dy) || 0.01;
     if (d < R + 0.45) { const k = 0.8 + 3.5 * (1 - d / (R + 0.45)); ball.vx += dx / d * k; ball.vy += dy / d * k; ball.last = b.owner; ball.touchT = rec.t; }
@@ -2442,9 +2601,10 @@ function humanGone(id) {
 function driveSpeed(t) {
   if (t.stun > 0) return 0;
   const chill = (t.chill || 0) > 0 ? C.CHILL_SPEED : 1;
-  if (isZed(t.id)) return C.TANK_SPEED * C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) * chill;
+  const terr = (mudAt(t.x, t.y) ? C.MUD_SPEED : 1) * ((t.boost || 0) > 0 ? C.BOOST_SPEED : 1);
+  if (isZed(t.id)) return C.TANK_SPEED * C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) * chill * terr;
   const cls = classOf(t.id);
-  return C.TANK_SPEED * (cls.speed || 1) * (t.gat > 0 ? C.GAT_SLOW : 1) * (t.dash > 0 ? C.DASH_SPEED : 1) * (t.cloak > 0 ? 1.22 : 1) * (potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1) * chill;
+  return C.TANK_SPEED * (cls.speed || 1) * (t.gat > 0 ? C.GAT_SLOW : 1) * (t.dash > 0 ? C.DASH_SPEED : 1) * (t.cloak > 0 ? 1.22 : 1) * (potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1) * chill * terr;
 }
 
 /* ---------- the gatling ---------- */
@@ -2542,7 +2702,9 @@ function ballStep(dt) {
   }
   const sp = Math.hypot(b.vx, b.vy);
   if (sp > C.BALL_MAX) { b.vx *= C.BALL_MAX / sp; b.vy *= C.BALL_MAX / sp; }
-  const f = Math.exp(-C.BALL_DRAG * dt); b.vx *= f; b.vy *= f;
+  const bDir = boostAt(b.x, b.y);
+  if (bDir > 0) { const [bx, by] = BOOST_VEC[bDir]; b.vx += bx * 14 * dt; b.vy += by * 14 * dt; }
+  const f = Math.exp(-(iceAt(b.x, b.y) ? C.BALL_DRAG * 0.25 : C.BALL_DRAG) * dt); b.vx *= f; b.vy *= f;
   b.x += b.vx * dt; if (circleHitsWall(b.x, b.y, R)) { b.x -= b.vx * dt; b.vx = -b.vx * C.BALL_BOUNCE; }
   b.y += b.vy * dt; if (circleHitsWall(b.x, b.y, R)) { b.y -= b.vy * dt; b.vy = -b.vy * C.BALL_BOUNCE; }
   if (barricades.length) { pushOffBarricades(b, R); resolveCircle(b, R); }
@@ -2984,6 +3146,31 @@ function baseGoal(seat, t) {
 /* ---------- physics (always called with the fixed step) ---------- */
 function stepPhysics(dt, lethal, control) {
   LETHAL = lethal;
+  if (gates.length) {
+    const cyc = roundT % C.GATE_PERIOD, isOpen = cyc < C.GATE_PERIOD * 0.5, isWarn = isOpen && cyc > C.GATE_PERIOD * 0.5 - 1.2;
+    let closedNow = false;
+    for (const g of gates) { if (g.open && !isOpen) closedNow = true; g.open = isOpen; g.warn = isWarn; }
+    if (closedNow) for (const t of tanks) if (t.alive) unstickFromWall(t, C.TANK_R, canPhase(t));
+  }
+  if (beacons.length) {
+    for (const bc of beacons) {
+      if (bc.timer > 0) {
+        bc.timer = Math.max(0, bc.timer - dt);
+        for (const o of tanks) if (o.alive && !friendOf(bc.owner, o.id)) o.reveal = Math.max(o.reveal, 0.25);
+        if (bc.timer === 0) bc.cool = C.BEACON_COOL;
+      } else if (bc.cool > 0) {
+        bc.cool = Math.max(0, bc.cool - dt);
+      } else {
+        const cap = tanks.find(t => t.alive && !isZed(t.id) && Math.hypot(t.x - bc.x, t.y - bc.y) < C.BEACON_R);
+        if (cap) {
+          bc.owner = cap.id; bc.timer = C.BEACON_TIME;
+          radars.push({ x: bc.x, y: bc.y, life: 1.2, max: 1.2, col: penOf(cap.id) });
+          sfx.radar(); netEv('radar', r2(bc.x), r2(bc.y), cap.id);
+          for (const o of tanks) if (o.alive && !friendOf(cap.id, o.id)) o.reveal = Math.max(o.reveal, C.BEACON_TIME);
+        }
+      }
+    }
+  }
   for (const t of tanks) {
     if (!t.alive) {
       if (lethal && (respawnMode() || isZed(t.id)) && !t.gone && t.respawn > 0 && (t.respawn -= dt) <= 0) respawnTank(t);
@@ -2997,7 +3184,7 @@ function stepPhysics(dt, lethal, control) {
     t.inv = Math.max(0, t.inv - dt);
     t.invuln = Math.max(0, (t.invuln || 0) - dt);
     if (t.gat > 0) gatStep(t, dt, control);
-    t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.snare = Math.max(0, t.snare - dt); t.chill = Math.max(0, (t.chill || 0) - dt); if (t.snare > 0) t.dash = 0; t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt); t.scool = Math.max(0, t.scool - dt); t.cloak = Math.max(0, t.cloak - dt); t.scan = Math.max(0, t.scan - dt);
+    t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.snare = Math.max(0, t.snare - dt); t.chill = Math.max(0, (t.chill || 0) - dt); t.boost = Math.max(0, (t.boost || 0) - dt); if (t.snare > 0) t.dash = 0; t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt); t.scool = Math.max(0, t.scool - dt); t.cloak = Math.max(0, t.cloak - dt); t.scan = Math.max(0, t.scan - dt);
     if (tanks.some(u => u !== t && u.alive && (u.scan || 0) > 0 && !friendOf(u.id, t.id))) { t.cloak = 0; t.reveal = Math.max(t.reveal, 0.2); }
     if (wasCloaked && !(t.cloak > 0)) unstickFromWall(t, C.TANK_R);
     if (gunOn() && !t.power && !t.guided && t.charge <= 0 && t.cool <= 0) { const w = gunWeapon(t.id); if (w !== 'shot') t.power = w; }
@@ -3009,16 +3196,37 @@ function stepPhysics(dt, lethal, control) {
       t.laserPath = tracePath(t.x, t.y, t.angle);
       if (t.charge <= 0) { t.charge = 0; fireLaser(t); }
     }
+    const bDir = boostAt(t.x, t.y);
+    if (bDir > 0 && !locked) {
+      if (!(t.boost > C.BOOST_TIME * 0.5)) {
+        const [bx, by] = BOOST_VEC[bDir];
+        t.svx = clamp((t.svx || 0) + bx * 2.2, -5, 5);
+        t.svy = clamp((t.svy || 0) + by * 2.2, -5, 5);
+        burst(t.x, t.y, 4, '#2fd6c8', 1.5, 0.2, 0.03);
+      }
+      t.boost = C.BOOST_TIME; t.boostDir = bDir;
+    }
+    const onIce = iceAt(t.x, t.y);
     const inp = control && !locked ? getInput(t.id) : IDLE;
+    let dvx = 0, dvy = 0;
     if (inp.mag > 0) {
       // the stick sets a target heading; the tank turns toward it at a limited rate
       const diff = wrapAngle(Math.atan2(inp.y, inp.x) - t.angle);
-      const maxTurn = C.TURN_RATE * (isZed(t.id) ? 1.2 : (classOf(t.id).turn || 1)) * dt;
+      const maxTurn = C.TURN_RATE * (isZed(t.id) ? 1.2 : (classOf(t.id).turn || 1)) * (onIce ? C.ICE_TURN : 1) * dt;
       t.angle = wrapAngle(t.angle + clamp(diff, -maxTurn, maxTurn));
       // drive forward only as far as the tank already points the right way (pivot first, then go)
       const speed = driveSpeed(t) * inp.mag * Math.max(0, Math.cos(diff));
-      t.x += Math.cos(t.angle) * speed * dt;
-      t.y += Math.sin(t.angle) * speed * dt;
+      dvx = Math.cos(t.angle) * speed; dvy = Math.sin(t.angle) * speed;
+    }
+    if (onIce) {
+      const k = 1 - Math.exp(-3.2 * dt);
+      t.svx = (t.svx || 0) + (dvx - (t.svx || 0)) * k;
+      t.svy = (t.svy || 0) + (dvy - (t.svy || 0)) * k;
+      t.x += t.svx * dt; t.y += t.svy * dt;
+    } else {
+      const decay = Math.exp(-14 * dt);
+      t.svx = (t.svx || 0) * decay; t.svy = (t.svy || 0) * decay;
+      t.x += (dvx + t.svx * 0.35) * dt; t.y += (dvy + t.svy * 0.35) * dt;
     }
     const phase = canPhase(t);
     resolveCircle(t, C.TANK_R, true, phase);
@@ -3084,12 +3292,31 @@ function stepPhysics(dt, lethal, control) {
     if (barricades[i].age >= barricades[i].life) barricades.splice(i, 1);
   }
 
+  if (bridges.length) {
+    for (const br of bridges) {
+      if (br.hp <= 0) continue;
+      let nowOn = 0;
+      for (const t of tanks) if (t.alive && Math.hypot(t.x - br.x, t.y - br.y) < 0.56) nowOn |= 1 << t.id;
+      const left = br.on & ~nowOn;
+      br.on = nowOn;
+      if (left) damageBridge(br, 1);
+    }
+  }
+
   // bullets
   const hitR = C.TANK_R * 0.92 + C.BULLET_R;
   bulletLoop:
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     b.age += dt;
+    if (mudAt(b.x, b.y)) {
+      if (!b.baseSp) b.baseSp = Math.hypot(b.vx, b.vy);
+      const cur = Math.hypot(b.vx, b.vy);
+      if (cur > b.baseSp * C.MUD_BULLET_FLOOR) {
+        const f = Math.max(b.baseSp * C.MUD_BULLET_FLOOR / cur, Math.exp(-2.4 * dt));
+        b.vx *= f; b.vy *= f;
+      }
+    }
     if (b.pierce) {
       // a piercing shot goes straight through walls and is gone when it leaves the arena
       b.x += b.vx * dt; b.y += b.vy * dt;
@@ -3136,6 +3363,20 @@ function stepPhysics(dt, lethal, control) {
       const bk = barricades.find(k => !friendOf(b.owner, k.owner) && Math.hypot(b.x - k.x, b.y - k.y) < (k.r || C.BARRICADE_R) + C.BULLET_R);
       if (bk) {
         damageBarricade(bk, b.pierce ? C.BARRICADE_HP : (b.heavy || b.rivet || b.he) ? 2 : 1, b.owner);
+        if (b.he) miniBlast(b);
+        if (!b.pierce) { bullets.splice(i, 1); continue; }
+      }
+    }
+    if (sandbags.length) {
+      const c0 = Math.max(0, Math.floor(b.x - C.BULLET_R)), c1 = Math.min(COLS - 1, Math.floor(b.x + C.BULLET_R));
+      const r0 = Math.max(0, Math.floor(b.y - C.BULLET_R)), r1 = Math.min(ROWS - 1, Math.floor(b.y + C.BULLET_R));
+      let hitSb = null;
+      for (let r = r0; r <= r1 && !hitSb; r++) for (let c = c0; c <= c1; c++) {
+        const si = sandbagCell[r * COLS + c];
+        if (si >= 0 && sandbags[si].hp > 0) { hitSb = sandbags[si]; break; }
+      }
+      if (hitSb) {
+        damageSandbag(hitSb, b.pierce ? C.SANDBAG_HP : (b.heavy || b.rivet || b.he) ? 2 : 1);
         if (b.he) miniBlast(b);
         if (!b.pierce) { bullets.splice(i, 1); continue; }
       }
@@ -3404,7 +3645,11 @@ function recFrame() {
     MT: mortars.map(m => [m.id, m.sx, m.sy, m.tx, m.ty, m.owner, m.age, m.dur]),
     BK: barricades.map(k => [k.x, k.y, k.owner, k.hp, k.max || C.BARRICADE_HP, k.r || C.BARRICADE_R, k.mega ? 1 : 0]),
     L: beams.map(b => [b.path, penOf(b.owner), b.life / b.max]),
-    K: marks.length, O: ball ? [ball.x, ball.y, ball.rot] : null, H: pot.holder, X: barrels.length ? barrels.map(br => br.alive ? 1 : 0) : null });
+    K: marks.length, O: ball ? [ball.x, ball.y, ball.rot] : null, H: pot.holder, X: barrels.length ? barrels.map(br => br.alive ? 1 : 0) : null,
+    SB: sandbags.length ? sandbags.map(s => s.hp) : null,
+    BR: bridges.length ? bridges.map(b => b.hp) : null,
+    GT: gates.length ? gates.map(gt => gt.warn ? 2 : gt.open ? 1 : 0) : null,
+    BC: beacons.length ? beacons.map(bc => [bc.owner, bc.timer, bc.cool]) : null });
   while (rec.frames.length > 2 && rec.t - rec.frames[0].t > 6) rec.frames.shift();
 }
 // host and one screen: the clock runs through play and the moment after the kill
@@ -3505,8 +3750,12 @@ function stepReplay(dt) {
 function enterReplayWorld() {
   const now = rpNow(), { a, b, k } = framePair(now);
   if (!a) return null;
-  const saved = { tanks, bullets, missiles, mines, traps, mortars, barricades, beams, particles, rings, marks, pickups, minions, shells, ball, barrels };
+  const saved = { tanks, bullets, missiles, mines, traps, mortars, barricades, beams, particles, rings, marks, pickups, minions, shells, ball, barrels, sandbags, bridges, gates, beacons };
   if (a.X) barrels = saved.barrels.map((br, i) => Object.assign({}, br, { alive: !!a.X[i], fuse: -1 }));
+  if (a.SB) sandbags = saved.sandbags.map((s, i) => Object.assign({}, s, { hp: a.SB[i] | 0 }));
+  if (a.BR) bridges = saved.bridges.map((br, i) => Object.assign({}, br, { hp: a.BR[i] | 0 }));
+  if (a.GT) gates = saved.gates.map((gt, i) => Object.assign({}, gt, { open: (a.GT[i] | 0) > 0, warn: (a.GT[i] | 0) === 2 }));
+  if (a.BC) beacons = saved.beacons.map((bc, i) => { const q = a.BC[i] || [-1, 0, 0]; return Object.assign({}, bc, { owner: q[0] | 0, timer: +q[1] || 0, cool: +q[2] || 0 }); });
   ball = a.O ? { x: a.O[0] + ((b.O || a.O)[0] - a.O[0]) * k, y: a.O[1] + ((b.O || a.O)[1] - a.O[1]) * k, rot: a.O[2] || 0 } : null;
   rpHold = a.H == null ? -1 : a.H;
   const lerp = (p, q) => Math.abs(q - p) > 1.5 ? q : p + (q - p) * k, lerpA = (p, q) => wrapAngle(p + wrapAngle(q - p) * k);
@@ -3544,7 +3793,7 @@ function enterReplayWorld() {
   return saved;
 }
 function leaveReplayWorld(sv) {
-  ({ tanks, bullets, missiles, mines, traps, mortars, barricades, beams, particles, rings, marks, pickups, minions, shells, ball, barrels } = sv);
+  ({ tanks, bullets, missiles, mines, traps, mortars, barricades, beams, particles, rings, marks, pickups, minions, shells, ball, barrels, sandbags, bridges, gates, beacons } = sv);
   replayView = false;
 }
 // the path the killing shot took, drawn faintly behind it as it flies
@@ -3628,8 +3877,9 @@ let clockOff = 0, clockInit = false;
 // round trip from a guest's press to the host's answer, measured by echo (ms; 0 = not measured yet)
 let rttMs = 0, lastEcho = -1, netRttMs = 0;
 // the guest's own tank is moved on the guest at once and gently pulled toward what the host says
-const pred = { x: 0, y: 0, angle: 0, active: false, hist: [] };
-let predDash = 0;               // a zombie's dash, started here at once rather than when the host says so
+const pred = { x: 0, y: 0, angle: 0, active: false, hist: [], errX: 0, errY: 0, errA: 0 };
+let predDash = 0, predDashEnd = 0; // predicted dash and window during which host's delayed dash flag is ignored
+let predCloak = 0, predCloakEnd = 0;
 let localShots = 0, lastLocalShot = 0;
 const PEERJS_URLS = [
   'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
@@ -4012,6 +4262,10 @@ function buildSnap() {
     E: netEvents.map(e => e.e),
     aw: seats.map(id => guests.has(id) && guests.get(id).away ? 1 : 0),
     bx: barrels.length ? barrels.map(br => br.alive ? (br.fuse >= 0 ? 2 : 1) : 0) : null,
+    SB: sandbags.length ? sandbags.map(s => s.hp) : null,
+    BR: bridges.length ? bridges.map(b => b.hp) : null,
+    GT: gates.length ? gates.map(gt => gt.warn ? 2 : gt.open ? 1 : 0) : null,
+    BC: beacons.length ? beacons.map(bc => [bc.owner, r1(bc.timer), r1(bc.cool)]) : null,
     PE: seats.map(id => { const g = guests.get(id); return g && g.echo != null ? g.echo : -1; })
   };
 }
@@ -4023,7 +4277,7 @@ async function joinGame(code) {
   mode = 'guest'; mySeat = -1; netCode = code; state = 'guestWait'; stateT = 0;
   netMsg = 'Connecting to game ' + code + '…';
   snaps = []; lastArrival = 0; lastSeq = 0; lastRound = -1; dedicatedGame = false; isLeader = false; sentPrefs = false;
-  interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; netRttMs = 0; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; mySkill = 0; lastSent = ''; lastSentAt = 0; prevNetState = ''; skinSentAt = 0;
+  interpMs = 100; jitter = 15; lastSnapAt = 0; clockOff = 0; clockInit = false; netRttMs = 0; rttMs = 0; lastEcho = -1; pred.active = false; pred.hist = []; pred.errX = pred.errY = pred.errA = 0; predDash = predDashEnd = predCloak = predCloakEnd = 0; localShots = 0; lastMap = -1; localSd = 0; myFire = 0; mySkill = 0; lastSent = ''; lastSentAt = 0; prevNetState = ''; skinSentAt = 0;
   trails.clear(); seen.clear(); rejoinAt = 0; rejoinTries = 0; awaySince = 0; hostAwayMsg = false;
   if (!(await loadTransport())) { netLost(PEER_TROUBLE); return; }
   if (mode !== 'guest') return;
@@ -4209,7 +4463,7 @@ function guestFire() {
   myFire++;
   sendInput(true);
   const t = tanks[mySeat], now = performance.now();
-  if (isZed(mySeat)) { if (t && t.alive && !(t.dcool > 0) && !(t.stun > 0) && state === 'play') predDash = C.DASH_TIME; return; }
+  if (isZed(mySeat)) { if (t && t.alive && !(t.dcool > 0) && !(t.stun > 0) && state === 'play') { predDash = C.DASH_TIME; predDashEnd = now + (C.DASH_TIME + 0.35) * 1000; } return; }
   if (!t || !t.alive || t.power || t.guided || t.charge > 0 || t.shield > 0) return;
   if (state !== 'play' && state !== 'ending' && state !== 'result') return;
   if (shotsLeft(t) <= 0) { if (state === 'play') sfx.empty(); return; }
@@ -4227,18 +4481,19 @@ function guestFire() {
 function guestSkill() {
   mySkill++;
   sendInput(true);
-  const t = tanks[mySeat];
+  const t = tanks[mySeat], now = performance.now();
   if (!t || !t.alive || isZed(mySeat) || t.stun > 0 || t.charge > 0) return;
   if (state !== 'play' && state !== 'ending' && state !== 'result') return;
   if (t.scool > 0) { if (state === 'play') sfx.empty(); return; }
-  if (classOf(mySeat).id === 'striker' && state === 'play' && !(t.snare > 0)) predDash = C.DASH_TIME;
+  const sk = classOf(mySeat).id;
+  if (sk === 'striker' && state === 'play' && !(t.snare > 0)) { predDash = C.DASH_TIME; predDashEnd = now + (C.DASH_TIME + 0.35) * 1000; }
+  else if (sk === 'stealth' && state === 'play' && !(t.snare > 0)) { predCloak = C.CLOAK_TIME; predCloakEnd = now + (C.CLOAK_TIME + 0.35) * 1000; }
 }
 function sendInput(force) {
   if (!(hostConn && hostConn.open) && !linkOpen(gR)) return;
   const v = myInput(), now = performance.now();
   const msg = [r2(v.x), r2(v.y), r2(v.mag), myFire, mySkill], key = msg.join(',');
   if (!force && key === lastSent && now - lastSentAt < 250) return;   // repeat now and then, in case one was lost
-  if (!force && now - lastSentAt < 30) return;
   lastSent = key; lastSentAt = now;
   toHost({ i: msg, p: Math.round(now * 10) / 10 });
 }
@@ -4282,56 +4537,86 @@ function predictable() {
 }
 function predictStep(dt) {
   const t = tanks[mySeat];
-  if (!predictable()) { pred.active = false; pred.hist = []; return; }
+  if (!predictable()) { pred.active = false; pred.hist = []; pred.errX = pred.errY = pred.errA = 0; return; }
+  const now = performance.now();
   if (!pred.active) {             // take over from where the host has the tank
     const last = snaps.length && snaps[snaps.length - 1].g.T && snaps[snaps.length - 1].g.T[mySeat];
     if (!Array.isArray(last)) return;
-    pred.x = last[0]; pred.y = last[1]; pred.angle = last[2]; pred.hist = []; pred.active = true; pred.portLock = portalNear(pred.x, pred.y, C.PORTAL_R + 0.3);
+    pred.x = last[0]; pred.y = last[1]; pred.angle = last[2]; pred.hist = []; pred.errX = pred.errY = pred.errA = 0; pred.active = true; pred.portLock = portalNear(pred.x, pred.y, C.PORTAL_R + 0.3);
   }
   const locked = t.charge > 0 || !!t.guided || t.stun > 0 || t.snare > 0;
   const inp = locked ? IDLE : myInput();
   predDash = Math.max(0, predDash - dt);
+  predCloak = Math.max(0, predCloak - dt);
+  const sp0 = t.dash, cl0 = t.cloak, x0 = t.x, y0 = t.y, bo0 = t.boost;
+  t.x = pred.x; t.y = pred.y;
+  t.boost = Math.max(0, (pred.boost || 0) - dt);
+  const bDir = boostAt(pred.x, pred.y);
+  if (bDir > 0 && !locked) {
+    if (!(t.boost > C.BOOST_TIME * 0.5)) {
+      const [bx, by] = BOOST_VEC[bDir];
+      pred.svx = clamp((pred.svx || 0) + bx * 2.2, -5, 5);
+      pred.svy = clamp((pred.svy || 0) + by * 2.2, -5, 5);
+    }
+    t.boost = C.BOOST_TIME;
+  }
+  pred.boost = t.boost;
+  if (now < predDashEnd) t.dash = predDash > 0 ? 1 : 0;
+  if (now < predCloakEnd) t.cloak = predCloak > 0 ? 1 : 0;
+  const onIce = iceAt(pred.x, pred.y);
+  let dvx = 0, dvy = 0;
   if (inp.mag > 0) {
     const diff = wrapAngle(Math.atan2(inp.y, inp.x) - pred.angle);
-    const maxTurn = C.TURN_RATE * (isZed(mySeat) ? 1.2 : (classOf(mySeat).turn || 1)) * dt;
+    const maxTurn = C.TURN_RATE * (isZed(mySeat) ? 1.2 : (classOf(mySeat).turn || 1)) * (onIce ? C.ICE_TURN : 1) * dt;
     pred.angle = wrapAngle(pred.angle + clamp(diff, -maxTurn, maxTurn));
-    const sp0 = t.dash; if (predDash > 0) t.dash = 1;
     const speed = driveSpeed(t) * inp.mag * Math.max(0, Math.cos(diff));
-    t.dash = sp0;
-    pred.x += Math.cos(pred.angle) * speed * dt;
-    pred.y += Math.sin(pred.angle) * speed * dt;
+    dvx = Math.cos(pred.angle) * speed; dvy = Math.sin(pred.angle) * speed;
+  }
+  if (onIce) {
+    const k = 1 - Math.exp(-3.2 * dt);
+    pred.svx = (pred.svx || 0) + (dvx - (pred.svx || 0)) * k;
+    pred.svy = (pred.svy || 0) + (dvy - (pred.svy || 0)) * k;
+    pred.x += pred.svx * dt; pred.y += pred.svy * dt;
+  } else {
+    const decay = Math.exp(-14 * dt);
+    pred.svx = (pred.svx || 0) * decay; pred.svy = (pred.svy || 0) * decay;
+    pred.x += (dvx + pred.svx * 0.35) * dt; pred.y += (dvy + pred.svy * 0.35) * dt;
+  }
+  if (pred.errX || pred.errY || pred.errA) {
+    const k = 1 - Math.exp(-8 * dt);
+    const dx = pred.errX * k, dy = pred.errY * k, da = pred.errA * k;
+    pred.x += dx; pred.y += dy; pred.angle = wrapAngle(pred.angle + da);
+    pred.errX -= dx; pred.errY -= dy; pred.errA -= da;
+    for (const e of pred.hist) { e.x += dx; e.y += dy; e.a = wrapAngle(e.a + da); }
   }
   const phase = canPhase(t);
+  t.dash = sp0; t.cloak = cl0; t.x = x0; t.y = y0; t.boost = bo0;
   resolveCircle(pred, C.TANK_R, true, phase);
   if (barrels.length) { pushOffBarrels(pred, C.TANK_R); resolveCircle(pred, C.TANK_R, true, phase); }
   if (barricades.length) { pushOffBarricades(pred, C.TANK_R); resolveCircle(pred, C.TANK_R, true, phase); }
   unstickFromWall(pred, C.TANK_R, phase);
   if (pred.portLock === undefined) pred.portLock = -1;
   goThrough(pred, C.TANK_R);                 // through a portal at once, as the host will
-  const now = performance.now();
   pred.hist.push({ at: now, x: pred.x, y: pred.y, a: pred.angle });
   while (pred.hist.length && now - pred.hist[0].at > 2000) pred.hist.shift();
   t.x = pred.x; t.y = pred.y; t.angle = pred.angle;
   if (t.charge > 0) t.laserPath = tracePath(t.x, t.y, t.angle);
 }
 // When a snapshot arrives, compare the host's position for my tank with where I had it one
-// round trip ago, and move part of the way toward agreement. A big gap (respawn, a shove) snaps.
+// round trip ago, and queue a smooth correction. Only a large gap (respawn, portal) snaps.
 function reconcile(g) {
   if (!pred.active || !Array.isArray(g.T) || !Array.isArray(g.T[mySeat])) return;
   const q = g.T[mySeat];
-  if (!(q[3] & 1)) { pred.active = false; return; }
+  if (!(q[3] & 1)) { pred.active = false; pred.errX = pred.errY = pred.errA = 0; return; }
   const back = performance.now() - (rttMs || 150);
   let h = null;
   for (let i = pred.hist.length - 1; i >= 0; i--) if (pred.hist[i].at <= back) { h = pred.hist[i]; break; }
   if (!h) h = pred.hist[0] || { x: pred.x, y: pred.y, a: pred.angle };
   const ex = q[0] - h.x, ey = q[1] - h.y, ea = wrapAngle(q[2] - h.a);
-  if (Math.hypot(ex, ey) > 1.2) { pred.x = q[0]; pred.y = q[1]; pred.angle = q[2]; pred.hist = []; pred.portLock = portalNear(pred.x, pred.y, C.PORTAL_R + 0.3); return; }
-  const f = 0.25;
-  pred.x += ex * f; pred.y += ey * f; pred.angle = wrapAngle(pred.angle + ea * f);
-  for (const e of pred.hist) { e.x += ex * f; e.y += ey * f; e.a = wrapAngle(e.a + ea * f); }
-  const phase = canPhase(tanks[mySeat]);
-  resolveCircle(pred, C.TANK_R, true, phase);
-  unstickFromWall(pred, C.TANK_R, phase);
+  const dist = Math.hypot(ex, ey);
+  if (dist > 2.4) { pred.x = q[0]; pred.y = q[1]; pred.angle = q[2]; pred.hist = []; pred.errX = pred.errY = pred.errA = 0; pred.portLock = portalNear(pred.x, pred.y, C.PORTAL_R + 0.3); return; }
+  if (dist < 0.04 && Math.abs(ea) < 0.04) { pred.errX = pred.errY = pred.errA = 0; return; }
+  pred.errX = ex; pred.errY = ey; pred.errA = ea;
 }
 
 function applyDiscrete(g, dt) {
@@ -4362,6 +4647,10 @@ function applyDiscrete(g, dt) {
   if (Array.isArray(g.pt)) { pot.holder = g.pt[0] | 0; if (Math.abs((+g.pt[1] || 0) - pot.fuse) > 0.3) pot.fuse = +g.pt[1] || 0; } else pot.holder = -1;
   goalBy = typeof g.gb === 'number' ? g.gb : -1;
   if (Array.isArray(g.bx)) g.bx.forEach((v, i) => { if (barrels[i]) { barrels[i].alive = v > 0; barrels[i].fuse = v === 2 ? 0.1 : -1; } });
+  if (Array.isArray(g.SB)) g.SB.forEach((hp, i) => { if (sandbags[i]) sandbags[i].hp = hp | 0; });
+  if (Array.isArray(g.BR)) g.BR.forEach((hp, i) => { const br = bridges[i]; if (!br) return; if ((hp | 0) <= 0 && br.hp > 0) collapseBridge(br); else br.hp = hp | 0; });
+  if (Array.isArray(g.GT)) g.GT.forEach((v, i) => { const gt = gates[i]; if (!gt) return; gt.open = (v | 0) > 0; gt.warn = (v | 0) === 2; });
+  if (Array.isArray(g.BC)) g.BC.forEach((q, i) => { const bc = beacons[i]; if (!bc || !Array.isArray(q)) return; bc.owner = q[0] | 0; bc.timer = +q[1] || 0; bc.cool = +q[2] || 0; });
   if (g.st === 'replay' && Array.isArray(g.rp)) {
     if (state !== 'replay') { rpT = +g.t || 0; rpPrev = -1; rpParts = []; rpRings = []; }
     rp = { from: +g.rp[0] || 0, to: +g.rp[1] || 0, dur: Math.max(0.5, +g.rp[2] || 1) }; rp.speed = (rp.to - rp.from) / rp.dur;
@@ -5227,6 +5516,47 @@ function drawArenaLayer(g, ox, oy, aw, ah, sDpr) {
     g.globalAlpha = 1;
   }
 
+  // ice, mud, and directional boost strips
+  if (settings.terrain) {
+    const BOOST_ANG = [0, 0, Math.PI, Math.PI / 2, -Math.PI / 2];
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const idx = r * COLS + c;
+      if (walls[r] && walls[r][c]) continue;
+      if (ice[idx]) {
+        const [x, y] = cell(r, c);
+        g.globalAlpha = 0.22; g.fillStyle = '#7ee8fa'; g.fillRect(x, y, P, P);
+        g.globalAlpha = 0.28; g.strokeStyle = '#d8fbff'; g.lineWidth = Math.max(1, P * 0.03); g.lineCap = 'round';
+        g.beginPath();
+        g.moveTo(x + P * 0.16, y + P * 0.32); g.lineTo(x + P * 0.36, y + P * 0.14);
+        g.moveTo(x + P * 0.56, y + P * 0.84); g.lineTo(x + P * 0.84, y + P * 0.56);
+        g.moveTo(x + P * 0.28, y + P * 0.72); g.lineTo(x + P * 0.72, y + P * 0.28);
+        g.stroke();
+      } else if (mud[idx]) {
+        const [x, y] = cell(r, c), rnd = mulberry32(97 + mapId * 419 + r * 31 + c);
+        g.globalAlpha = 0.72; g.fillStyle = '#3b2818'; g.fillRect(x, y, P, P);
+        g.globalAlpha = 0.45; g.fillStyle = '#24170c';
+        for (let k = 0; k < 3; k++) {
+          g.beginPath(); g.ellipse(x + P * (0.24 + rnd() * 0.52), y + P * (0.24 + rnd() * 0.52), P * (0.13 + rnd() * 0.08), P * (0.09 + rnd() * 0.06), rnd() * Math.PI, 0, Math.PI * 2); g.fill();
+        }
+        g.globalAlpha = 0.25; g.strokeStyle = '#6b4c32'; g.lineWidth = Math.max(1, P * 0.025);
+        g.strokeRect(x + P * 0.04, y + P * 0.04, P * 0.92, P * 0.92);
+      }
+      const bd = boosts[idx];
+      if (bd) {
+        const [x, y] = cell(r, c);
+        g.save(); g.translate(x + P / 2, y + P / 2);
+        g.rotate(BOOST_ANG[bd] + (viewFlip ? Math.PI : 0));
+        g.globalAlpha = 0.18; g.fillStyle = '#2fd6c8'; g.fillRect(-P * 0.44, -P * 0.44, P * 0.88, P * 0.88);
+        g.globalAlpha = 0.85; g.strokeStyle = '#2fd6c8'; g.lineWidth = Math.max(1.5, P * 0.065); g.lineCap = 'round'; g.lineJoin = 'round';
+        for (const dx of [-P * 0.14, P * 0.12]) {
+          g.beginPath(); g.moveTo(dx - P * 0.12, -P * 0.22); g.lineTo(dx + P * 0.1, 0); g.lineTo(dx - P * 0.12, P * 0.22); g.stroke();
+        }
+        g.restore();
+      }
+    }
+    g.globalAlpha = 1; g.lineCap = 'butt';
+  }
+
   // grass on the ground
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
     if (!grass[r * COLS + c] || (walls[r] && walls[r][c])) continue;
@@ -5310,6 +5640,13 @@ function drawMinimap() {
       ctx.globalAlpha = 0.55; ctx.fillStyle = COL.water; ctx.fillRect(x, y, cs + 0.35, cs + 0.35);
     } else if (settings.terrain && grass[idx]) {
       ctx.globalAlpha = 0.32; ctx.fillStyle = COL.grass; ctx.fillRect(x, y, cs + 0.35, cs + 0.35);
+    } else if (settings.terrain && ice[idx]) {
+      ctx.globalAlpha = 0.38; ctx.fillStyle = '#7ee8fa'; ctx.fillRect(x, y, cs + 0.35, cs + 0.35);
+    } else if (settings.terrain && mud[idx]) {
+      ctx.globalAlpha = 0.55; ctx.fillStyle = '#5a3d24'; ctx.fillRect(x, y, cs + 0.35, cs + 0.35);
+    }
+    if (settings.terrain && boosts[idx]) {
+      ctx.globalAlpha = 0.45; ctx.fillStyle = '#2fd6c8'; ctx.fillRect(x + cs * 0.15, y + cs * 0.15, cs * 0.7, cs * 0.7);
     }
     const mir = mirror[idx];
     if (mir && !(walls[row] && walls[row][col])) {
@@ -5329,6 +5666,23 @@ function drawMinimap() {
     ctx.setLineDash([]);
   }
 
+  for (const br of bridges) if (br.hp > 0) {
+    ctx.globalAlpha = 0.85; ctx.fillStyle = '#b98b56';
+    ctx.fillRect(cx0(br.c) + cs * 0.12, cy0(br.r) + cs * 0.12, cs * 0.76, cs * 0.76);
+  }
+  for (const sb of sandbags) if (sb.hp > 0) {
+    ctx.globalAlpha = 0.9; ctx.fillStyle = '#d4b475';
+    ctx.fillRect(cx0(sb.c) + cs * 0.14, cy0(sb.r) + cs * 0.14, cs * 0.72, cs * 0.72);
+  }
+  for (const gt of gates) {
+    ctx.globalAlpha = gt.open ? 0.35 : 0.95; ctx.fillStyle = gt.warn ? '#ffbe4d' : gt.open ? '#2fd6c8' : '#ff5f6d';
+    ctx.fillRect(cx0(gt.c) + cs * 0.1, cy0(gt.r) + cs * 0.1, cs * 0.8, cs * 0.8);
+  }
+  for (const bc of beacons) {
+    ctx.globalAlpha = 0.95; ctx.strokeStyle = bc.timer > 0 && bc.owner >= 0 ? penOf(bc.owner) : bc.cool > 0 ? '#6b7896' : '#ffe28a';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.arc(mx0(bc.x), my0(bc.y), Math.max(2, cs * 0.38), 0, Math.PI * 2); ctx.stroke();
+  }
   for (const p of portals) {
     ctx.globalAlpha = 0.9; ctx.strokeStyle = PORTAL_COL[p.hue % PORTAL_COL.length]; ctx.lineWidth = 1.3;
     ctx.beginPath(); ctx.arc(mx0(p.x), my0(p.y), Math.max(1.8, cs * 0.35), 0, Math.PI * 2); ctx.stroke();
@@ -6255,6 +6609,91 @@ function drawBarricade(bk) {
   }
   ctx.restore(); ctx.globalAlpha = 1;
 }
+function drawBridge(br) {
+  const x = br.c * P, y = br.r * P, dmg = br.max - br.hp;
+  ctx.save();
+  ctx.fillStyle = '#0c2a52'; ctx.fillRect(x, y, P, P);
+  ctx.fillStyle = br.hp === 1 ? '#8b4d32' : '#7a5836';
+  ctx.fillRect(x + P * 0.04, y + P * 0.04, P * 0.92, P * 0.92);
+  ctx.strokeStyle = '#47301a'; ctx.lineWidth = Math.max(1.2, P * 0.032);
+  for (let i = 1; i <= 3; i++) {
+    const py = y + P * (i * 0.25);
+    ctx.beginPath(); ctx.moveTo(x + P * 0.05, py); ctx.lineTo(x + P * 0.95, py); ctx.stroke();
+  }
+  ctx.strokeStyle = '#a87d4f'; ctx.lineWidth = Math.max(1.4, P * 0.04);
+  ctx.strokeRect(x + P * 0.04, y + P * 0.04, P * 0.92, P * 0.92);
+  if (dmg > 0) {
+    ctx.strokeStyle = br.hp === 1 ? '#ff7c5c' : '#1b1108';
+    ctx.lineWidth = Math.max(1.5, P * 0.045); ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x + P * 0.2, y + P * 0.15); ctx.lineTo(x + P * 0.48, y + P * 0.45); ctx.lineTo(x + P * 0.35, y + P * 0.8);
+    if (dmg >= 2) { ctx.moveTo(x + P * 0.78, y + P * 0.2); ctx.lineTo(x + P * 0.52, y + P * 0.58); ctx.lineTo(x + P * 0.82, y + P * 0.86); }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawSandbag(sb) {
+  const x = sb.c * P, y = sb.r * P, dmg = sb.hp < sb.max;
+  ctx.save();
+  ctx.globalAlpha = 0.45; ctx.fillStyle = '#04070e';
+  rrect(x + P * 0.1, y + P * 0.14, P * 0.84, P * 0.8, P * 0.14); ctx.fill();
+  ctx.globalAlpha = 1;
+  const bags = [[0.08, 0.12, 0.44, 0.36], [0.48, 0.12, 0.44, 0.36], [0.1, 0.48, 0.42, 0.38], [0.48, 0.48, 0.44, 0.38]];
+  for (let i = 0; i < bags.length; i++) {
+    if (dmg && i === 1) continue;
+    const [bx, by, bw, bh] = bags[i];
+    ctx.fillStyle = dmg ? '#9c7d48' : i % 2 ? '#c4a265' : '#b38f52';
+    ctx.strokeStyle = '#5c4623'; ctx.lineWidth = Math.max(1.2, P * 0.032);
+    rrect(x + bx * P, y + by * P, bw * P, bh * P, P * 0.11); ctx.fill(); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawGate(gt) {
+  const x = gt.c * P, y = gt.r * P;
+  ctx.save();
+  const blink = gt.warn && !REDUCED && Math.floor(performance.now() / 130) % 2 === 0;
+  if (gt.open) {
+    ctx.globalAlpha = blink ? 0.8 : 0.45;
+    ctx.fillStyle = gt.warn ? '#ffbe4d' : '#2fd6c8';
+    ctx.fillRect(x + P * 0.06, y + P * 0.06, P * 0.88, P * 0.11);
+    ctx.fillRect(x + P * 0.06, y + P * 0.83, P * 0.88, P * 0.11);
+    if (blink) {
+      ctx.globalAlpha = 0.25; ctx.fillRect(x + P * 0.08, y + P * 0.18, P * 0.84, P * 0.64);
+    }
+  } else {
+    glow(gt.x * P, gt.y * P, P * 0.85, '#ff5f6d', 0.35);
+    ctx.fillStyle = '#251526'; ctx.strokeStyle = '#ff5f6d'; ctx.lineWidth = Math.max(1.8, P * 0.055);
+    rrect(x + P * 0.05, y + P * 0.05, P * 0.9, P * 0.9, P * 0.08); ctx.fill(); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + P * 0.18, y + P * 0.18); ctx.lineTo(x + P * 0.82, y + P * 0.82);
+    ctx.moveTo(x + P * 0.82, y + P * 0.18); ctx.lineTo(x + P * 0.18, y + P * 0.82);
+    ctx.stroke();
+  }
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+function drawBeacon(bc) {
+  const x = bc.x * P, y = bc.y * P, r = P * 0.42;
+  const active = bc.timer > 0 && bc.owner >= 0, col = active ? penOf(bc.owner) : bc.cool > 0 ? '#5c6b8a' : '#ffe28a';
+  if (active) glow(x, y, P * 1.1, col, 0.45);
+  ctx.save(); ctx.translate(x, y);
+  ctx.globalAlpha = 0.7; ctx.fillStyle = '#091124'; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = bc.cool > 0 ? 0.55 : 0.95; ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.5, P * 0.045);
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+  if (active) {
+    const f = clamp(bc.timer / C.BEACON_TIME, 0, 1);
+    ctx.lineWidth = Math.max(2, P * 0.06);
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.72, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f); ctx.stroke();
+  } else if (bc.cool > 0) {
+    const f = 1 - clamp(bc.cool / C.BEACON_COOL, 0, 1);
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.72, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f); ctx.stroke();
+  } else {
+    ctx.setLineDash([P * 0.1, P * 0.08]);
+    ctx.beginPath(); ctx.arc(0, 0, P * C.BEACON_R, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, 0, P * 0.1, 0, Math.PI * 2); ctx.fill();
+  ctx.restore(); ctx.globalAlpha = 1;
+}
 function drawMortar(m) {
   const col = penOf(m.owner), p = clamp(m.age / Math.max(0.05, m.dur), 0, 1), h = Math.sin(p * Math.PI);
   const tx = m.tx * P, ty = m.ty * P, br = C.MORTAR_BLAST * P;
@@ -7060,7 +7499,15 @@ function render() {
     ctx.beginPath(); ctx.arc(0, 0, P * 0.34, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     drawGlyph('gatling', P * 0.22, COL.graphite); ctx.restore(); ctx.globalAlpha = 1;
   }
-  if (matchOn) { for (const p of portals) drawPortal(p); for (const br of barrels) if (br.alive) drawBarrel(br); for (const bk of barricades) drawBarricade(bk); }
+  if (matchOn) {
+    for (const br of bridges) if (br.hp > 0) drawBridge(br);
+    for (const bc of beacons) drawBeacon(bc);
+    for (const gt of gates) drawGate(gt);
+    for (const sb of sandbags) if (sb.hp > 0) drawSandbag(sb);
+    for (const p of portals) drawPortal(p);
+    for (const br of barrels) if (br.alive) drawBarrel(br);
+    for (const bk of barricades) drawBarricade(bk);
+  }
   for (const k of pickups) drawPickup(k);
   const eye = viewer();
   for (const mn of mines) {
@@ -7469,6 +7916,7 @@ window.__tank = {
   get pot() { return pot; }, get ball() { return ball; }, get goalBy() { return goalBy; }, get goalCell() { return goalCell; }, SOCCERMAPS, gunWeapon, gunLadder, potatoBoom, scoreGoal,
   lobbyFrames, paneItems, ruleRows, applyMut, openBoard, reportResult, get boardData() { return boardData; }, get mutNow() { return mutNow; }, MUTS, get menuStep() { return menuStep; }, set menuStep(v) { menuStep = v; }, get lobbyPane() { return lobbyPane; }, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
   BIG_MAPS, MAP_POOLS, LOCAL_MAP_POOLS, mapChoice, VIEW_CELLS, camOn, updateCamera, drawMinimap, get cam() { return cam; },
+  get ice() { return ice; }, get mud() { return mud; }, get boosts() { return boosts; }, get sandbags() { return sandbags; }, get bridges() { return bridges; }, get gates() { return gates; }, get beacons() { return beacons; },
   lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get skins() { return lobbySkins(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };
 

@@ -203,7 +203,11 @@ const C = {
   GRASS_SEE: 1.6,        // a tank in grass is seen only by enemies this close (centre to centre)...
   GRASS_REVEAL: 0.8,     // ...or for this long after it fires
   FOG_SEE: 3.2,          // party rule Fog: enemy tanks further than this from your side are not shown
-  RADAR_TIME: 4.0,       // seconds a full-arena radar scan reveals cloaked/hidden enemies and mines
+  RADAR_PING: 2.0,       // seconds the marks of a radar scan stay (where enemies, mines and traps were at that moment)
+  RADAR_SPIN: 0.8,       // seconds the recon's dish spins after a scan
+  ARMOR_REGEN: 8.0,      // seconds before a Heavy's broken armour grows back
+  ARMOR_GRACE: 0.3,      // after the armour breaks, the rest of the same volley glances off for this long
+  ARMOR_PUSH: 14,        // knock-back speed when the armour takes a hit (about 0.35 cells)
   MORTAR_DIST: 4.0,      // how far ahead a mortar shell lobs over walls
   MORTAR_TIME: 0.85,     // air time of a mortar shell (s)
   MORTAR_BLAST: 2.0,     // blast radius of a mortar impact (4-cell diameter)
@@ -221,6 +225,7 @@ const C = {
   TRAP_R: 0.22,          // visual radius of a snare trap
   TRAP_TIME: 3.0,        // seconds a triggered snare trap binds the target
   TRAP_MAX: 3,           // max active stealth snare traps per trapper
+  EMP_STUN: 0.8,         // seconds an EMP holds enemies still
   INVULN_TIME: 2.0,      // seconds Titan's invulnerability lasts (can still attack)
   MINI_BLAST: 0.68,      // splash radius of Mortar primary HE shell on wall impact
   CHILL_TIME: 0.9,       // seconds Trapper bolt chills/slows an enemy on graze or shield hit
@@ -1030,16 +1035,30 @@ if (nameOk && nameInput && nameOk.addEventListener) {
 const SKINS = [
   { id: 'classic', name: 'Classic', desc: 'Balanced · Skill: Spread (5s)', atk: 'Balanced (5b)', skill: 'SPREAD', scool: 5.0, speed: 1.02, turn: 1.04, bSpeed: 1.04, fCool: 0.95 },
   { id: 'stealth', name: 'Stealth', desc: 'Fast sniper · Skill: Cloak (6s) · Phase walls', atk: 'Hyper sniper (2b)', skill: 'CLOAK', scool: 6.0, speed: 1.12, turn: 1.15, bSpeed: 1.55, fCool: 1.30, maxB: 2 },
-  { id: 'heavy', name: 'Heavy', desc: 'Armored buckshot · Skill: Shield (7s)', atk: '3-pellet buckshot', skill: 'SHIELD', scool: 7.0, speed: 0.84, turn: 0.88, bSpeed: 0.92, fCool: 1.35 },
+  { id: 'heavy', name: 'Heavy', desc: 'Armour takes one hit (back in 8s) · Buckshot · Skill: Shield (7s)', atk: 'Buckshot · armour', skill: 'SHIELD', scool: 7.0, speed: 0.84, turn: 0.88, bSpeed: 0.92, fCool: 1.35 },
   { id: 'cyber', name: 'Cyber', desc: 'Twin plasma · 2x vs shields · Skill: EMP (6s)', atk: 'Twin bolts (2x shld)', skill: 'EMP', scool: 6.0, speed: 1.04, turn: 1.08, bSpeed: 1.14, fCool: 1.08 },
   { id: 'retro', name: 'Retro', desc: 'Super ricochet · Skill: Mine (5s)', atk: '9-bounce shot', skill: 'MINE', scool: 5.0, speed: 0.98, turn: 1.02, bSpeed: 0.96, fCool: 1.0, maxB: 9 },
   { id: 'striker', name: 'Striker', desc: 'Fastest · Rapid carbine · Skill: Dash (4s)', atk: 'Rapid carbine (3b)', skill: 'DASH', scool: 4.0, speed: 1.20, turn: 1.22, bSpeed: 1.10, fCool: 0.65, maxB: 3 },
-  { id: 'recon', name: 'Recon', desc: 'Quick · 2-round burst · Skill: Radar (7s)', atk: '2-round burst', skill: 'RADAR', scool: 7.0, speed: 1.16, turn: 1.20, bSpeed: 1.28, fCool: 0.88 },
+  { id: 'recon', name: 'Recon', desc: 'Quick · 2-round burst · Skill: Radar ping (7s)', atk: '2-round burst', skill: 'RADAR', scool: 7.0, speed: 1.16, turn: 1.20, bSpeed: 1.28, fCool: 0.88 },
   { id: 'mortar', name: 'Mortar', desc: 'HE wall-blast · Skill: Mortar (8.5s)', atk: 'HE wall-blast', skill: 'MORTAR', scool: 8.5, speed: 0.88, turn: 0.88, bSpeed: 0.85, fCool: 1.40, maxB: 0 },
   { id: 'engineer', name: 'Engineer', desc: 'Siege/repair rivet · Skill: Bunker (6s) · Link Big Shield', atk: 'Rivet (2x/repair)', skill: 'BUNKER', scool: 6.0, speed: 0.96, turn: 1.05, bSpeed: 1.10, fCool: 1.0, maxB: 3 },
   { id: 'trapper', name: 'Trapper', desc: 'Chilling bolt · Skill: Snare Trap (6.5s) · Invisible trap binds 3s', atk: 'Chilling bolt', skill: 'TRAP', scool: 6.5, speed: 1.06, turn: 1.12, bSpeed: 1.18, fCool: 0.95, maxB: 3 },
-  { id: 'titan', name: 'Titan', desc: 'Heavy cannon · Skill: Invuln (8s) · Immune 2s while attacking', atk: 'Heavy cannon (2x)', skill: 'INVULN', scool: 8.0, speed: 0.86, turn: 0.90, bSpeed: 1.12, fCool: 1.15, maxB: 2 }
+  { id: 'titan', name: 'Titan', desc: 'Heavy cannon · Skill: Invuln (8s) · Immune 2s while attacking', atk: 'Cannon (2x vs walls)', skill: 'INVULN', scool: 8.0, speed: 0.86, turn: 0.90, bSpeed: 1.12, fCool: 1.15, maxB: 2 }
 ];
+// one line in Chinese for the skin screen, and who each one is good against / weak to
+const SKIN_ZH = {
+  classic:  { d: '均衡全能 · 技能：扇形三连发', good: 'Striker、Recon', bad: 'Heavy' },
+  stealth:  { d: '高速狙击 · 技能：隐身 2.5 秒，可穿墙', good: 'Mortar、Titan', bad: 'Cyber、Trapper' },
+  heavy:    { d: '霰弹 + 护甲：第一下只被击退，8 秒后护甲恢复 · 技能：护盾', good: 'Striker、Classic', bad: 'Mortar、Stealth' },
+  cyber:    { d: '双发等离子，打护盾双倍 · 技能：EMP 定身附近敌人 0.8 秒，清掉子弹、地雷、陷阱', good: 'Heavy、Trapper、Retro', bad: 'Stealth、Mortar' },
+  retro:    { d: '子弹能弹 9 次 · 技能：放地雷', good: 'Titan、Mortar', bad: 'Engineer、Cyber' },
+  striker:  { d: '最快，速射 · 技能：冲刺', good: 'Mortar、Titan', bad: 'Heavy、Trapper' },
+  recon:    { d: '两连发 · 技能：雷达，标出这一刻所有敌人、地雷、陷阱的位置', good: 'Stealth、Trapper、Retro', bad: 'Heavy、Striker' },
+  mortar:   { d: '高爆弹能炸墙 · 技能：迫击炮越墙轰炸', good: 'Heavy、Engineer、Titan', bad: 'Striker、Stealth' },
+  engineer: { d: '铆钉弹打墙和建筑双倍，能看见附近地雷 · 技能：架掩体，相邻的合成大护盾', good: 'Retro、Trapper', bad: 'Mortar、Cyber' },
+  trapper:  { d: '冰冻弹减速 · 技能：放隐形陷阱，踩中定身 3 秒', good: 'Striker、Stealth', bad: 'Recon、Cyber' },
+  titan:    { d: '重炮打墙和建筑双倍 · 技能：2 秒无敌，期间照样开火', good: 'Classic、Striker', bad: 'Stealth、Trapper' }
+};
 const SKIN_IDS = SKINS.map(s => s.id);
 const validSkin = id => SKIN_IDS.includes(id) ? id : 'classic';
 const skinMeta = id => SKINS.find(s => s.id === validSkin(id)) || SKINS[0];
@@ -1717,14 +1736,14 @@ function resetEntities() {
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
     t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0; t.skillQ = 0;
-    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.invuln = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.snare = 0; t.chill = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
+    t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.invuln = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.snare = 0; t.chill = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0; t.armor = undefined; t.armorCd = 0; t.armorGrace = 0;
   });
   ball = null; goalBy = -1;
   pot = { holder: -1, fuse: 0, wait: C.POT_WAIT, cd: 0, back: 0, from: -1, passT: 0, beep: 0 };
   rec.frames = []; rec.t = 0; rec.tick = 0; hl = null; rp = null; shotNow = null;
   hillHolder = -1;
   minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
-  bullets = []; missiles = []; mines = []; traps = []; mortars = []; barricades = []; pickups = []; beams = []; rings = []; radars = []; particles = []; marks = [];
+  bullets = []; missiles = []; mines = []; traps = []; mortars = []; barricades = []; pickups = []; beams = []; rings = []; radars = []; pings = []; particles = []; marks = [];
   netEvents = [];
   pickupTimer = C.PICKUP_FIRST; emptyT = 0; gatT = C.GAT_FIRST;
   roundT = 0; sdClosed = 0; sdStarted = false;
@@ -1846,7 +1865,7 @@ function respawnTank(t) {
   if (!best) best = spawn[t.id] || spawn[0];
   t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
   t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.laserPath = null; t.guided = null; t.fireQ = 0; t.skillQ = 0;
-  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.invuln = 0; t.ai = null; t.portLock = -1; t.snare = 0; t.chill = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0;
+  t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.invuln = 0; t.ai = null; t.portLock = -1; t.snare = 0; t.chill = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0; t.armor = undefined; t.armorCd = 0; t.armorGrace = 0;
   if (isZed(t.id)) { t.inv = 0; t.hp = C.ZED_HP; t.stun = 0.3; t.dash = 0; t.dcool = 0; }
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
   sfx.spawn(); netEv('spawn', t.id, r2(t.x), r2(t.y));
@@ -2164,7 +2183,7 @@ function useSkill(t) {
       if (!o.alive || friendOf(t.id, o.id) || isInvuln(o)) continue;
       if (Math.hypot(o.x - t.x, o.y - t.y) <= R) {
         if (o.shield > 0) o.shield = 0;
-        else { o.gat = 0; o.charge = 0; o.stun = Math.max(o.stun, 1.35); }
+        else { o.gat = 0; o.charge = 0; o.stun = Math.max(o.stun, C.EMP_STUN); }
       }
     }
     for (let i = bullets.length - 1; i >= 0; i--) {
@@ -2190,15 +2209,15 @@ function useSkill(t) {
     t.dash = C.DASH_TIME; t.reveal = C.GRASS_REVEAL;
     sfx.launch(); netEv('sfx', 'launch', t.id);
   } else if (sk === 'recon') {
-    // Full-Arena Radar Scan: breaks enemy cloak, reveals hidden enemies & armed mines
-    t.scan = C.RADAR_TIME;
-    for (const o of tanks) {
-      if (!o.alive || friendOf(t.id, o.id)) continue;
-      if (o.cloak > 0) { o.cloak = 0; unstickFromWall(o, C.TANK_R); }
-      o.reveal = Math.max(o.reveal, C.RADAR_TIME);
-    }
-    radarFx(t.id, t.x, t.y);
-    sfx.radar(); netEv('radar', t.id, r2(t.x), r2(t.y));
+    // Radar ping: marks where every enemy, armed enemy mine and trap is at this moment. It does not follow them
+    // and does not break a cloak; the marks fade after C.RADAR_PING.
+    t.scan = C.RADAR_SPIN;
+    const marks = [];
+    for (const o of tanks) if (o.alive && !friendOf(t.id, o.id)) marks.push([r2(o.x), r2(o.y), 0]);
+    for (const mn of mines) if (mn.armed && !mn.boom && !friendOf(t.id, mn.owner)) marks.push([r2(mn.x), r2(mn.y), 1]);
+    for (const tp of traps) if (tp.armed && !friendOf(t.id, tp.owner)) marks.push([r2(tp.x), r2(tp.y), 2]);
+    radarFx(t.id, t.x, t.y); radarPing(t.id, marks);
+    sfx.radar(); netEv('radar', t.id, r2(t.x), r2(t.y), marks);
   } else if (sk === 'mortar') {
     // Mortar Lob: high-arc shell flying over walls to hit behind cover
     if (t.cloak > 0) { t.cloak = 0; unstickFromWall(t, C.TANK_R); }
@@ -2330,6 +2349,11 @@ function defuseMine(idx, t) {
   sfx.defuse();
   if (t) netEv('defuse', t.id, r2(mn.x), r2(mn.y));
 }
+let pings = [];
+function radarPing(owner, marks) {
+  if (HEADLESS || !Array.isArray(marks)) return;
+  for (const m of marks) pings.push({ x: +m[0], y: +m[1], kind: m[2] | 0, owner, life: C.RADAR_PING, max: C.RADAR_PING });
+}
 function radarFx(owner, x, y) {
   if (HEADLESS) return;
   const col = penOf(owner);
@@ -2389,8 +2413,10 @@ function usePower(t) {
 }
 
 // Every hit goes through here: a shield takes one hit in the tank's place.
+const ARMOR_COL = '#c9d6ea';
 function hit(t, by = -1) {
   if (isInvuln(t)) return false;                         // spawn grace or Titan invulnerability: untouchable
+  if ((t.armorGrace || 0) > 0) return false;             // armour just broke: the rest of that volley glances off
   if (isZed(t.id) && t.hp > 1) {                         // a zombie shrugs off the first shot, staggered
     t.hp--; t.stun = Math.max(t.stun, 0.3);
     rings.push({ x: t.x, y: t.y, r: 0.7, life: 0.3, max: 0.3, col: COL.zombie });
@@ -2410,6 +2436,18 @@ function hit(t, by = -1) {
     t.stun = C.STUN_TIME; t.stunImm = C.STUN_GUARD;
     rings.push({ x: t.x, y: t.y, r: 0.7, life: 0.3, max: 0.3, col: penOf(t.id) });
     sfx.block(); netEv('block', t.id, r2(t.x), r2(t.y));
+    return false;
+  }
+  if (t.armor > 0) {                                      // a Heavy's armour takes the hit: knocked back, not killed
+    t.armor = 0; t.armorCd = C.ARMOR_REGEN; t.armorGrace = C.ARMOR_GRACE; t.gat = 0;
+    let ax = -Math.cos(t.angle), ay = -Math.sin(t.angle);
+    const src = tanks[by];
+    if (src && src !== t) { const dx = t.x - src.x, dy = t.y - src.y, d = Math.hypot(dx, dy); if (d > 1e-3) { ax = dx / d; ay = dy / d; } }
+    const push = iceAt(t.x, t.y) ? 1 : C.ARMOR_PUSH;
+    t.svx = ax * push; t.svy = ay * push;
+    rings.push({ x: t.x, y: t.y, r: 0.75, life: 0.35, max: 0.35, col: ARMOR_COL });
+    burst(t.x, t.y, 10, ARMOR_COL, 2.4, 0.3, 0.04);
+    sfx.crack(); netEv('armorHit', t.id, r2(t.x), r2(t.y));
     return false;
   }
   kill(t, by);
@@ -3220,8 +3258,13 @@ function stepPhysics(dt, lethal, control) {
     t.invuln = Math.max(0, (t.invuln || 0) - dt);
     if (t.gat > 0) gatStep(t, dt, control);
     t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.snare = Math.max(0, t.snare - dt); t.chill = Math.max(0, (t.chill || 0) - dt); t.boost = Math.max(0, (t.boost || 0) - dt); if (t.snare > 0) t.dash = 0; t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt); t.scool = Math.max(0, t.scool - dt); t.cloak = Math.max(0, t.cloak - dt); t.scan = Math.max(0, t.scan - dt);
-    if (tanks.some(u => u !== t && u.alive && (u.scan || 0) > 0 && !friendOf(u.id, t.id))) { t.cloak = 0; t.reveal = Math.max(t.reveal, 0.2); }
     if (wasCloaked && !(t.cloak > 0)) unstickFromWall(t, C.TANK_R);
+    // a Heavy's armour: one hit only knocks it back; it grows back C.ARMOR_REGEN later
+    if (!isZed(t.id) && classOf(t.id).id === 'heavy') {
+      if (t.armor === undefined) t.armor = 1;
+      t.armorGrace = Math.max(0, (t.armorGrace || 0) - dt);
+      if (!t.armor && (t.armorCd = (t.armorCd || 0) - dt) <= 0) { t.armor = 1; t.armorCd = 0; rings.push({ x: t.x, y: t.y, r: 0.62, life: 0.3, max: 0.3, col: ARMOR_COL }); netEv('armor', t.id, r2(t.x), r2(t.y)); }
+    } else t.armor = 0;
     if (gunOn() && !t.power && !t.guided && t.charge <= 0 && t.cool <= 0) { const w = gunWeapon(t.id); if (w !== 'shot') t.power = w; }
     const px = t.x, py = t.y;
     if (t.reload > 0) { t.reload -= dt; if (t.reload <= 0) { t.reload = 0; t.ammo = clipSize(); sfx.reloaded(); netEv('sfx', 'reloaded', t.id); } }
@@ -3588,6 +3631,7 @@ function update(dt) {
   for (let i = beams.length - 1; i >= 0; i--) { beams[i].life -= dt; if (beams[i].life <= 0) beams.splice(i, 1); }
   for (let i = rings.length - 1; i >= 0; i--) { rings[i].life -= dt; if (rings[i].life <= 0) rings.splice(i, 1); }
   for (let i = radars.length - 1; i >= 0; i--) { radars[i].life -= dt; if (radars[i].life <= 0) radars.splice(i, 1); }
+  for (let i = pings.length - 1; i >= 0; i--) { pings[i].life -= dt; if (pings[i].life <= 0) pings.splice(i, 1); }
   for (const k of pickups) k.age += dt;
   for (const st of structs) st.flash = Math.max(0, st.flash - dt);
   if (state === 'replay') stepReplay(dt); else if (rpPrev >= 0) { rpPrev = -1; rpParts = []; rpRings = []; rpT = 0; }
@@ -4282,7 +4326,7 @@ function buildSnap() {
     hl: hl ? [r2(hl.t), r2(hl.age), hl.v, hl.k, hl.b, hl.n, hl.touch ? 1 : 0, hl.goal] : null,
     pt: play && potatoOn() ? [pot.holder, r1(pot.fuse)] : null, bl: play && ball ? [r2(ball.x), r2(ball.y)] : null, gb: goalBy,
     rp: state === 'replay' && rp ? [rp.from, rp.to, rp.dur] : null,
-    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0) | (t.cloak > 0 ? 128 : 0) | ((t.chill || 0) > 0 ? 256 : 0),
+    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0) | (t.cloak > 0 ? 128 : 0) | ((t.chill || 0) > 0 ? 256 : 0) | (t.armor > 0 ? 512 : 0),
       shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0, t.dcool > 0 ? r1(t.dcool) : 0, t.scool > 0 ? r1(t.scool) : 0, t.scan > 0 ? r1(t.scan) : 0, t.snare > 0 ? r1(t.snare) : 0, t.invuln > 0 ? r1(t.invuln) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.he ? 3 : b.heavy ? 4 : b.rivet ? 5 : b.chill ? 6 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
@@ -4696,7 +4740,7 @@ function applyDiscrete(g, dt) {
   if ((g.r !== lastRound || g.m !== lastMap) && st !== 'guestWait') {
     lastRound = g.r; lastMap = g.m;
     loadMap(g.m | 0);
-    marks = []; particles = []; beams = []; rings = []; radars = []; traps = []; mortars = []; barricades = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
+    marks = []; particles = []; beams = []; rings = []; radars = []; pings = []; traps = []; mortars = []; barricades = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
     rec.frames = []; rec.tick = 0; rp = null;
     const me = Array.isArray(g.T) && g.T[mySeat];
     if (Array.isArray(me) && tanks[mySeat]) { tanks[mySeat].x = me[0]; tanks[mySeat].y = me[1]; tanks[mySeat].alive = !!(me[3] & 1); }
@@ -4790,8 +4834,12 @@ function playEvent(e) {
     const col = pen(e[2]);
     rings.push({ x: e[3], y: e[4], r: 2.6, life: 0.45, max: 0.45, col });
     burst(e[3], e[4], 18, col, 3.2, 0.35, 0.045); sfx.zap();
+  } else if (kind === 'armorHit' || kind === 'armor') {
+    const hitNow = kind === 'armorHit';
+    rings.push({ x: e[3], y: e[4], r: hitNow ? 0.75 : 0.62, life: hitNow ? 0.35 : 0.3, max: hitNow ? 0.35 : 0.3, col: ARMOR_COL });
+    if (hitNow) { burst(e[3], e[4], 10, ARMOR_COL, 2.4, 0.3, 0.04); sfx.crack(); }
   } else if (kind === 'radar') {
-    radarFx(e[2], e[3], e[4]); sfx.radar();
+    radarFx(e[2], e[3], e[4]); radarPing(e[2], e[5]); sfx.radar();
   } else if (kind === 'bunker') {
     rings.push({ x: e[3], y: e[4], r: e[5] ? 1.05 : 0.65, life: e[5] ? 0.42 : 0.3, max: e[5] ? 0.42 : 0.3, col: pen(e[2]) });
     if (e[5]) burst(e[3], e[4], 12, pen(e[2]), 2.2, 0.32, 0.045);
@@ -4866,7 +4914,7 @@ function applyEntities(a, b, k, dt) {
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
     t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0; t.inv = +q[11] || 0;
-    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.chill = q[3] & 256 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0; t.scan = +q[14] || 0; t.snare = +q[15] || 0; t.invuln = +q[16] || 0;
+    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.chill = q[3] & 256 ? 1 : 0; t.armor = q[3] & 512 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0; t.scan = +q[14] || 0; t.snare = +q[15] || 0; t.invuln = +q[16] || 0;
     t.laserPath = t.charge > 0 ? tracePath(t.x, t.y, t.angle) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -5750,6 +5798,12 @@ function drawMinimap() {
       ctx.beginPath(); ctx.arc(mx0(rd.x), my0(rd.y), rad, 0, Math.PI * 2); ctx.stroke();
     }
   }
+  for (const pg of pings) {
+    const eye = viewer();
+    if (!(eye < 0 || friendOf(eye, pg.owner))) continue;
+    ctx.globalAlpha = 0.9 * Math.min(1, pg.life / pg.max * 1.6); ctx.strokeStyle = penOf(pg.owner); ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.arc(mx0(pg.x), my0(pg.y), Math.max(2.5, cs * (pg.kind === 0 ? 0.5 : 0.3)), 0, Math.PI * 2); ctx.stroke();
+  }
 
   for (const mn of mines) {
     const a = mineAlpha(mn);
@@ -6105,7 +6159,6 @@ function mineAlpha(mn) {
   if (eye < 0) rest = 0.1;
   else if (friendOf(eye, mn.owner)) rest = 0.5;
   else { const me = tanks[eye]; if (me && me.alive && Math.hypot(me.x - mn.x, me.y - mn.y) < C.MINE_SEE) rest = 0.85; }
-  if (tanks.some(u => u.alive && (u.scan || 0) > 0 && (eye < 0 ? !friendOf(u.id, mn.owner) : friendOf(eye, u.id)))) rest = Math.max(rest, 0.9);
   if (tanks.some(u => u.alive && !isZed(u.id) && classOf(u.id).id === 'engineer' && !friendOf(u.id, mn.owner) && (eye < 0 || friendOf(eye, u.id)) && Math.hypot(u.x - mn.x, u.y - mn.y) < C.MINE_SEE * 1.8)) rest = Math.max(rest, 0.9);
   return Math.max(rest, fade);
 }
@@ -6132,11 +6185,9 @@ function trapAlpha(tp) {
   if (replayView) return 0.9;
   const eye = viewer();
   if (eye < 0) {
-    if (tanks.some(u => u.alive && (u.scan || 0) > 0 && !friendOf(u.id, tp.owner))) return 0.85;
     return 0;
   }
   if (friendOf(eye, tp.owner)) return tp.armed ? 0.44 : 0.28;
-  if (tanks.some(u => u.alive && (u.scan || 0) > 0 && friendOf(eye, u.id))) return 0.85;
   return 0;
 }
 function drawTrap(tp, alpha = 1) {
@@ -6225,6 +6276,11 @@ function drawTank(t) {
   }
   ctx.rotate(t.angle);
   const L = 0.64 * P, W = 0.52 * P, lw = Math.max(1.5, P * 0.04);
+  if (t.armor > 0 && !zom) {                             // a Heavy's armour: four steel plates around the hull
+    ctx.save(); ctx.strokeStyle = ARMOR_COL; ctx.lineWidth = Math.max(2, P * 0.06); ctx.lineCap = 'round'; ctx.globalAlpha = 0.85 * cAlpha;
+    for (let i = 0; i < 4; i++) { const a0 = i * Math.PI / 2 + Math.PI / 4; ctx.beginPath(); ctx.arc(0, 0, P * 0.5, a0 - 0.5, a0 + 0.5); ctx.stroke(); }
+    ctx.restore(); ctx.globalAlpha = cAlpha;
+  }
   ctx.lineJoin = 'round';
   // treads, with cleats (styled per skin)
   if (sk === 'heavy' || sk === 'titan') {
@@ -7168,7 +7224,7 @@ function netItems() {
       slots.forEach((txt, i) => items.push({ kind: 'skinslot', v: i, text: txt, on: skinSlot === i, x: x0 + i * (sw + g), y: y(1.65) - sh / 2, w: sw, h: sh }));
     }
     const cols = SKINS.length > 8 ? 3 : 2, rows = Math.ceil(SKINS.length / cols);
-    const cw = cols === 3 ? U * 3.25 : U * 4.5, ch = cols === 3 ? (rows > 3 ? U * 1.62 : U * 2.08) : (rows > 3 ? U * 1.42 : U * 1.65);
+    const cw = cols === 3 ? U * 3.25 : U * 4.5, ch = cols === 3 ? (rows > 3 ? U * 1.46 : U * 2.08) : (rows > 3 ? U * 1.42 : U * 1.65);
     const gx = cols === 3 ? U * 0.22 : U * 0.35, gy = cols === 3 ? (rows > 3 ? U * 0.18 : U * 0.2) : (rows > 3 ? U * 0.24 : U * 0.32);
     const x0 = cx - (cw * cols + gx * (cols - 1)) / 2;
     const y0 = y(skinBack === 'title' ? (cols === 3 ? (rows > 3 ? 2.1 : 2.15) : rows > 3 ? 2.25 : 2.45) : (cols === 3 ? (rows > 3 ? 1.82 : 1.88) : rows > 3 ? 1.95 : 2.15));
@@ -7277,7 +7333,7 @@ function drawSkins(accent) {
           x: (tall ? it.x + it.w * 0.5 : it.x + it.h * (narrow ? 0.48 : 0.58)) / P,
           y: (tall ? it.y + it.h * 0.3 : it.y + it.h * 0.5) / P,
           angle: ang, id: -1, skin: it.skin.id, pen: previewCol,
-          inv: 0, shield: 0, power: null, recoil: 0, stun: 0, gat: 0
+          inv: 0, shield: 0, power: null, recoil: 0, stun: 0, gat: 0, armor: it.skin.id === 'heavy' ? 1 : 0
         });
       } finally { P = savedP; }
       if (tall) {
@@ -7296,6 +7352,14 @@ function drawSkins(accent) {
     } else if (it.kind === 'sback') {
       drawChip(it, false, previewCol);
     }
+  }
+  // the chosen one, in Chinese: what it does, and who it beats / fears
+  const picks = items.filter(i => i.kind === 'skinpick'), sel = picks.find(i => i.on), back = items.find(i => i.kind === 'sback');
+  const zh = sel && SKIN_ZH[sel.skin.id];
+  if (zh && back) {
+    const top = Math.max(...picks.map(i => i.y + i.h)), gap = back.y - top, fs = clamp(gap * 0.27, U * 0.2, U * 0.3), mw = AW - U * 0.3;
+    label(`${sel.skin.name}：${zh.d}`, cx, top + gap * 0.3, fs, ink, FONT_B, 0.95, 'center', mw);
+    label(`克制 ${zh.good}　·　怕 ${zh.bad}`, cx, top + gap * 0.7, fs, previewCol, FONT_B, 0.95, 'center', mw);
   }
 }
 const MODE_SHORT = { classic: 'Classic', teams: 'Teams', dm: 'Deathm.', hill: 'Hill', base: 'Base', zombie: 'Infect.', potato: 'Potato', gun: 'Gun', soccer: 'Soccer' };
@@ -7556,9 +7620,8 @@ function render() {
   for (const mn of mines) {
     const a = mineAlpha(mn);
     if (a > 0) drawMine(mn, a);
-    const ping = mn.armed && tanks.find(u => u.alive && (u.scan || 0) > 0 && !friendOf(u.id, mn.owner) && (eye < 0 || friendOf(eye, u.id)));
-    const spotEng = !ping && mn.armed && tanks.find(u => u.alive && !isZed(u.id) && classOf(u.id).id === 'engineer' && !friendOf(u.id, mn.owner) && (eye < 0 || friendOf(eye, u.id)) && Math.hypot(u.x - mn.x, u.y - mn.y) < C.MINE_SEE * 1.8);
-    const marker = ping || spotEng;
+    const spotEng = mn.armed && tanks.find(u => u.alive && !isZed(u.id) && classOf(u.id).id === 'engineer' && !friendOf(u.id, mn.owner) && (eye < 0 || friendOf(eye, u.id)) && Math.hypot(u.x - mn.x, u.y - mn.y) < C.MINE_SEE * 1.8);
+    const marker = spotEng;
     if (marker) {
       const pulse = REDUCED ? 0 : 0.05 * Math.sin(performance.now() / 110);
       ctx.save(); ctx.strokeStyle = penOf(marker.id); ctx.lineWidth = Math.max(1.5, P * 0.038); ctx.globalAlpha = 0.85;
@@ -7569,14 +7632,18 @@ function render() {
   for (const tp of traps) {
     const a = trapAlpha(tp);
     if (a > 0) drawTrap(tp, a);
-    const ping = tp.armed && tanks.find(u => u.alive && (u.scan || 0) > 0 && !friendOf(u.id, tp.owner) && (eye < 0 || friendOf(eye, u.id)));
-    if (ping) {
-      const pulse = REDUCED ? 0 : 0.05 * Math.sin(performance.now() / 110);
-      ctx.save(); ctx.strokeStyle = penOf(ping.id); ctx.lineWidth = Math.max(1.5, P * 0.038); ctx.globalAlpha = 0.85;
-      ctx.setLineDash([P * 0.08, P * 0.06]); ctx.beginPath(); ctx.arc(tp.x * P, tp.y * P, P * (0.28 + pulse), 0, Math.PI * 2); ctx.stroke();
-      ctx.setLineDash([]); ctx.restore(); ctx.globalAlpha = 1;
-    }
   }
+  // radar marks: where things were when the scan went out, for the scanner's side only
+  for (const pg of pings) {
+    if (!(eye < 0 || friendOf(eye, pg.owner))) continue;
+    const k = pg.life / pg.max, rad = P * (pg.kind === 0 ? 0.56 : 0.3), col = penOf(pg.owner);
+    ctx.save(); ctx.translate(pg.x * P, pg.y * P);
+    ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.5, P * 0.042); ctx.globalAlpha = 0.9 * Math.min(1, k * 1.6);
+    ctx.setLineDash([P * 0.12, P * 0.1]); ctx.beginPath(); ctx.arc(0, 0, rad, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    if (pg.kind === 0) for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; ctx.beginPath(); ctx.moveTo(Math.cos(a) * rad * 0.8, Math.sin(a) * rad * 0.8); ctx.lineTo(Math.cos(a) * rad * 1.2, Math.sin(a) * rad * 1.2); ctx.stroke(); }
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
   if (rsv) drawShotPath();
   if (ball && matchOn) drawBall(ball);
 
@@ -7640,16 +7707,6 @@ function render() {
   }
   if (!NET_SCREENS.includes(state)) for (const t of tanks) if (t.alive && seenBy(eye, t)) {
     drawTank(t); if (settings.terrain && !replayView) grassOver(t);
-    const scannedBy = t.reveal > 0 && tanks.find(u => u !== t && u.alive && (u.scan || 0) > 0 && !friendOf(u.id, t.id) && (eye < 0 || friendOf(eye, u.id)));
-    if (scannedBy) {
-      const rCol = penOf(scannedBy.id), rot = REDUCED ? 0 : performance.now() / 360, rad = P * 0.56;
-      ctx.save(); ctx.translate(t.x * P, t.y * P); ctx.rotate(rot);
-      ctx.strokeStyle = rCol; ctx.lineWidth = Math.max(1.5, P * 0.042); ctx.globalAlpha = 0.88;
-      ctx.setLineDash([P * 0.16, P * 0.12]); ctx.beginPath(); ctx.arc(0, 0, rad, 0, Math.PI * 2); ctx.stroke();
-      ctx.setLineDash([]);
-      for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; ctx.beginPath(); ctx.moveTo(Math.cos(a) * rad * 0.82, Math.sin(a) * rad * 0.82); ctx.lineTo(Math.cos(a) * rad * 1.15, Math.sin(a) * rad * 1.15); ctx.stroke(); }
-      ctx.restore(); ctx.globalAlpha = 1;
-    }
     if (potatoOn() && t.id === potHolder() && matchOn) drawPotato(t);
   }
   if (state === 'countdown' && !twoSided() && tanks[mySeat]) {
@@ -7964,7 +8021,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; },
+  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; },
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,

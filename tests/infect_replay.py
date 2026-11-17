@@ -89,8 +89,8 @@ async def main():
     check(r['hp1'] == [True, 1] and r['hp2'] is False, f'a zombie takes two shots {r["hp1"]} {r["hp2"]}')
     check(r['back'][0] and r['back'][1] == 1 and r['back'][2] == 0, f'a zombie comes back, still a zombie, without a shield {r["back"]}')
     check(r['turned'] == [1, True, True], f'touching a survivor turns it on the spot {r["turned"]}')
-    # a survivor's own stray shot turns it too, and its shots go with it
-    r = await ev(L, """() => { const T = __tank; const H = T.tanksNow.find(t => !T.zed[t.id]); if (!H) return null; T.fire(H); const n = T.bullets.filter(b => b.owner === H.id).length; H.inv = 0; T.hit(H, H.id); T.stepPhysics(1 / 120, true, false);
+    # a survivor's own stray shot turns it too, and its shots go with it (armour off: a Heavy's would take the hit)
+    r = await ev(L, """() => { const T = __tank; const H = T.tanksNow.find(t => !T.zed[t.id]); if (!H) return null; T.fire(H); const n = T.bullets.filter(b => b.owner === H.id).length; H.inv = 0; H.armor = 0; H.armorGrace = 0; T.hit(H, H.id); T.stepPhysics(1 / 120, true, false);
       return [n, T.zed[H.id], H.alive, T.bullets.filter(b => b.owner === H.id).length]; }""")
     check(r and r[0] >= 1 and r[1] == 1 and r[2] is False and r[3] == 0, f'own shot: turned, down, its shots gone {r}')
     # dash

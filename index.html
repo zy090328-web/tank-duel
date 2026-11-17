@@ -1587,9 +1587,13 @@ function resolveCircle(o, R, wet = false, phase = false) {
 }
 
 // If a wall-phasing tank uncloaks with its centre embedded inside a wall cell, eject it to the nearest open spot.
+// This runs every step for every tank. Pressed into a corner, a tank is often left touching a wall by a hair
+// after resolveCircle; that is normal sliding, and the next step settles it. Only a tank really inside a wall
+// (deeper than UNSTICK_SLACK) is moved to the middle of the nearest open cell, or it would jump and stick.
+const UNSTICK_SLACK = 0.08;
 function unstickFromWall(o, R, phase = false) {
   resolveCircle(o, R, true, phase);
-  if (!circleHitsWall(o.x, o.y, R, true, false, phase)) return;
+  if (!circleHitsWall(o.x, o.y, R - UNSTICK_SLACK, true, false, phase)) return;
   const sc = clamp(Math.floor(o.x), 0, COLS - 1), sr = clamp(Math.floor(o.y), 0, ROWS - 1);
   let best = null, bd = Infinity;
   for (let rad = 1; rad <= Math.max(COLS, ROWS); rad++) {

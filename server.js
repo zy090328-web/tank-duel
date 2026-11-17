@@ -46,7 +46,7 @@ function addResult(r) {
   if (!r || typeof r !== 'object' || !Array.isArray(r.p) || r.p.length < 2 || r.p.length > 5) return false;
   const id = String(r.id || '').slice(0, 16);
   if (!id || seenIds.has(id)) return false;
-  const p = r.p.map(q => ({ n: cleanName(q && q.n), w: !!(q && q.w), k: count(q && q.k), d: count(q && q.d), bot: !!(q && q.bot) }));
+  const p = r.p.map(q => ({ n: cleanName(q && q.n), w: !!(q && q.w), k: count(q && q.k), d: count(q && q.d), bot: !!(q && q.bot), s: /^[a-z]{1,12}$/.test(String(q && q.s)) ? String(q.s) : '' }));
   if (p.filter(q => q.n && !q.bot).length < 2) return false;   // it takes two people with names
   seenIds.set(id, Date.now());
   for (const [k, t] of seenIds) if (Date.now() - t > 3600e3) seenIds.delete(k);
@@ -57,7 +57,7 @@ function addResult(r) {
 }
 // totals per player (all time), the week's leaders, and who has beaten whom
 function boardStats() {
-  const weekAgo = Date.now() - 7 * 864e5, all = new Map(), week = new Map(), h2h = {};
+  const weekAgo = Date.now() - 7 * 864e5, all = new Map(), week = new Map(), h2h = {}, heroes = new Map();
   const key = n => n.toLowerCase();
   const add = (map, q, m) => {
     const o = map.get(key(q.n)) || { name: q.n, games: 0, wins: 0, kills: 0, deaths: 0, modes: {} };
@@ -66,7 +66,10 @@ function boardStats() {
   };
   for (const m of board.matches) {
     const people = m.p.filter(q => q.n && !q.bot);
-    for (const q of people) { add(all, q, m); if (m.t >= weekAgo) add(week, q, m); }
+    for (const q of people) {
+      add(all, q, m); if (m.t >= weekAgo) add(week, q, m);
+      if (q.s) { const h = heroes.get(q.s) || { id: q.s, games: 0, wins: 0, kills: 0, deaths: 0 }; h.games++; if (q.w) h.wins++; h.kills += q.k; h.deaths += q.d; heroes.set(q.s, h); }
+    }
     for (const a of people) if (a.w) for (const b of people) if (!b.w && key(a.n) !== key(b.n)) {
       const x = h2h[key(a.n)] || (h2h[key(a.n)] = {});
       x[key(b.n)] = (x[key(b.n)] || 0) + 1;
@@ -79,7 +82,8 @@ function boardStats() {
   const most = (f, label) => { const o = top(f); return o && f(o) > 0 ? { name: o.name, n: Math.round(f(o) * 100) / 100, label } : null; };
   const titles = [most(o => o.wins, 'most wins'), most(o => o.kills, 'most kills'),
     most(o => o.games >= 5 ? o.kills / Math.max(1, o.deaths) : 0, 'best K/D'), most(o => o.games, 'most games')].filter(Boolean);
-  return { players, titles, h2h, total: board.matches.length };
+  const heroList = [...heroes.values()].sort((a, b) => b.games - a.games || b.wins - a.wins);
+  return { players, titles, h2h, heroes: heroList, total: board.matches.length };
 }
 
 /* ---------- http: the page, and a marker that tells the page a relay is here ---------- */

@@ -1013,6 +1013,11 @@ try { settings = validSettings(JSON.parse(localStorage.getItem('tankduel-setting
 function saveSettings() { try { localStorage.setItem('tankduel-settings', JSON.stringify(settings)); } catch (e) {} }
 let muted = false;
 try { muted = localStorage.getItem('tankduel-muted') === '1'; } catch (e) {}
+// weather is only something to look at: the host picks it each round for everyone; each screen can switch it off
+const WEATHERS = ['clear', 'rain', 'mist', 'embers'];
+let weather = 'clear', weatherOn = true;
+try { weatherOn = localStorage.getItem('tankduel-weather') !== '0'; } catch (e) {}
+function setWeatherOn(v) { weatherOn = !!v; try { localStorage.setItem('tankduel-weather', v ? '1' : '0'); } catch (e) {} }
 let myName = '', nameOpen = false, nameSentAt = 0;
 try { myName = String(localStorage.getItem('tankduel-name') || '').replace(/[<>]/g, '').trim().slice(0, 12); } catch (e) {}
 const nameBox = document.getElementById('namebox'), nameInput = document.getElementById('nameinput'), nameOk = document.getElementById('nameok');
@@ -1756,6 +1761,7 @@ function resetEntities() {
   pickupTimer = C.PICKUP_FIRST; emptyT = 0; gatT = C.GAT_FIRST;
   roundT = 0; sdClosed = 0; sdStarted = false;
   cam.init = false; cam.lastState = ''; updateCamera(0, true);
+  if (mode !== 'guest') weather = pickWeather();
 }
 // every match gets an id, so the server can tell a result it already has
 let matchId = '';
@@ -3734,7 +3740,7 @@ function update(dt) {
   for (let i = rings.length - 1; i >= 0; i--) { rings[i].life -= dt; if (rings[i].life <= 0) rings.splice(i, 1); }
   for (let i = radars.length - 1; i >= 0; i--) { radars[i].life -= dt; if (radars[i].life <= 0) radars.splice(i, 1); }
   for (let i = pings.length - 1; i >= 0; i--) { pings[i].life -= dt; if (pings[i].life <= 0) pings.splice(i, 1); }
-  stepDecals(dt);
+  stepDecals(dt); stepWeather(dt);
   for (const k of pickups) k.age += dt;
   for (const st of structs) st.flash = Math.max(0, st.flash - dt);
   if (state === 'replay') stepReplay(dt); else if (rpPrev >= 0) { rpPrev = -1; rpParts = []; rpRings = []; rpT = 0; }
@@ -4426,7 +4432,7 @@ function buildSnap() {
     set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0, settings.terrain ? 1 : 0, settings.mut],
     mu: mutNow,
     tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel), sk: play ? skins : seats.map(seatSkin),
-    hz: hillHolder, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h, v.b | 0]) : null,
+    hz: hillHolder, wx: weather, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h, v.b | 0]) : null,
     bw: baseWinner,
     zd: play && infOn() ? zed : null, iw: infWin, rc: r2(rec.t),
     hl: hl ? [r2(hl.t), r2(hl.age), hl.v, hl.k, hl.b, hl.n, hl.touch ? 1 : 0, hl.goal] : null,
@@ -4826,6 +4832,7 @@ function applyDiscrete(g, dt) {
   if (g.st === 'hostWait' && mySeat >= 0 && (names[mySeat] || '') !== myName && performance.now() - nameSentAt > 1000) { nameSentAt = performance.now(); toHost({ n: myName }); }
   if (g.st === 'hostWait' && mySeat >= 0 && (skins[mySeat] || 'classic') !== mySkin && performance.now() - skinSentAt > 1000) { skinSentAt = performance.now(); toHost({ sk: mySkin }); }
   hillHolder = typeof g.hz === 'number' ? g.hz : -1;
+  weather = WEATHERS.includes(g.wx) ? g.wx : 'clear';
   if (Array.isArray(g.S)) stats = g.S.map(a => Array.isArray(a) ? { k: a[0] | 0, d: a[1] | 0, s: a[2] | 0, h: a[3] | 0, b: a[4] | 0 } : { k: 0, d: 0, s: 0, h: 0, b: 0 });
   if (typeof g.bw === 'number') baseWinner = g.bw;
   zed = Array.isArray(g.zd) ? g.zd.map(v => v ? 1 : 0) : [];
@@ -7165,6 +7172,124 @@ function stepDecals(dt) {
   }
   for (let i = smoke.length - 1; i >= 0; i--) { const p = smoke[i]; p.life -= dt; if (p.life <= 0) { smoke.splice(i, 1); continue; } p.x += p.vx * dt; p.y += p.vy * dt; p.r += dt * 0.28; }
 }
+/* ---------- weather: rain, ground mist or drifting embers, a third of rounds clear ----------
+   Nothing here touches play: mist lies on the floor under everything that moves, rain and embers are thin and
+   faint. Rain and embers are drawn in screen space (they fall and rise on the screen, whichever way the arena is
+   turned); splashes and mist belong to the floor. */
+function pickWeather() {
+  if (Math.random() < 1 / 3) return 'clear';
+  let wet = 0, grassy = 0;
+  for (let i = 0; i < COLS * ROWS; i++) { if (water[i]) wet++; if (grass[i]) grassy++; }
+  const cells = COLS * ROWS, w = {
+    rain: 1 + (settings.terrain ? wet / cells * 12 : 0),
+    mist: 1 + (settings.terrain ? grassy / cells * 8 : 0),
+    embers: 0.7 + (barrels.length ? 2.2 : 0) + (structs.length ? 0.8 : 0)
+  };
+  let r = Math.random() * (w.rain + w.mist + w.embers);
+  for (const k of ['rain', 'mist', 'embers']) { if ((r -= w[k]) < 0) return k; }
+  return 'rain';
+}
+const weatherShown = () => weatherOn && !REDUCED && weather !== 'clear' && !HEADLESS;
+let splashes = [], embers = [], rainSeeds = null, rainNode = null;
+function stepWeather(dt) {
+  const live = weatherShown() && (state === 'play' || state === 'ending' || state === 'countdown' || state === 'result');
+  rainSound(live && weather === 'rain');
+  if (!live) { splashes.length = 0; embers.length = 0; return; }
+  if (weather === 'rain') {
+    // splashes on the floor where the camera looks
+    let c0 = 0, r0 = 0, c1 = COLS, r1 = ROWS;
+    if (camOn()) { const hw = AW / P / 2, hh = AH / P / 2; c0 = Math.max(0, cam.x - hw); c1 = Math.min(COLS, cam.x + hw); r0 = Math.max(0, cam.y - hh); r1 = Math.min(ROWS, cam.y + hh); }
+    const rate = (c1 - c0) * (r1 - r0) * 0.12;
+    for (let n = rate * dt + Math.random(); n >= 1; n--) {
+      const x = c0 + Math.random() * (c1 - c0), y = r0 + Math.random() * (r1 - r0), c = Math.floor(x), r = Math.floor(y);
+      if (walls[r] && walls[r][c]) continue;
+      splashes.push({ x, y, life: 0.4 });
+    }
+    for (let i = splashes.length - 1; i >= 0; i--) if ((splashes[i].life -= dt) <= 0) splashes.splice(i, 1);
+  } else splashes.length = 0;
+  if (weather === 'embers') {
+    for (let n = 16 * dt + Math.random(); n >= 1 && embers.length < 70; n--)
+      embers.push({ x: AX + Math.random() * AW, y: AY + AH * (0.15 + Math.random() * 0.85), vx: P * (0.1 + Math.random() * 0.15), vy: -P * (0.35 + Math.random() * 0.4), life: 2 + Math.random() * 1.6, max: 3.6, ph: Math.random() * 6.3, s: P * (0.025 + Math.random() * 0.03) });
+    for (let i = embers.length - 1; i >= 0; i--) {
+      const e = embers[i];
+      if ((e.life -= dt) <= 0 || e.y < AY - 10) { embers.splice(i, 1); continue; }
+      e.x += (e.vx + Math.sin(e.ph + e.life * 2.2) * P * 0.12) * dt; e.y += e.vy * dt;
+    }
+  } else embers.length = 0;
+}
+// on the floor: a wet sheen and splashes, or banks of mist drifting across
+function drawWeatherGround() {
+  if (!weatherShown()) return;
+  const t = performance.now() / 1000;
+  if (weather === 'rain') {
+    ctx.globalAlpha = 0.07; ctx.fillStyle = '#20305a'; ctx.fillRect(0, 0, COLS * P, ROWS * P);
+    ctx.strokeStyle = '#b6ccff'; ctx.lineWidth = Math.max(1, P * 0.018);
+    for (const sp of splashes) {
+      const k = 1 - sp.life / 0.4, r = P * (0.04 + 0.13 * k);
+      ctx.globalAlpha = 0.32 * (1 - k);
+      ctx.beginPath(); ctx.ellipse(sp.x * P, sp.y * P, r, r * 0.6, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+  } else if (weather === 'mist') {
+    const n = Math.max(8, Math.round(COLS * ROWS / 12)), sprite = glowSprite('#9aaee0'), rnd = mulberry32(400 + mapId);
+    for (let i = 0; i < n; i++) {
+      const x0 = rnd() * (COLS + 8), y0 = rnd() * ROWS, sp = 0.12 + rnd() * 0.12, rad = 2.2 + rnd() * 1.8, ph = rnd() * 6.3;
+      const x = ((x0 + t * sp) % (COLS + 8)) - 4, y = y0 + Math.sin(t * 0.08 + ph) * 0.7;
+      if (camOn() && (Math.abs(x - cam.x) > AW / P / 2 + rad || Math.abs(y - cam.y) > AH / P / 2 + rad)) continue;
+      ctx.globalAlpha = 0.3 + 0.08 * Math.sin(t * 0.21 + ph);
+      ctx.drawImage(sprite, (x - rad) * P, (y - rad * 0.6) * P, rad * 2 * P, rad * 1.2 * P);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+// in the air, over the arena: rain falling, embers rising
+function drawWeatherAir() {
+  if (!weatherShown() || (weather !== 'rain' && weather !== 'embers')) return;
+  ctx.save(); ctx.beginPath(); ctx.rect(AX, AY, AW, AH); ctx.clip();
+  const t = performance.now() / 1000;
+  if (weather === 'rain') {
+    const N = Math.min(170, Math.round(AW * AH / (P * P) * 1.0));
+    if (!rainSeeds || rainSeeds.length < N * 3) { const rnd = mulberry32(99); rainSeeds = new Float32Array(170 * 3); for (let i = 0; i < rainSeeds.length; i++) rainSeeds[i] = rnd(); }
+    const L = P * 0.42, tilt = 0.22, H = AH + L;
+    ctx.strokeStyle = '#aec4ff'; ctx.lineWidth = Math.max(1, P * 0.016); ctx.globalAlpha = 0.24; ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const sx = rainSeeds[i * 3], sy = rainSeeds[i * 3 + 1], sv = rainSeeds[i * 3 + 2];
+      const y = ((sy * H + t * P * (9 + sv * 5)) % H) - L;
+      const x = AX + (((sx * AW + y * tilt) % AW) + AW) % AW;
+      ctx.moveTo(x, AY + y); ctx.lineTo(x + L * tilt, AY + y + L);
+    }
+    ctx.stroke();
+  } else {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const e of embers) {
+      const k = e.life / e.max, a = Math.min(1, k * 2) * (0.55 + 0.45 * Math.sin(t * 9 + e.ph));
+      const col = k > 0.5 ? '#ffc070' : '#ff7a3a';
+      ctx.globalAlpha = Math.max(0, a) * 0.5; ctx.drawImage(glowSprite(col), e.x - e.s * 4, e.y - e.s * 4, e.s * 8, e.s * 8);
+      ctx.globalAlpha = Math.max(0, a); ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.s, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+// soft steady rain under the game's sounds
+function rainSound(on) {
+  if (!actx || !noiseBuf || !bus) return;
+  on = on && !muted;
+  try {
+    if (on && !rainNode) {
+      const src = actx.createBufferSource(), hp = actx.createBiquadFilter(), lp = actx.createBiquadFilter(), g = actx.createGain();
+      src.buffer = noiseBuf; src.loop = true; hp.type = 'highpass'; hp.frequency.value = 900; lp.type = 'lowpass'; lp.frequency.value = 5200;
+      g.gain.setValueAtTime(0.0001, actx.currentTime); g.gain.linearRampToValueAtTime(0.05, actx.currentTime + 1.2);
+      src.connect(hp); hp.connect(lp); lp.connect(g); g.connect(bus); src.start();
+      rainNode = { src, g };
+    } else if (!on && rainNode) {
+      const n = rainNode; rainNode = null;
+      n.g.gain.cancelScheduledValues(actx.currentTime); n.g.gain.setValueAtTime(n.g.gain.value, actx.currentTime); n.g.gain.linearRampToValueAtTime(0.0001, actx.currentTime + 0.6);
+      n.src.stop(actx.currentTime + 0.7);
+    }
+  } catch (e) { rainNode = null; }
+}
 // a blast scorches the floor for the rest of the round
 function scorch(x, y, R) {
   if (HEADLESS || typeof document === 'undefined') return;
@@ -7243,10 +7368,10 @@ function switchSpots() {
   const inMatch = state !== 'title' && !NET_SCREENS.includes(state);
   if (land) {
     const size = Math.min(16, S * 0.09), y = LH - 16;
-    return { size, sound: { x: JX0, y }, quit: inMatch ? { x: FX0, y } : null };
+    return { size, sound: { x: JX0, y }, quit: inMatch ? { x: FX0, y } : null, weather: inMatch ? null : { x: FX0, y } };
   }
   const size = Math.min(17, S * 0.12), y = LH - 19;
-  return { size, sound: { x: inMatch ? LW / 2 - 50 : LW / 2, y }, quit: inMatch ? { x: LW / 2 + 50, y } : null };
+  return { size, sound: { x: inMatch ? LW / 2 - 50 : LW / 2 - 60, y }, quit: inMatch ? { x: LW / 2 + 50, y } : null, weather: inMatch ? null : { x: LW / 2 + 60, y } };
 }
 // where the secondary active skill button sits on the fire side
 function skillSpot() {
@@ -7262,6 +7387,7 @@ function drawStrip(p, seat) {
   const edgeSwitches = () => {
     const sp = switchSpots();
     label(muted ? 'sound off' : 'sound on', sp.sound.x, sp.sound.y, sp.size, COL.graphite, FONT_B, 0.65);
+    if (sp.weather) label(weatherOn ? 'weather on' : 'weather off', sp.weather.x, sp.weather.y, sp.size, COL.graphite, FONT_B, 0.65);
     if (sp.quit) label(quitArm > 0 && performance.now() - quitArm < 2500 ? (online ? 'leave? tap again' : 'quit? tap again') : (online ? 'leave' : 'menu'), sp.quit.x, sp.quit.y, sp.size, COL.graphite, FONT_B, 0.65);
   };
   const t = tanks[seat];
@@ -7971,6 +8097,7 @@ function render() {
   }
   if (matchOn) drawDecals();
   for (const m of marks) drawMark(m);
+  if (matchOn && !rsv) drawWeatherGround();
   if (structs.length && matchOn) drawBase();
   const pad = matchOn ? gatPad() : null;
   if (pad && !pickups.some(k => k.type === 'gatling')) {
@@ -8138,6 +8265,7 @@ function render() {
   ctx.globalCompositeOperation = 'source-over'; ctx.lineCap = 'butt';
   ctx.globalAlpha = 1;
   ctx.restore();
+  if (matchOn && !rsv) drawWeatherAir();
   if (follow) {
     drawViewportFrame();
     if (matchOn && state !== 'matchEnd') drawMinimap();
@@ -8248,11 +8376,13 @@ canvas.addEventListener('pointerdown', e => {
   const sp = switchSpots(), near = (o, w) => o && Math.abs(f.x - o.x) < w && Math.abs(f.y - o.y) < 20;
   if (NET_SCREENS.includes(state)) {
     if (near(sp.sound, 46)) { setMuted(!muted); return; }
+    if (near(sp.weather, 52)) { setWeatherOn(!weatherOn); sfx.tick(); return; }
     const it = hitItem(netItems(), f); if (it) applyMenu(it);
     return;
   }
   // the small switches at the edge
   if (near(sp.sound, 46)) { setMuted(!muted); return; }
+  if (near(sp.weather, 52)) { setWeatherOn(!weatherOn); sfx.tick(); return; }
   if (near(sp.quit, 60)) {
     if (quitArm > 0 && performance.now() - quitArm < 2500) { if (mode !== 'local') forgetGame(); goMenu(); } else quitArm = performance.now();
     return;
@@ -8401,7 +8531,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get decoys() { return decoys; }, popDecoy,
+  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,

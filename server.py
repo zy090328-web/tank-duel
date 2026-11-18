@@ -266,32 +266,64 @@ class GameError(Exception):
 LUCKY_NAMES = ('zy', 'tps')     # 这两个名字的玩家，每手都被安排成牌最好的（朋友之间说好的玩法）
 
 
-def rig_deal(deck, lucky, others):
+def draw_bonus(h, flop):
+    """翻牌后有没有"看得见的机会"：同花听牌、两头顺听牌、或者拿到对子。返回 0 到 1。"""
+    cs = list(h) + list(flop)
+    r = [c_rank(c) for c in cs]
+    b = 0.0
+    for su in range(4):
+        n = sum(1 for c in cs if c_suit(c) == su)
+        if n >= 4 and any(c_suit(c) == su for c in h):
+            b = max(b, .8)
+    rs = set(r)
+    if 14 in rs:
+        rs.add(1)
+    for lo in range(1, 11):
+        have = sum(1 for x in range(lo, lo + 5) if x in rs)
+        if have >= 4 and any(c_rank(c) in range(lo, lo + 5) or (c_rank(c) == 14 and lo == 1) for c in h):
+            b = max(b, .6)
+    hr = [c_rank(c) for c in h]
+    fr = [c_rank(c) for c in flop]
+    if hr[0] == hr[1] or any(x in fr for x in hr):
+        b = max(b, .9)
+    if max(hr) > max(fr):
+        b = max(b, .35)
+    return b
+
+
+def rig_deal(deck, lucky, others, band=.4):
     """给 lucky（座位号列表，顺序随机）和 others 发底牌，并排好公共牌。
-    保证到河牌时：lucky[0] 严格大于 lucky[1]，再严格大于所有 others。返回 (底牌 dict, 剩余牌堆)。"""
+    保证到河牌时：lucky[0] 严格大于 lucky[1]，再严格大于所有 others。
+    others 不会拿到太差的牌：从"有机会"的牌里挑（起手牌好看、翻牌后有对子或听牌、最终牌力不低），只是最后输给 lucky。
+    band 是 others 从最有希望的牌里取前多少比例；取不到就放宽。返回 (底牌 dict, 剩余牌堆)。"""
+    import bisect
     deck = list(deck)
     burns = [deck.pop() for _ in range(3)]
     board = [deck.pop() for _ in range(5)]
     seats = lucky + others
 
     def ranked():
-        combos = [(eval7(list(h) + board), chen(list(h)), h) for h in itertools.combinations(deck, 2)]
-        fs = sorted(c[0] for c in combos)
-        cs = sorted(c[1] for c in combos)
-        import bisect
-        n = len(combos)
-        out = [(.75 * bisect.bisect_left(fs, f) / n + .25 * bisect.bisect_left(cs, c) / n + MC.random() * 1e-6, h)
-               for f, c, h in combos]
-        out.sort(key=lambda x: -x[0])
-        return [h for _, h in out]
+        raw = [(eval7(list(h) + board), chen(list(h)), draw_bonus(h, board[:3]), h) for h in itertools.combinations(deck, 2)]
+        n = len(raw)
+        fs = sorted(x[0] for x in raw)
+        cs = sorted(x[1] for x in raw)
+        strong, hope = [], []
+        for f, c, d, h in raw:
+            pf, pc = bisect.bisect_left(fs, f) / n, bisect.bisect_left(cs, c) / n
+            strong.append((.75 * pf + .25 * pc + MC.random() * 1e-6, h))
+            hope.append((.35 * pf + .3 * pc + .35 * d + MC.random() * 1e-6, h))
+        strong.sort(key=lambda x: -x[0])
+        hope.sort(key=lambda x: -x[0])
+        return [h for _, h in strong], [h for _, h in hope]
 
-    combos = ranked()
-    for t in range(1, 601):
+    strong, hope = ranked()
+    for t in range(1, 901):
+        bd = band if t <= 600 else 1.0       # 前 600 次要求 others 都有机会，实在凑不出来再放宽
         used, holes, ok = set(), {}, True
         for rank, s in enumerate(lucky):
             k = 5.0 if rank == 0 else 2.2
             for _ in range(20):
-                h = combos[min(len(combos) - 1, int(MC.random() ** k * len(combos)))]
+                h = strong[min(len(strong) - 1, int(MC.random() ** k * len(strong)))]
                 if h[0] not in used and h[1] not in used:
                     break
             else:
@@ -301,22 +333,31 @@ def rig_deal(deck, lucky, others):
             used.update(h)
         if not ok:
             continue
-        rest = [c for c in deck if c not in used]
-        MC.shuffle(rest)
+        top = max(1, int(len(hope) * bd))
         for s in others:
-            holes[s] = [rest.pop(), rest.pop()]
+            for _ in range(40):
+                h = hope[int(MC.random() ** 1.3 * top)] if bd < 1 else hope[MC.randrange(len(hope))]
+                if h[0] not in used and h[1] not in used:
+                    break
+            else:
+                ok = False
+                break
+            holes[s] = list(h)
+            used.update(h)
+        if not ok:
+            continue
         vals = [eval7(holes[s] + board) for s in seats]
-        # 座位顺序 = lucky[0], lucky[1], 其余人：必须依次严格递减，其余人只需都小于最后一个 lucky
         chain = vals[:len(lucky)]
         if all(chain[i] > chain[i + 1] for i in range(len(chain) - 1)) and all(chain[-1] > v for v in vals[len(lucky):]):
-            deck = rest
+            deck = [c for c in deck if c not in used]
+            MC.shuffle(deck)
             break
         if t % 60 == 0:      # 这副公共牌本身太强，别人怎么发都压不过：换一副
             deck = [r * 4 + s for r in range(2, 15) for s in range(4)]
             RNG.shuffle(deck)
             burns = [deck.pop() for _ in range(3)]
             board = [deck.pop() for _ in range(5)]
-            combos = ranked()
+            strong, hope = ranked()
     else:
         return None
     # 之后的 pop 顺序：烧、翻牌×3、烧、转牌、烧、河牌

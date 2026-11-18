@@ -6204,11 +6204,27 @@ function drawWalls(g, ox = AX, oy = AY, aw = AW, ah = AH, sDpr = dpr) {
   const same = (q, dr, dc) => { const sr = q.sr + dr, sc = q.sc + dc; return sc >= 0 && sr >= 0 && sc < COLS && sr < ROWS && kindAt.get(sr * COLS + sc) === q.kind; };
   const any = (q, dr, dc) => { const sr = q.sr + dr, sc = q.sc + dc; return sc >= 0 && sr >= 0 && sc < COLS && sr < ROWS && kindAt.has(sr * COLS + sc); };
   const X = q => ox + q.sc * P, Y = q => oy + q.sr * P;
-  const depth = { hard: P * 0.15, soft: P * 0.08, shut: P * 0.15 };
+  const depth = { hard: P * 0.3, soft: P * 0.14, shut: P * 0.3 };          // how tall each kind stands: its front face
   g.save(); g.beginPath(); g.rect(ox, oy, aw, ah); g.clip();
+  // a dark band on the floor where a block meets it, deepest at the foot of the front face, so blocks stand on the
+  // ground instead of floating over it (glass, letting light through, darkens less)
+  for (const q of cells) {
+    const x = X(q), y = Y(q), a = q.kind === 'soft' ? 0.45 : 1;
+    if (!any(q, 1, 0)) {
+      const gr = g.createLinearGradient(0, y + P, 0, y + P + P * 0.42);
+      gr.addColorStop(0, `rgba(0,0,0,${0.55 * a})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr; g.fillRect(x - P * 0.06, y + P, P + P * 0.12, P * 0.42);
+    }
+    for (const s of [-1, 1]) {
+      if (any(q, 0, s)) continue;
+      const ex = s < 0 ? x : x + P, gr = g.createLinearGradient(ex, 0, ex + s * P * 0.22, 0);
+      gr.addColorStop(0, `rgba(0,0,0,${0.3 * a})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr; g.fillRect(s < 0 ? x - P * 0.22 : x + P, y + P * 0.15, P * 0.22, P * 0.85);
+    }
+  }
   // shadows on the ground (glass casts a lighter one)
   for (const k of ['hard', 'shut', 'soft']) {
-    g.save(); g.shadowColor = k === 'soft' ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.7)'; g.shadowBlur = P * 0.34 * sDpr; g.shadowOffsetX = P * 0.07 * sDpr; g.shadowOffsetY = P * 0.13 * sDpr;
+    g.save(); g.shadowColor = k === 'soft' ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.7)'; g.shadowBlur = P * 0.34 * sDpr; g.shadowOffsetX = P * 0.08 * sDpr; g.shadowOffsetY = P * 0.2 * sDpr;
     g.fillStyle = k === 'soft' ? 'rgba(10,16,32,0.5)' : '#080c18';
     g.beginPath(); for (const q of cells) if (q.kind === k) g.rect(X(q), Y(q), P, P); g.fill(); g.restore();
   }
@@ -6220,8 +6236,27 @@ function drawWalls(g, ox = AX, oy = AY, aw = AW, ah = AH, sDpr = dpr) {
     if (q.kind === 'hard') { g.globalAlpha = 1; g.fillStyle = top; g.fillRect(x, y, P, h); }
     else if (q.kind === 'soft') { g.globalAlpha = 1; g.fillStyle = 'rgba(150,190,255,0.13)'; g.fillRect(x, y, P, h); }
     else { g.globalAlpha = 1; g.fillStyle = '#170f1d'; g.fillRect(x, y, P, h); }
-    if (!dn) {                                             // the front face
-      g.fillStyle = q.kind === 'soft' ? 'rgba(120,160,235,0.2)' : q.kind === 'shut' ? '#0b070f' : '#0c1227'; g.fillRect(x, y + h, P, P - h);
+    if (q.kind !== 'soft') {                                // a bevel round the top: lit along the top and left, shaded along the right and the bottom
+      const b = Math.max(1, P * 0.045);
+      g.fillStyle = q.kind === 'hard' ? 'rgba(150,185,255,0.13)' : 'rgba(255,120,150,0.08)';
+      if (!same(q, -1, 0)) g.fillRect(x, y, P, b);
+      if (!same(q, 0, -1)) g.fillRect(x, y, b, h);
+      g.fillStyle = 'rgba(0,0,0,0.22)';
+      if (!same(q, 0, 1)) g.fillRect(x + P - b, y, b, h);
+      if (!dn) g.fillRect(x, y + h - b, P, b);
+    }
+    if (!dn) {                                             // the front face: lit at its top edge, dark at its foot
+      const fg = g.createLinearGradient(0, y + h, 0, y + P);
+      if (q.kind === 'soft') { fg.addColorStop(0, 'rgba(140,180,245,0.3)'); fg.addColorStop(1, 'rgba(90,120,200,0.12)'); }
+      else if (q.kind === 'shut') { fg.addColorStop(0, '#22121f'); fg.addColorStop(1, '#070409'); }
+      else { fg.addColorStop(0, '#1c2a58'); fg.addColorStop(0.55, '#101a3a'); fg.addColorStop(1, '#070b18'); }
+      g.fillStyle = fg; g.fillRect(x, y + h, P, P - h);
+      if (q.kind === 'hard') {                             // panel seams down the face, and where the face meets its neighbours
+        g.globalAlpha = 0.45; g.fillStyle = '#05080f'; const sw = Math.max(1, P * 0.02);
+        g.fillRect(x + P * 0.5 - sw / 2, y + h + P * 0.03, sw, P - h - P * 0.06);
+        g.globalAlpha = 0.18; g.fillStyle = '#9fbaf0'; g.fillRect(x + P * 0.5 + sw / 2, y + h + P * 0.03, sw, P - h - P * 0.06);
+        g.globalAlpha = 1;
+      }
     }
   }
   // what is on the tops: a faint panel line on solid blocks, hairline cracks in glass, red hatching on shut cells
@@ -7405,6 +7440,51 @@ function drawDark(eye) {
   }
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
 }
+// Light thrown on the floor and the walls by whatever glows: shots, muzzle flashes, blasts, beams, missiles,
+// burning wrecks, and a faint glow under every tank. Drawn after the floor and before what stands on it, as soft
+// pools that add up. Only things this screen can see give light (a hidden tank must not show by its glow), and
+// only lights near the camera are drawn, at most LIGHT_MAX of the brightest, so a busy fight on a tablet stays smooth.
+const LIGHT_MAX = 40, lightBuf = [];
+function drawLights(eye) {
+  if (HEADLESS || NET_SCREENS.includes(state)) return;
+  const L = lightBuf; L.length = 0;
+  let x0 = -2, y0 = -2, x1 = COLS + 2, y1 = ROWS + 2;
+  if (camOn()) { const hw = AW / P / 2 + 2, hh = AH / P / 2 + 2; x0 = cam.x - hw; x1 = cam.x + hw; y0 = cam.y - hh; y1 = cam.y + hh; }
+  const add = (x, y, r, col, a) => { if (a > 0.01 && x + r > x0 && x - r < x1 && y + r > y0 && y - r < y1) L.push({ x, y, r, col, a }); };
+  const crowd = Math.min(1, Math.sqrt(14 / Math.max(1, bullets.length)));   // a gatling's stream should not add up to a floodlight
+  for (const b of bullets) {
+    const big = b.he ? 1.35 : b.heavy ? 1.2 : 1;
+    add(b.x, b.y, 1.5 * big, b.chill ? '#7ee8fa' : b.he ? '#ffb057' : (b.pen || penOf(b.owner)), 0.42 * crowd * (b.fade == null ? 1 : b.fade));
+  }
+  for (const m of missiles) if (m.type !== 'bomb') add(m.x, m.y, 1.7, penOf(m.owner), 0.45);
+  for (const r of rings) { const k = r.life / r.max; add(r.x, r.y, clamp(r.r * 3, 1.5, 5.5), r.col, 0.8 * k); }
+  for (const b of beams) {
+    const k = b.life / b.max, p = b.path, col = b.pen || penOf(b.owner);
+    if (!p) continue;
+    for (let i = 0; i + 1 < p.length; i++) {                // a few pools along each straight stretch of the beam
+      const ax = p[i].x, ay = p[i].y, bx = p[i + 1].x, by = p[i + 1].y, n = Math.min(8, Math.max(1, Math.round(Math.hypot(bx - ax, by - ay) / 1.4)));
+      for (let j = 0; j <= n; j++) add(ax + (bx - ax) * j / n, ay + (by - ay) * j / n, 1.4, col, 0.4 * k);
+    }
+  }
+  const now = performance.now();
+  for (const t of tanks) {
+    if (!t.alive || !seenBy(eye, t) || t.cloak > 0) continue;
+    const col = t.pen || penOf(t.id);
+    add(t.x, t.y, 1.0, col, 0.14);                          // the glow under it
+    if (t.recoil > 0.15) add(t.x + Math.cos(t.angle) * 0.55, t.y + Math.sin(t.angle) * 0.55, 2.2 * t.recoil, shade(col, 0.5), 0.6 * t.recoil);
+  }
+  for (const d of decoys) if (decoySeen(eye, d)) add(d.x, d.y, 1.0, penOf(d.owner), 0.14);   // a decoy glows like the real thing
+  for (const m of marks) {
+    if (!m.born || REDUCED) continue;
+    const age = (now - m.born) / 1000;
+    if (age < 9) add(m.x, m.y, 1.2, '#ff8a3d', 0.3 * (1 - age / 9) * (0.75 + 0.25 * Math.sin(now / 160 + m.seed)));
+  }
+  if (!L.length) return;
+  if (L.length > LIGHT_MAX) { L.sort((p, q) => q.a * q.r - p.a * p.r); L.length = LIGHT_MAX; }
+  ctx.globalCompositeOperation = 'lighter';
+  for (const l of L) { ctx.globalAlpha = Math.min(1, l.a); ctx.drawImage(glowSprite(l.col), (l.x - l.r) * P, (l.y - l.r) * P, l.r * 2 * P, l.r * 2 * P); }
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+}
 function drawLamps() {
   if (!lamps.length) return;
   for (const l of lamps) {
@@ -8233,6 +8313,7 @@ function render() {
   if (matchOn && !rsv) drawWeatherGround();
   if (matchOn) drawDark(viewer());
   if (structs.length && matchOn) drawBase();
+  if (matchOn) drawLights(viewer());
   const pad = matchOn ? gatPad() : null;
   if (pad && !pickups.some(k => k.type === 'gatling')) {
     ctx.save(); ctx.translate(pad.x * P, pad.y * P); ctx.globalAlpha = 0.3;

@@ -245,6 +245,9 @@ const C = {
   BOOST_TIME: 0.35,      // duration of boost strip dash
   BEACON_R: 0.95,        // capture radius of a watchtower beacon
   BEACON_TIME: 6.0,      // seconds a captured beacon reveals enemies
+  SNOW_GRIP: 6.0,        // weather rules, snow: how fast a tank's slide catches up with where it is driving (ice is 3.2)
+  BOLT_MIN: 9, BOLT_MAX: 15,   // weather rules, rain: seconds between lightning strikes
+  BOLT_SHOW: 0.6,        // ...and how long a strike shows every tank (grass and the dark hide no one; a cloak still does)
   BEACON_COOL: 10.0,     // seconds before a beacon can be captured again
   GATE_PERIOD: 10.0,     // seconds per timed gate open/close cycle
   BRIDGE_HP: 3           // crossings/hits before a cracked bridge collapses into water
@@ -1030,14 +1033,14 @@ const GAME_TEXT = {
 const BASE_TIME = { 3: 240, 5: 360, 7: 480 };          // base mode: seconds before the match is decided on what is left
 const KILL_GOAL = { 3: 5, 5: 10, 7: 15 }, HILL_GOAL = { 3: 20, 5: 30, 7: 45 };
 // soft: some walls break when shot. cpu: on one screen, play alone against this many computer tanks (0 = two people).
-let settings = { ammo: 'unlimited', powerups: false, maps: 'all', winScore: C.WIN_SCORE, game: 'classic', soft: false, terrain: true, mut: 'off', cpu: 0 };
+let settings = { ammo: 'unlimited', powerups: false, maps: 'all', winScore: C.WIN_SCORE, game: 'classic', soft: false, terrain: true, mut: 'off', cpu: 0, wxRules: true };
 const mapChoice = () => mode === 'local' && settings.maps === 'mega' ? 'all' : settings.maps;
 function validSettings(s) {
   if (!s || !AMMO_MODES.includes(s.ammo)) return null;
   return { ammo: s.ammo, powerups: !!s.powerups, maps: MAP_POOLS.includes(s.maps) ? s.maps : 'all',
     winScore: WIN_SCORES.includes(s.winScore) ? s.winScore : C.WIN_SCORE,
     game: GAME_MODES.includes(s.game) ? s.game : 'classic', soft: !!s.soft, terrain: s.terrain === undefined ? true : !!s.terrain,
-    mut: s.mut === 'random' || MUTS[s.mut] ? s.mut : 'off', cpu: [1, 2, 3].includes(s.cpu) ? s.cpu : 0 };
+    mut: s.mut === 'random' || MUTS[s.mut] ? s.mut : 'off', cpu: [1, 2, 3].includes(s.cpu) ? s.cpu : 0, wxRules: s.wxRules === undefined ? true : !!s.wxRules };
 }
 // classic = the small 11x11 maps, complex = the 13x13 ones, mega = online-only 23x23 arenas
 function mapPool() {
@@ -1066,7 +1069,7 @@ try { muted = localStorage.getItem('tankduel-muted') === '1'; } catch (e) {}
 // weather is only something to look at, and each screen can switch it off. Every map has its own weather and the
 // look that goes with it (see THEMES): a rainy night, snow, a sandstorm, mist, or embers over a battlefield.
 const WEATHERS = ['clear', 'rain', 'mist', 'embers', 'snow', 'sand'];
-let weather = 'clear', weatherOn = true;
+let weather = 'clear', weatherOn = true, boltT = 99, boltFlash = 0, boltSeed = 1;
 // A map's look. Switching the weather off keeps the floor and walls and stops only what falls, drifts or blows.
 const THEMES = {
   // the night arena: dark blue floor, steel blocks with lit edges
@@ -1103,6 +1106,9 @@ function themeOf(id) {
   return 'mist';
 }
 let TH = THEMES.neon;                                  // the look of the map being played (set when the arena is drawn)
+// weather rules (a setting, the same for everyone): snow maps are slippery, rainy ones have lightning
+const wxRule = k => !!settings.wxRules && themeOf(mapId) === k;
+const snowGrip = () => wxRule('snow') ? C.SNOW_GRIP : 0;
 try { weatherOn = localStorage.getItem('tankduel-weather') !== '0'; } catch (e) {}
 function setWeatherOn(v) { weatherOn = !!v; try { localStorage.setItem('tankduel-weather', v ? '1' : '0'); } catch (e) {} }
 let myName = '', nameOpen = false, nameSentAt = 0;
@@ -1923,6 +1929,7 @@ function resetEntities() {
   roundT = 0; sdClosed = 0; sdStarted = false;
   cam.init = false; cam.lastState = ''; updateCamera(0, true);
   if (mode !== 'guest') weather = pickWeather();
+  boltT = C.BOLT_MIN * 0.6 + Math.random() * 4; boltFlash = 0;
 }
 // every match gets an id, so the server can tell a result it already has
 let matchId = '';
@@ -2526,6 +2533,38 @@ function rewindFx(owner, fx, fy, tx, ty) {
   const n = Math.max(2, Math.ceil(Math.hypot(tx - fx, ty - fy) / 0.25));
   for (let i = 0; i <= n; i++) { const k = i / n; particles.push({ x: fx + (tx - fx) * k, y: fy + (ty - fy) * k, vx: 0, vy: 0, life: 0.25 + 0.3 * k, max: 0.55, col, size: 0.04 }); }
 }
+// weather rules, rain: lightning now and then lights the whole arena, and for a moment every tank is seen
+function strikeBolt() {
+  boltT = C.BOLT_MIN + Math.random() * (C.BOLT_MAX - C.BOLT_MIN);
+  for (const t of tanks) if (t.alive && !(t.cloak > 0)) t.reveal = Math.max(t.reveal, C.BOLT_SHOW);
+  const seed = 1 + Math.floor(Math.random() * 9999);
+  boltFx(seed); netEv('bolt', seed);
+}
+function boltFx(seed) {
+  if (HEADLESS) return;
+  boltFlash = 1; boltSeed = seed; sfx.thunder();
+}
+// the flash over the arena, and for its first instant the bolt itself somewhere in the sky
+function drawBolt() {
+  if (boltFlash <= 0) return;
+  const k = boltFlash;
+  ctx.save(); ctx.beginPath(); ctx.rect(AX, AY, AW, AH); ctx.clip();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = (REDUCED ? 0.12 : 0.42) * k * k; ctx.fillStyle = '#cfdcff'; ctx.fillRect(AX, AY, AW, AH);
+  if (k > 0.6 && !REDUCED) {
+    const rnd = mulberry32(boltSeed);
+    let x = AX + AW * (0.15 + rnd() * 0.7), y = AY;
+    ctx.strokeStyle = '#f4f8ff'; ctx.lineWidth = Math.max(2, P * 0.06); ctx.lineJoin = 'round'; ctx.globalAlpha = (k - 0.6) / 0.4;
+    ctx.shadowColor = '#9fb8ff'; ctx.shadowBlur = P * 0.5;
+    ctx.beginPath(); ctx.moveTo(x, y);
+    while (y < AY + AH * (0.55 + rnd() * 0.35)) {
+      x += (rnd() - 0.5) * P * 1.1; y += P * (0.35 + rnd() * 0.5); ctx.lineTo(x, y);
+      if (rnd() < 0.18) { const bx = x + (rnd() - 0.5) * P * 1.6, by = y + P * (0.5 + rnd() * 0.8); ctx.lineTo(bx, by); ctx.moveTo(x, y); }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 function lampOut(l) {
   l.alive = false;
   lampFx(l.x, l.y);
@@ -2702,7 +2741,8 @@ function hit(t, by = -1) {
     let ax = -Math.cos(t.angle), ay = -Math.sin(t.angle);
     const src = tanks[by];
     if (src && src !== t) { const dx = t.x - src.x, dy = t.y - src.y, d = Math.hypot(dx, dy); if (d > 1e-3) { ax = dx / d; ay = dy / d; } }
-    const push = iceAt(t.x, t.y) ? 1 : C.ARMOR_PUSH;
+    // the same short shove everywhere: where the tank slides (ice, snow with weather rules) it is a smaller push that carries on
+    const g = iceAt(t.x, t.y) ? 0 : snowGrip() * (bots.has(t.id) ? 1.6 : 1), push = iceAt(t.x, t.y) ? 1 : g ? 0.35 * g : C.ARMOR_PUSH;
     t.svx = ax * push; t.svy = ay * push;
     rings.push({ x: t.x, y: t.y, r: 0.75, life: 0.35, max: 0.35, col: ARMOR_COL });
     burst(t.x, t.y, 10, ARMOR_COL, 2.4, 0.3, 0.04);
@@ -3495,6 +3535,7 @@ function baseGoal(seat, t) {
 /* ---------- physics (always called with the fixed step) ---------- */
 function stepPhysics(dt, lethal, control) {
   LETHAL = lethal;
+  if (lethal && mode !== 'guest' && wxRule('rain') && (boltT -= dt) <= 0) strikeBolt();
   if (gates.length) {
     const cyc = roundT % C.GATE_PERIOD, isOpen = cyc < C.GATE_PERIOD * 0.5, isWarn = isOpen && cyc > C.GATE_PERIOD * 0.5 - 1.2;
     let closedNow = false;
@@ -3572,8 +3613,11 @@ function stepPhysics(dt, lethal, control) {
       const speed = driveSpeed(t) * inp.mag * Math.max(0, Math.cos(diff));
       dvx = Math.cos(t.angle) * speed; dvy = Math.sin(t.angle) * speed;
     }
-    if (onIce) {
-      const k = 1 - Math.exp(-3.2 * dt);
+    // on ice, or anywhere on a snow map with weather rules on, a tank slides (a computer tank, which cannot feel the
+    // slide coming, holds the snow a little better)
+    const grip = onIce ? 3.2 : snowGrip() * (bots.has(t.id) ? 1.6 : 1);
+    if (grip) {
+      const k = 1 - Math.exp(-grip * dt);
       t.svx = (t.svx || 0) + (dvx - (t.svx || 0)) * k;
       t.svy = (t.svy || 0) + (dvy - (t.svy || 0)) * k;
       t.x += t.svx * dt; t.y += t.svy * dt;
@@ -4940,8 +4984,9 @@ function predictStep(dt) {
     const speed = driveSpeed(t) * inp.mag * Math.max(0, Math.cos(diff));
     dvx = Math.cos(pred.angle) * speed; dvy = Math.sin(pred.angle) * speed;
   }
-  if (onIce) {
-    const k = 1 - Math.exp(-3.2 * dt);
+  const grip = onIce ? 3.2 : snowGrip();                  // as the host does it
+  if (grip) {
+    const k = 1 - Math.exp(-grip * dt);
     pred.svx = (pred.svx || 0) + (dvx - (pred.svx || 0)) * k;
     pred.svy = (pred.svy || 0) + (dvy - (pred.svy || 0)) * k;
     pred.x += pred.svx * dt; pred.y += pred.svy * dt;
@@ -5128,6 +5173,8 @@ function playEvent(e) {
     burst(e[3], e[4], 18, col, 3.2, 0.35, 0.045); sfx.zap();
   } else if (kind === 'lamp') {
     lampFx(e[2], e[3]);
+  } else if (kind === 'bolt') {
+    boltFx(e[2]);
   } else if (kind === 'decoyPop') {
     decoyFx(e[2], e[3], e[4]);
   } else if (kind === 'rewind') {
@@ -5337,6 +5384,13 @@ const sfx = {
     voice({ f: 110, to: 42, dur: 0.3, type: 'sawtooth', vol: 0.08, lp: 600 });
     hiss({ dur: 0.5, vol: 0.34, f0: 2600, f1: 90, send: 0.45 });
     hiss({ dur: 0.12, vol: 0.12, kind: 'highpass', f0: 3000, f1: 6000 });
+  },
+  // thunder a moment after the flash: a crack, then a long low roll
+  thunder: () => {
+    if (!audible()) return;
+    hiss({ dur: 0.18, vol: 0.2, kind: 'highpass', f0: 2500, f1: 900, delay: 0.25 });
+    for (let i = 0; i < 4; i++) hiss({ dur: 0.55, vol: 0.26 - i * 0.05, f0: 520 - i * 90, f1: 70, delay: 0.3 + i * 0.4, send: 0.6 });
+    voice({ f: 62, to: 32, dur: 1.6, type: 'sine', vol: 0.18, delay: 0.3 });
   },
   tick: () => { voice({ f: 720, to: 900, dur: 0.06, type: 'sine', vol: 0.07 }); voice({ f: 1800, dur: 0.02, type: 'sine', vol: 0.02 }); },
   go: () => chime([[880, 0, 0.26], [1318.5, 0, 0.26]], 0.07),
@@ -5565,7 +5619,7 @@ function whoText(n) {
 }
 const whoShort = () => settings.cpu ? `you + ${settings.cpu} CPU` : '2 players';
 const rulesSummary = () => [{ unlimited: 'unlimited ammo', reload: '5 + reload', limited: '5 shots', single: `1 shot per ${C.SINGLE_COOLDOWN} s` }[settings.ammo],
-  settings.powerups ? 'power-ups' : 'no power-ups', FEAT_TEXT[featIdx()].toLowerCase(),
+  settings.powerups ? 'power-ups' : 'no power-ups', FEAT_TEXT[featIdx()].toLowerCase(), ...(settings.wxRules ? [] : ['no weather rules']),
   ...(settings.maps === 'mega' && settings.game !== 'base' && settings.game !== 'soccer' ? ['23×23 maps'] : []),
   ...(settings.maps === 'dark' && settings.game !== 'base' && settings.game !== 'soccer' ? ['lights-out maps'] : []),
   winText(settings.winScore),
@@ -5582,17 +5636,18 @@ function cardGrid(list, top, h = U * 1.0, gy = U * 0.2) {
 }
 // the rules: one labelled row per setting, every choice shown; `top` is the top edge of the first row
 function ruleRows(top, lobby = false) {
-  const out = [], cx = mcx(), lw = U * 2.2, h = U * 0.46, g = U * 0.12, x0 = cx - U * 5.2 + lw, x1 = cx + U * 5.2;
+  const out = [], cx = mcx(), lw = U * 2.2, h = U * 0.42, g = U * 0.12, x0 = cx - U * 5.2 + lw, x1 = cx + U * 5.2;
   let y = top;
   const row = (text, opts) => {
     out.push({ kind: 'label', text, x: cx - U * 5.2, y, w: lw, h });
     const w = (x1 - x0 - g * (opts.length - 1)) / opts.length;
     opts.forEach(([kind, v, t, on], i) => out.push({ kind, v, text: t, on, x: x0 + i * (w + g), y, w, h }));
-    y += U * 0.58;
+    y += U * 0.52;
   };
   row('Ammo', [['unlimited', 'Unlimited'], ['reload', '5 + reload'], ['limited', '5 only'], ['single', `1 per ${C.SINGLE_COOLDOWN} s`]].map(([v, t]) => ['ammo', v, t, settings.ammo === v]));
   row('Power-ups', [['pu', true, 'On', settings.powerups], ['pu', false, 'Off', !settings.powerups]]);
   row('Map extras', FEAT_SHORT.map((t, i) => ['soft', i, t, featIdx() === i]));
+  row('Weather rules', [['wxr', true, 'On', !!settings.wxRules], ['wxr', false, 'Off', !settings.wxRules]]);
   if (settings.game !== 'base') row('Maps', (lobby ? MAP_POOLS : LOCAL_MAP_POOLS).map(v => ['maps', v, MAP_SHORT[v], (lobby ? settings.maps : mapChoice()) === v]));
   row(winLabel(), WIN_SCORES.map(v => ['win', v, winText(v), settings.winScore === v]));
   row('Party rule', [['mut', 'off', 'Off', settings.mut === 'off'], ['mut', 'random', 'Random', settings.mut === 'random'],
@@ -5680,7 +5735,7 @@ function drawItems(items, col) {
     else if (SETTING_KINDS.includes(it.kind) || it.kind === 'mutpick') drawChip(it, it.on, col);
   }
 }
-const SETTING_KINDS = ['game', 'cpu', 'ammo', 'pu', 'soft', 'maps', 'win', 'mut'];
+const SETTING_KINDS = ['game', 'cpu', 'ammo', 'pu', 'soft', 'maps', 'win', 'mut', 'wxr'];
 function menuHintText(lobby) {
   const k = menuFocus;
   if (!lobby && menuStep === 'mode') return 'Step 1 of 3: tap a mode.';
@@ -5691,6 +5746,7 @@ function menuHintText(lobby) {
   if (k === 'game') return GAME_TEXT[settings.game];
   if (k === 'cpu') return settings.cpu ? `You against ${settings.cpu} computer tank${settings.cpu > 1 ? 's' : ''}, on this screen.` : 'Two players, one at each end of this screen.';
   if (k === 'ammo') return ammoText();
+  if (k === 'wxr') return settings.wxRules ? 'Weather changes play: on snow maps tanks slide, on rainy ones lightning shows every tank for a moment.' : 'Weather is only to look at.';
   if (k === 'pu') return settings.powerups ? 'Pickups appear: laser, missiles, bombs, shield, hidden mines and more.' : 'No pickups (some maps still have a gatling spot in the middle).';
   if (k === 'soft') return [
     'Plain map: every wall stops every shot.',
@@ -5737,7 +5793,7 @@ function hitItem(items, f) {
   for (const it of items) if (f.x >= it.x - 3 && f.x <= it.x + it.w + 3 && f.y >= it.y - 3 && f.y <= it.y + it.h + 3) return it;
   return null;
 }
-const SETTING_KEY = { ammo: 'ammo', pu: 'powerups', maps: 'maps', win: 'winScore', game: 'game', soft: 'soft', mut: 'mut' };
+const SETTING_KEY = { ammo: 'ammo', pu: 'powerups', maps: 'maps', win: 'winScore', game: 'game', soft: 'soft', mut: 'mut', wxr: 'wxRules' };
 function applyMenu(it) {
   if (it.kind === 'label') return;
   if (it.kind === 'board') { sfx.tick(); openBoard(); return; }
@@ -5774,6 +5830,7 @@ function applyMenu(it) {
   }
   if (it.kind === 'ammo') { setAmmoMode(it.v); sfx.tick(); }
   else if (it.kind === 'pu') { settings.powerups = it.v; saveSettings(); sfx.tick(); }
+  else if (it.kind === 'wxr') { settings.wxRules = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'maps') { settings.maps = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'win') { settings.winScore = it.v; saveSettings(); sfx.tick(); }
   else if (it.kind === 'game') { settings.game = it.v; saveSettings(); sfx.tick(); }
@@ -7484,6 +7541,7 @@ function pickWeather() { return themeOf(mapId); }   // each map has its own (see
 const weatherShown = () => weatherOn && !REDUCED && weather !== 'clear' && !HEADLESS;
 let splashes = [], embers = [], rainSeeds = null, rainNode = null;
 function stepWeather(dt) {
+  boltFlash = Math.max(0, boltFlash - dt / 0.45);
   const live = weatherShown() && (state === 'play' || state === 'ending' || state === 'countdown' || state === 'result');
   rainSound(live && weather === 'rain');
   if (!live) { splashes.length = 0; embers.length = 0; return; }
@@ -8773,7 +8831,7 @@ function render() {
   ctx.globalCompositeOperation = 'source-over'; ctx.lineCap = 'butt';
   ctx.globalAlpha = 1;
   ctx.restore();
-  if (matchOn && !rsv) drawWeatherAir();
+  if (matchOn && !rsv) { drawWeatherAir(); drawBolt(); }
   if (follow) {
     drawViewportFrame();
     if (matchOn && state !== 'matchEnd') drawMinimap();
@@ -9039,7 +9097,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
+  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, wxRule, snowGrip, strikeBolt, get boltT() { return boltT; }, set boltT(v) { boltT = v; }, get boltFlash() { return boltFlash; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,

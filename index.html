@@ -248,6 +248,13 @@ const C = {
   SNOW_GRIP: 6.0,        // weather rules, snow: how fast a tank's slide catches up with where it is driving (ice is 3.2)
   BOLT_MIN: 9, BOLT_MAX: 15,   // weather rules, rain: seconds between lightning strikes
   BOLT_SHOW: 0.6,        // ...and how long a strike shows every tank (grass and the dark hide no one; a cloak still does)
+  GUST_MIN: 10, GUST_MAX: 16,  // weather rules, sand: seconds between gusts
+  GUST_TIME: 4.5,        // ...how long one blows
+  GUST_SHOT: 2.2,        // ...how hard it bends a shot (sideways pull, cells/s², the shot keeps its speed)
+  GUST_PUSH: 0.55,       // ...and how fast it pushes a tank along (cells/s)
+  BANK_R: 1.5,           // weather rules, mist: a drifting fog bank's reach (cells)
+  BANK_SEE: 1.8,         // ...a tank inside one is seen only by enemies this close (or for a moment after it fires)
+  BANK_SPEED: 0.35,      // ...how fast the banks drift
   BEACON_COOL: 10.0,     // seconds before a beacon can be captured again
   GATE_PERIOD: 10.0,     // seconds per timed gate open/close cycle
   BRIDGE_HP: 3           // crossings/hits before a cracked bridge collapses into water
@@ -1070,6 +1077,9 @@ try { muted = localStorage.getItem('tankduel-muted') === '1'; } catch (e) {}
 // look that goes with it (see THEMES): a rainy night, snow, a sandstorm, mist, or embers over a battlefield.
 const WEATHERS = ['clear', 'rain', 'mist', 'embers', 'snow', 'sand'];
 let weather = 'clear', weatherOn = true, boltT = 99, boltFlash = 0, boltSeed = 1;
+// sand: the gust now blowing (x, y its direction, k how strong, 0 when still); mist: the fog banks drifting about
+const gust = { x: 0, y: 0, k: 0, t: 0, next: 99 };
+let banks = [];
 // A map's look. Switching the weather off keeps the floor and walls and stops only what falls, drifts or blows.
 const THEMES = {
   // the night arena: dark blue floor, steel blocks with lit edges
@@ -1587,7 +1597,8 @@ const friendOf = (a, b) => a === b || (infOn() ? (zed[a] | 0) === (zed[b] | 0) :
 function seenBy(viewer, t) {
   if (replayView || viewer < 0 || friendOf(viewer, t.id) || (potatoOn() && t.id === pot.holder)) return true;
   // grass hides a tank but for enemies right beside it; fog (a party rule) hides it but for enemies a few cells away
-  const range = concealed(t) ? C.GRASS_SEE : inDark(t) ? C.DARK_SEE : mutNow === 'fog' && t.alive && !(t.reveal > 0) ? C.FOG_SEE : 0;
+  const range = concealed(t) ? C.GRASS_SEE : banks.length && t.alive && !(t.reveal > 0) && inBank(t.x, t.y) ? C.BANK_SEE
+    : inDark(t) ? C.DARK_SEE : mutNow === 'fog' && t.alive && !(t.reveal > 0) ? C.FOG_SEE : 0;
   if (!range) return true;
   for (const o of tanks) if (o.alive && friendOf(viewer, o.id) && Math.hypot(o.x - t.x, o.y - t.y) < range) return true;
   return false;
@@ -1930,6 +1941,15 @@ function resetEntities() {
   cam.init = false; cam.lastState = ''; updateCamera(0, true);
   if (mode !== 'guest') weather = pickWeather();
   boltT = C.BOLT_MIN * 0.6 + Math.random() * 4; boltFlash = 0;
+  gust.k = 0; gust.t = 0; gust.next = C.GUST_MIN * 0.5 + Math.random() * 4;
+  banks = [];
+  if (mode !== 'guest' && wxRule('mist')) {
+    const n = Math.max(2, Math.round(COLS * ROWS / 55));
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      banks.push({ x: 1.5 + Math.random() * (COLS - 3), y: 1.5 + Math.random() * (ROWS - 3), vx: Math.cos(a) * C.BANK_SPEED, vy: Math.sin(a) * C.BANK_SPEED });
+    }
+  }
 }
 // every match gets an id, so the server can tell a result it already has
 let matchId = '';
@@ -2534,6 +2554,30 @@ function rewindFx(owner, fx, fy, tx, ty) {
   for (let i = 0; i <= n; i++) { const k = i / n; particles.push({ x: fx + (tx - fx) * k, y: fy + (ty - fy) * k, vx: 0, vy: 0, life: 0.25 + 0.3 * k, max: 0.55, col, size: 0.04 }); }
 }
 // weather rules, rain: lightning now and then lights the whole arena, and for a moment every tank is seen
+// weather rules, sand: now and then a gust blows across the arena from one side, bending shots and pushing tanks
+function stepGust(dt, lethal) {
+  if (gust.t > 0) {
+    gust.t -= dt;
+    const left = gust.t, done = C.GUST_TIME - gust.t;            // rises over half a second and dies away over one
+    gust.k = Math.max(0, Math.min(1, done / 0.5, left / 1));
+    if (gust.t <= 0) { gust.k = 0; gust.next = C.GUST_MIN + Math.random() * (C.GUST_MAX - C.GUST_MIN); }
+  } else if (lethal && (gust.next -= dt) <= 0) {
+    const a = Math.floor(Math.random() * 8) * Math.PI / 4;
+    gust.x = Math.cos(a); gust.y = Math.sin(a); gust.t = C.GUST_TIME; gust.k = 0;
+    sfx.gust();
+  }
+}
+// weather rules, mist: the banks wander, turning a little at a time, and turn back at the edges
+function stepBanks(dt) {
+  for (const b of banks) {
+    const a = Math.atan2(b.vy, b.vx) + (Math.random() - 0.5) * 1.2 * dt;
+    b.vx = Math.cos(a) * C.BANK_SPEED; b.vy = Math.sin(a) * C.BANK_SPEED;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.x < 1 || b.x > COLS - 1) { b.vx = -b.vx; b.x = clamp(b.x, 1, COLS - 1); }
+    if (b.y < 1 || b.y > ROWS - 1) { b.vy = -b.vy; b.y = clamp(b.y, 1, ROWS - 1); }
+  }
+}
+const inBank = (x, y) => { for (const b of banks) if ((b.x - x) ** 2 + (b.y - y) ** 2 < C.BANK_R * C.BANK_R) return true; return false; };
 function strikeBolt() {
   boltT = C.BOLT_MIN + Math.random() * (C.BOLT_MAX - C.BOLT_MIN);
   for (const t of tanks) if (t.alive && !(t.cloak > 0)) t.reveal = Math.max(t.reveal, C.BOLT_SHOW);
@@ -2543,6 +2587,36 @@ function strikeBolt() {
 function boltFx(seed) {
   if (HEADLESS) return;
   boltFlash = 1; boltSeed = seed; sfx.thunder();
+}
+// weather rules, mist: the fog banks, drawn over the tanks (yours show through; an enemy inside is not drawn at all).
+// They are shown even with the weather switched off, since where they are matters to play.
+function drawFogBanks() {
+  if (!banks.length) return;
+  const spr = glowSprite('#c9d6f0'), t = performance.now() / 1000;
+  for (let i = 0; i < banks.length; i++) {
+    const b = banks[i];
+    for (let j = 0; j < 4; j++) {                                // a few soft puffs that roll slowly round each other
+      const a = t * 0.3 + j * 1.57 + i, ox = Math.cos(a) * 0.45, oy = Math.sin(a * 1.3) * 0.35, r = C.BANK_R * (0.95 + 0.12 * j);
+      ctx.globalAlpha = 0.26; ctx.drawImage(spr, (b.x + ox - r) * P, (b.y + oy - r) * P, r * 2 * P, r * 2 * P);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+// weather rules, sand: while a gust blows, an arrow beside the score (both scores on a shared screen) shows which way
+function drawGustArrow() {
+  if (!(gust.k > 0) || !wxRule('sand')) return;
+  const a = Math.atan2(viewFlip ? -gust.y : gust.y, viewFlip ? -gust.x : gust.x);
+  gustArrow(AX + AW / 2 + U * 2.3, AY - U * 0.62, a);
+  if (twoSided()) gustArrow(AX + AW / 2 - U * 2.3, AY + AH + U * 0.62, a);
+}
+function gustArrow(cx, cy, a) {
+  const L = U * 0.55;
+  ctx.save(); ctx.translate(cx, cy); ctx.globalAlpha = 0.85 * gust.k;
+  ctx.fillStyle = 'rgba(20,12,4,0.55)'; ctx.beginPath(); ctx.arc(0, 0, U * 0.42, 0, Math.PI * 2); ctx.fill();
+  ctx.rotate(a); ctx.strokeStyle = '#ffd9a0'; ctx.fillStyle = '#ffd9a0'; ctx.lineWidth = Math.max(2, U * 0.06); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-L / 2, 0); ctx.lineTo(L / 2 - U * 0.1, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(L / 2, 0); ctx.lineTo(L / 2 - U * 0.2, -U * 0.13); ctx.lineTo(L / 2 - U * 0.2, U * 0.13); ctx.closePath(); ctx.fill();
+  ctx.restore();
 }
 // the flash over the arena, and for its first instant the bolt itself somewhere in the sky
 function drawBolt() {
@@ -3536,6 +3610,7 @@ function baseGoal(seat, t) {
 function stepPhysics(dt, lethal, control) {
   LETHAL = lethal;
   if (lethal && mode !== 'guest' && wxRule('rain') && (boltT -= dt) <= 0) strikeBolt();
+  if (mode !== 'guest') { if (wxRule('sand')) stepGust(dt, lethal); else gust.k = 0; if (banks.length) stepBanks(dt); }
   if (gates.length) {
     const cyc = roundT % C.GATE_PERIOD, isOpen = cyc < C.GATE_PERIOD * 0.5, isWarn = isOpen && cyc > C.GATE_PERIOD * 0.5 - 1.2;
     let closedNow = false;
@@ -3626,6 +3701,7 @@ function stepPhysics(dt, lethal, control) {
       t.svx = (t.svx || 0) * decay; t.svy = (t.svy || 0) * decay;
       t.x += (dvx + t.svx * 0.35) * dt; t.y += (dvy + t.svy * 0.35) * dt;
     }
+    if (gust.k > 0) { t.x += gust.x * C.GUST_PUSH * gust.k * dt; t.y += gust.y * C.GUST_PUSH * gust.k * dt; }
     const phase = canPhase(t);
     resolveCircle(t, C.TANK_R, true, phase);
     if (barrels.length) { pushOffBarrels(t, C.TANK_R); resolveCircle(t, C.TANK_R, true, phase); }
@@ -3715,6 +3791,13 @@ function stepPhysics(dt, lethal, control) {
       if (cur > b.baseSp * C.MUD_BULLET_FLOOR) {
         const f = Math.max(b.baseSp * C.MUD_BULLET_FLOOR / cur, Math.exp(-2.4 * dt));
         b.vx *= f; b.vy *= f;
+      }
+    }
+    if (gust.k > 0) {                                       // a gust bends a shot's path, but it keeps its speed
+      const sp = Math.hypot(b.vx, b.vy);
+      if (sp > 1e-6) {
+        b.vx += gust.x * C.GUST_SHOT * gust.k * dt; b.vy += gust.y * C.GUST_SHOT * gust.k * dt;
+        const f = sp / Math.hypot(b.vx, b.vy); b.vx *= f; b.vy *= f;
       }
     }
     if (b.pierce) {
@@ -4674,6 +4757,7 @@ function buildSnap() {
     aw: seats.map(id => guests.has(id) && guests.get(id).away ? 1 : 0),
     bx: barrels.length ? barrels.map(br => br.alive ? (br.fuse >= 0 ? 2 : 1) : 0) : null,
     LM: lamps.length ? lamps.map(l => l.alive ? 1 : 0) : null,
+    WD: gust.k > 0 ? [r2(gust.x), r2(gust.y), r2(gust.k)] : null, FB: banks.length ? banks.flatMap(b => [r2(b.x), r2(b.y)]) : null,
     SB: sandbags.length ? sandbags.map(s => s.hp) : null,
     BR: bridges.length ? bridges.map(b => b.hp) : null,
     GT: gates.length ? gates.map(gt => gt.warn ? 2 : gt.open ? 1 : 0) : null,
@@ -4995,6 +5079,7 @@ function predictStep(dt) {
     pred.svx = (pred.svx || 0) * decay; pred.svy = (pred.svy || 0) * decay;
     pred.x += (dvx + pred.svx * 0.35) * dt; pred.y += (dvy + pred.svy * 0.35) * dt;
   }
+  if (gust.k > 0) { pred.x += gust.x * C.GUST_PUSH * gust.k * dt; pred.y += gust.y * C.GUST_PUSH * gust.k * dt; }
   if (pred.errX || pred.errY || pred.errA) {
     const k = 1 - Math.exp(-8 * dt);
     const dx = pred.errX * k, dy = pred.errY * k, da = pred.errA * k;
@@ -5063,6 +5148,12 @@ function applyDiscrete(g, dt) {
   goalBy = typeof g.gb === 'number' ? g.gb : -1;
   if (Array.isArray(g.bx)) g.bx.forEach((v, i) => { if (barrels[i]) { barrels[i].alive = v > 0; barrels[i].fuse = v === 2 ? 0.1 : -1; } });
   if (Array.isArray(g.LM)) g.LM.forEach((v, i) => { if (lamps[i]) lamps[i].alive = v > 0; });
+  if (Array.isArray(g.WD) && g.WD.length === 3) { if (!(gust.k > 0)) sfx.gust(); gust.x = +g.WD[0] || 0; gust.y = +g.WD[1] || 0; gust.k = clamp(+g.WD[2] || 0, 0, 1); }
+  else gust.k = 0;
+  if (Array.isArray(g.FB) && g.FB.length <= 80) {
+    banks.length = g.FB.length >> 1;
+    for (let i = 0; i < banks.length; i++) banks[i] = { x: +g.FB[i * 2] || 0, y: +g.FB[i * 2 + 1] || 0, vx: 0, vy: 0 };
+  } else banks.length = 0;
   if (Array.isArray(g.SB)) g.SB.forEach((hp, i) => { if (sandbags[i]) sandbags[i].hp = hp | 0; });
   if (Array.isArray(g.BR)) g.BR.forEach((hp, i) => { const br = bridges[i]; if (!br) return; if ((hp | 0) <= 0 && br.hp > 0) collapseBridge(br); else br.hp = hp | 0; });
   if (Array.isArray(g.GT)) g.GT.forEach((v, i) => { const gt = gates[i]; if (!gt) return; gt.open = (v | 0) > 0; gt.warn = (v | 0) === 2; });
@@ -5384,6 +5475,11 @@ const sfx = {
     voice({ f: 110, to: 42, dur: 0.3, type: 'sawtooth', vol: 0.08, lp: 600 });
     hiss({ dur: 0.5, vol: 0.34, f0: 2600, f1: 90, send: 0.45 });
     hiss({ dur: 0.12, vol: 0.12, kind: 'highpass', f0: 3000, f1: 6000 });
+  },
+  // a gust of wind getting up
+  gust: () => {
+    if (!audible()) return;
+    for (let i = 0; i < 4; i++) hiss({ dur: 0.55, vol: 0.05 + i * 0.025, kind: 'bandpass', f0: 500 + i * 250, f1: 900 + i * 200, delay: i * 0.35, send: 0.4 });
   },
   // thunder a moment after the flash: a crack, then a long low roll
   thunder: () => {
@@ -5746,7 +5842,7 @@ function menuHintText(lobby) {
   if (k === 'game') return GAME_TEXT[settings.game];
   if (k === 'cpu') return settings.cpu ? `You against ${settings.cpu} computer tank${settings.cpu > 1 ? 's' : ''}, on this screen.` : 'Two players, one at each end of this screen.';
   if (k === 'ammo') return ammoText();
-  if (k === 'wxr') return settings.wxRules ? 'Weather changes play: on snow maps tanks slide, on rainy ones lightning shows every tank for a moment.' : 'Weather is only to look at.';
+  if (k === 'wxr') return settings.wxRules ? 'Weather changes play: snow is slippery, lightning on rainy maps shows every tank for a moment, sandstorm gusts bend shots and push tanks, and drifting fog banks hide whoever is inside.' : 'Weather is only to look at.';
   if (k === 'pu') return settings.powerups ? 'Pickups appear: laser, missiles, bombs, shield, hidden mines and more.' : 'No pickups (some maps still have a gatling spot in the middle).';
   if (k === 'soft') return [
     'Plain map: every wall stops every shot.',
@@ -7615,12 +7711,15 @@ function drawWeatherAir() {
       const w = AW * 0.7, x = AX + AW - ((t * P * (1.6 + i * 0.3) + i * AW * 0.45) % (AW + w)), y = AY + AH * (0.15 + 0.23 * i);
       ctx.globalAlpha = 0.1; ctx.drawImage(gust, x, y - AH * 0.18, w, AH * 0.36);
     }
-    const N = Math.min(130, Math.round(AW * AH / (P * P) * 0.8)), W = AW + P;
-    ctx.strokeStyle = '#efcf98'; ctx.lineWidth = Math.max(1, P * 0.018); ctx.lineCap = 'round'; ctx.globalAlpha = 0.3; ctx.beginPath();
+    // the grains blow from the right, or with a gust (weather rules) the way it blows, thicker and faster
+    const gk = wxRule('sand') ? gust.k : 0, dx = gk ? (viewFlip ? -gust.x : gust.x) : -1, dy = gk ? (viewFlip ? -gust.y : gust.y) : 0.04;
+    const N = Math.min(170, Math.round(AW * AH / (P * P) * (0.8 + gk * 0.5))), W = AW + P * 2, H = AH + P * 2, fast = 1 + gk * 1.6;
+    ctx.strokeStyle = '#efcf98'; ctx.lineWidth = Math.max(1, P * 0.018); ctx.lineCap = 'round'; ctx.globalAlpha = 0.3 + gk * 0.15; ctx.beginPath();
     for (let i = 0; i < N; i++) {
-      const sx = rainSeeds[i * 3], sy = rainSeeds[i * 3 + 1], sv = rainSeeds[i * 3 + 2];
-      const x = AX + AW - ((sx * W + t * P * (6 + sv * 6)) % W), y = AY + sy * AH + Math.sin(t * 2.3 + sv * 30) * P * 0.12, L = P * (0.18 + sv * 0.35);
-      ctx.moveTo(x, y); ctx.lineTo(x + L, y - L * 0.08);
+      const sx = rainSeeds[i * 3], sy = rainSeeds[i * 3 + 1], sv = rainSeeds[i * 3 + 2], d = t * P * (6 + sv * 6) * fast;
+      const x = AX - P + ((((sx * W + dx * d) % W) + W) % W), y = AY - P + ((((sy * H + dy * d + Math.sin(t * 2.3 + sv * 30) * P * 0.12) % H) + H) % H);
+      const L = P * (0.18 + sv * 0.35) * (1 + gk * 0.6);
+      ctx.moveTo(x, y); ctx.lineTo(x - dx * L, y - dy * L);
     }
     ctx.stroke();
   } else if (weather === 'rain') {
@@ -8830,8 +8929,9 @@ function render() {
   }
   ctx.globalCompositeOperation = 'source-over'; ctx.lineCap = 'butt';
   ctx.globalAlpha = 1;
+  if (matchOn && !rsv) drawFogBanks();
   ctx.restore();
-  if (matchOn && !rsv) { drawWeatherAir(); drawBolt(); }
+  if (matchOn && !rsv) { drawWeatherAir(); drawBolt(); drawGustArrow(); }
   if (follow) {
     drawViewportFrame();
     if (matchOn && state !== 'matchEnd') drawMinimap();
@@ -9097,7 +9197,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, wxRule, snowGrip, strikeBolt, get boltT() { return boltT; }, set boltT(v) { boltT = v; }, get boltFlash() { return boltFlash; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
+  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, wxRule, snowGrip, strikeBolt, gust, get banks() { return banks; }, set banks(v) { banks = v; }, inBank, stepGust, get boltT() { return boltT; }, set boltT(v) { boltT = v; }, get boltFlash() { return boltFlash; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,

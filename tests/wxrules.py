@@ -123,6 +123,9 @@ async def main():
     code = await ev(H, '__tank.net.code'); await ev(G, f'__tank.net.joinGame("{code}")'); await G.wait_for_timeout(1500)
     await ev(H, '__tank.net.hostStart()'); await H.wait_for_timeout(2500)
     check(await ev(G, '__tank.settings().wxRules') is True, 'the guest has the weather rules on too')
+    await ev(H, "__tank.setSettings(Object.assign({}, __tank.settings(), {wxRules:false}))"); await H.wait_for_timeout(600)
+    check(await ev(G, '__tank.settings().wxRules') is False, '...and off when the host switches them off')
+    await ev(H, "__tank.setSettings(Object.assign({}, __tank.settings(), {wxRules:true}))"); await H.wait_for_timeout(600)
     got = None
     for _ in range(60):
       if await ev(H, "__tank.themeOf(__tank.mapId) === 'rain'"): got = await ev(H, '__tank.mapId'); break

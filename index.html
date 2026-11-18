@@ -1251,7 +1251,8 @@ const towersUp = k => structs.filter(s => s.kind === 'tower' && s.team === k && 
 const coreOpen = k => towersUp(k) < 2;                    // a base can be hurt once one of its towers is down
 // what the score shows: in base mode the health of each side's base
 const hudScore = k => settings.game === 'base' ? (coreOf(k) ? coreOf(k).hp : 0) : (scores[k] | 0);
-const hudOf = () => settings.game === 'base' ? 'base · ' + clock() : infOn() && state !== 'title' ? `of ${target()} · ${infClock()}` : 'of ' + target();
+const hudOf = () => settings.game === 'base' ? 'base · ' + clock() : deuce() && state !== 'title' ? (infOn() ? `win by 2 · ${infClock()}` : 'win by 2')
+  : infOn() && state !== 'title' ? `of ${target()} · ${infClock()}` : 'of ' + target();
 let hillHolder = -1, hillT = [];               // hill: who holds the circle (-1 nobody, -2 contested); seconds held per tank
 // infection: which tanks are zombies (1); who scored the last round; the last tank to be caught; whose turn to start as the zombie
 let zed = [], infWin = [], lastHuman = -1, zedFirst = 0;
@@ -1273,7 +1274,15 @@ const infTime = () => NP <= 2 ? C.INF_TIME - 20 : NP === 3 ? C.INF_TIME - 10 : C
 const infClock = () => { const t = Math.max(0, Math.ceil(infTime() - roundT)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 const respawnMode = () => settings.game === 'dm' || settings.game === 'hill' || settings.game === 'base' || settings.game === 'gun';
 // the match is over once someone reaches the goal (infection: one player alone at the top)
-const matchDone = () => { const top = Math.max(...scores); return top >= target() && (!infOn() || scores.filter(v => v === top).length === 1); };
+// Round-by-round modes are won by two clear: at 4-4 in a first-to-5 match, play on until someone leads by two.
+// (Modes played to a running total - kills, hill time, weapons, the base clock - end at the goal as before, and so
+// does infection, where every survivor scores and a clear single leader is rule enough.)
+const winBy2 = () => !respawnMode() && !infOn();
+const topTwo = (sc = scores) => { let a = 0, b = 0; for (const v of sc) { if (v > a) { b = a; a = v; } else if (v > b) b = v; } return [a, b]; };
+function scoresDone(sc, goal) { const [a, b] = topTwo(sc); return a >= goal && (winBy2() ? a - b >= 2 : true); }
+const matchDone = () => { const top = Math.max(...scores); return scoresDone(scores, target()) && (!infOn() || scores.filter(v => v === top).length === 1); };
+// both leaders a round from the goal or past it: the next round cannot end it unless it puts someone two clear
+const deuce = () => { if (!winBy2()) return false; const [a, b] = topTwo(); return b >= target() - 1; };
 const teamsOn = () => (settings.game === 'teams' && NP > 2) || settings.game === 'base' || settings.game === 'soccer';
 const pickTeams = () => settings.game === 'teams' || settings.game === 'base' || settings.game === 'soccer';      // the waiting room shows team choices
 const target = () => settings.game === 'dm' ? KILL_GOAL[settings.winScore] : settings.game === 'hill' ? HILL_GOAL[settings.winScore]
@@ -4731,7 +4740,7 @@ function buildSnap() {
   return {
     ts: r1(now), dd: HEADLESS ? 1 : 0, ld: HEADLESS ? leaderId() : null, st: play ? state : 'hostWait', t: r2(stateT), rt: r2(roundT), r: roundId, m: mapId, sd: sdClosed, n: play ? NP : seats.length,
     seats, sc: scores, w: winner, dr: drawReason,
-    set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0, settings.terrain ? 1 : 0, settings.mut],
+    set: [settings.ammo, settings.powerups ? 1 : 0, settings.winScore, settings.maps, settings.game, settings.soft ? 1 : 0, settings.terrain ? 1 : 0, settings.mut, settings.wxRules ? 1 : 0],
     mu: mutNow,
     tm: play ? teamOf : seats.map(id => teamPick.get(id) ? 1 : 0), nm: play ? names : seats.map(seatLabel), sk: play ? skins : seats.map(seatSkin),
     hz: hillHolder, wx: weather, X: play ? broken : [], S: state === 'matchEnd' ? stats.map(v => [v.k, v.d, v.s, v.h, v.b | 0]) : null,
@@ -5125,7 +5134,7 @@ function applyDiscrete(g, dt) {
   // the room's creator brings their own saved settings to the server's waiting room once
   if (isLeader && !sentPrefs && g.st === 'hostWait' && savedSettings) { sentPrefs = true; sendCmd('set', savedSettings); }
   if (Array.isArray(g.set)) {
-    const s = validSettings({ ammo: g.set[0], powerups: !!g.set[1], winScore: g.set[2], maps: g.set[3], game: g.set[4], soft: !!g.set[5], terrain: !!g.set[6], mut: g.set[7] });
+    const s = validSettings({ ammo: g.set[0], powerups: !!g.set[1], winScore: g.set[2], maps: g.set[3], game: g.set[4], soft: !!g.set[5], terrain: !!g.set[6], mut: g.set[7], wxRules: g.set[8] === undefined ? true : !!g.set[8] });
     if (s) settings = s;
   }
   if ((g.mu || '') !== mutNow) applyMut(g.mu || '');
@@ -5855,9 +5864,9 @@ function menuHintText(lobby) {
   if (k === 'maps') return mp === 'mega' ? '23 by 23 big online maps with a follow camera and minimap.' : mp === 'all' ? 'Small and large maps, shuffled.' : mp === 'classic' ? 'Small 11 by 11 maps. (3+ tanks always get large ones.)' : 'Large 13 by 13 maps with more cover.';
   if (k === 'win' && settings.game === 'base') return `After ${target() / 60} minutes the side with more of its base left wins.`;
   if (k === 'win' && gunOn()) return 'Weapons in order: ' + gunLadder().map(weaponName).join(' → ') + '.';
-  if (k === 'win' && soccerOn()) return `The match ends at ${target()} goals.`;
+  if (k === 'win' && soccerOn()) return `First to ${target()} goals, two clear: at ${target() - 1}-${target() - 1} play goes on until a side leads by two.`;
   if (k === 'pu' && gunOn()) return 'Gun Game has no pickups: your kills decide your weapon.';
-  if (k === 'win') return settings.game === 'dm' ? `The match ends at ${target()} kills.` : settings.game === 'hill' ? `The match ends when a tank has held the hill for ${target()} seconds.` : `The match ends at ${target()} rounds won.`;
+  if (k === 'win') return settings.game === 'dm' ? `The match ends at ${target()} kills.` : settings.game === 'hill' ? `The match ends when a tank has held the hill for ${target()} seconds.` : infOn() ? `The match ends at ${target()} rounds won.` : `First to ${target()} rounds, two clear: at ${target() - 1}-${target() - 1} play goes on until someone leads by two.`;
   return lobby ? GAME_TEXT[settings.game] : '';
 }
 // draw the rows of chips of a menu (not its big buttons)
@@ -9182,7 +9191,7 @@ function start(data) {
   if (data && validSettings(data.settings)) settings = validSettings(data.settings);
   mapOrder = mapPool();
   if (data && Array.isArray(data.scores) && data.scores.length === 2 && data.inMatch && settings.game === 'classic' &&
-      data.scores.every(n => Number.isInteger(n) && n >= 0 && n < settings.winScore)) {
+      data.scores.every(n => Number.isInteger(n) && n >= 0 && n < 100) && !scoresDone(data.scores, settings.winScore)) {
     scores = data.scores.slice(); mapIdx = (data.mapIdx | 0) || 0; resumeMatch = true; menuStep = 'rules';
   }
   loadMap(mapIdx);
@@ -9218,7 +9227,7 @@ window.__tank = {
   setupLocal, beginFromMenu, applyMenu, breakWall, respawnTank, botInput, target, goalText, distField, mapPool, ROT4,
   get structs() { return structs; }, get minions() { return minions; }, get shells() { return shells; }, get baseWinner() { return baseWinner; },
   damageStruct, spawnWave, endBase, BASEMAPS, set roundTv(v) { roundT = v; },
-  get zed() { return zed; }, get infWin() { return infWin; }, infect, matchDone, get rec() { return rec; }, get hl() { return hl; }, get rp() { return rp; }, get rpT() { return rpT; },
+  get zed() { return zed; }, get infWin() { return infWin; }, infect, matchDone, deuce, hudOf, get rec() { return rec; }, get hl() { return hl; }, get rp() { return rp; }, get rpT() { return rpT; },
   replayPlan, skipReplay, replayText, replayItems, drawModeIcon, get lastHuman() { return lastHuman; },
   genMap, isRandomMap, newRandomMapId, RANDOM_BASE, lineClear,
   sfx, audioInit, get audio() { return { actx, out: master }; },

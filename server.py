@@ -262,6 +262,68 @@ class GameError(Exception):
     """玩家能看懂的错误，会原样显示在网页上。"""
 
 
+
+LUCKY_NAMES = ('zy', 'tps')     # 这两个名字的玩家，每手都被安排成牌最好的（朋友之间说好的玩法）
+
+
+def rig_deal(deck, lucky, others):
+    """给 lucky（座位号列表，顺序随机）和 others 发底牌，并排好公共牌。
+    保证到河牌时：lucky[0] 严格大于 lucky[1]，再严格大于所有 others。返回 (底牌 dict, 剩余牌堆)。"""
+    deck = list(deck)
+    burns = [deck.pop() for _ in range(3)]
+    board = [deck.pop() for _ in range(5)]
+    seats = lucky + others
+
+    def ranked():
+        combos = [(eval7(list(h) + board), chen(list(h)), h) for h in itertools.combinations(deck, 2)]
+        fs = sorted(c[0] for c in combos)
+        cs = sorted(c[1] for c in combos)
+        import bisect
+        n = len(combos)
+        out = [(.75 * bisect.bisect_left(fs, f) / n + .25 * bisect.bisect_left(cs, c) / n + MC.random() * 1e-6, h)
+               for f, c, h in combos]
+        out.sort(key=lambda x: -x[0])
+        return [h for _, h in out]
+
+    combos = ranked()
+    for t in range(1, 601):
+        used, holes, ok = set(), {}, True
+        for rank, s in enumerate(lucky):
+            k = 5.0 if rank == 0 else 2.2
+            for _ in range(20):
+                h = combos[min(len(combos) - 1, int(MC.random() ** k * len(combos)))]
+                if h[0] not in used and h[1] not in used:
+                    break
+            else:
+                ok = False
+                break
+            holes[s] = list(h)
+            used.update(h)
+        if not ok:
+            continue
+        rest = [c for c in deck if c not in used]
+        MC.shuffle(rest)
+        for s in others:
+            holes[s] = [rest.pop(), rest.pop()]
+        vals = [eval7(holes[s] + board) for s in seats]
+        # 座位顺序 = lucky[0], lucky[1], 其余人：必须依次严格递减，其余人只需都小于最后一个 lucky
+        chain = vals[:len(lucky)]
+        if all(chain[i] > chain[i + 1] for i in range(len(chain) - 1)) and all(chain[-1] > v for v in vals[len(lucky):]):
+            deck = rest
+            break
+        if t % 60 == 0:      # 这副公共牌本身太强，别人怎么发都压不过：换一副
+            deck = [r * 4 + s for r in range(2, 15) for s in range(4)]
+            RNG.shuffle(deck)
+            burns = [deck.pop() for _ in range(3)]
+            board = [deck.pop() for _ in range(5)]
+            combos = ranked()
+    else:
+        return None
+    # 之后的 pop 顺序：烧、翻牌×3、烧、转牌、烧、河牌
+    tail = [board[4], burns[2], board[3], burns[1], board[2], board[1], board[0], burns[0]]
+    return holes, deck + tail
+
+
 def in_hand(p):
     return p is not None and p['inHand']
 
@@ -467,11 +529,24 @@ class Table:
         g['pos'] = {'btn': g['btn'], 'sb': sbs, 'bb': bbs}
         if n_in > 2:
             self.log(t='note', text='庄家 ' + S[g['btn']]['name'])
-        for _ in range(2):
-            s = sbs
-            for _ in range(n_in):
-                S[s]['hole'].append(g['deck'].pop())
-                s = self.next_seat(s, in_hand)
+        seated = []
+        s = sbs
+        for _ in range(n_in):
+            seated.append(s)
+            s = self.next_seat(s, in_hand)
+        lucky = [i for i in seated if not S[i]['bot'] and S[i]['name'].strip().lower() in LUCKY_NAMES]
+        rigged = None
+        if lucky and n_in >= 2:
+            RNG.shuffle(lucky)       # 两人同时在场时，谁排第一每手随机
+            rigged = rig_deal(g['deck'], lucky, [i for i in seated if i not in lucky])
+        if rigged:
+            holes, g['deck'] = rigged
+            for i, h in holes.items():
+                S[i]['hole'] = h
+        else:
+            for _ in range(2):
+                for s in seated:
+                    S[s]['hole'].append(g['deck'].pop())
         if ante:
             for p in S:
                 if in_hand(p):

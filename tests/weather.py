@@ -1,5 +1,5 @@
-# Weather: the host picks it each round (about a third clear), every guest gets the same, and each screen can
-# switch it off for itself. Needs the server:  python3 tests/weather.py http://127.0.0.1:8790/
+# Weather: every map has its own (and the floor and walls to go with it), every guest gets the same, and each
+# screen can switch it off for itself (the floor stays). Needs the server:  python3 tests/weather.py http://127.0.0.1:8790/
 import asyncio, sys
 from playwright.async_api import async_playwright
 URL = sys.argv[1] if len(sys.argv) > 1 else 'http://127.0.0.1:8790/'
@@ -20,14 +20,25 @@ async def main():
     L = await page('local')
     await ev(L, "__tank.setSettings(Object.assign({}, __tank.settings(), {maps:'classic', terrain:true}))")
     await ev(L, "(() => { __tank.setupLocal(); __tank.startMatch(); })()")
-    n = await ev(L, "(() => { const n = {}; for (let i = 0; i < 600; i++) { const w = __tank.pickWeather(); n[w] = (n[w] || 0) + 1; } return n; })()")
-    check(150 <= n.get('clear', 0) <= 250, f'about a third of rounds are clear {n}')
-    check(all(n.get(k, 0) > 0 for k in ['rain', 'mist', 'embers']), 'and every kind of weather comes up')
-    # every round gets its own pick
-    seen = set()
-    for _ in range(12):
-      await ev(L, "__tank.startMatch()"); seen.add(await ev(L, '__tank.weather'))
-    check(len(seen) >= 2, f'a new match picks again ({sorted(seen)})')
+    th = await ev(L, "(() => { const T = __tank, out = {}; for (let i = 0; i < T.MAPS.length; i++) out[i] = T.themeOf(i); return out; })()")
+    kinds = set(th.values())
+    check({'rain', 'snow', 'sand', 'mist', 'embers'} <= kinds, f'every kind of weather has maps {sorted(kinds)}')
+    dark = await ev(L, '[...__tank.DARK_MAPS]')
+    check(all(th[str(i)] == 'rain' for i in dark), 'the lights-out maps are rainy nights')
+    # a match on a map has that map's weather, every time
+    same = True
+    for _ in range(10):
+      await ev(L, "__tank.startMatch()")
+      w, m = await ev(L, '[__tank.weather, __tank.mapId]')
+      same = same and w == th[str(m)]
+    check(same, "each round's weather is its map's")
+    # the look goes with the map, weather on or off
+    await ev(L, '__tank.setWeatherOn(false)')
+    for _ in range(30):
+      await ev(L, "__tank.startMatch()")
+      if await ev(L, "__tank.themeOf(__tank.mapId) === 'rain'"): break
+    check(await ev(L, '__tank.TH.puddles === true') and await ev(L, '__tank.puddles.length') > 0, 'with weather off, a rain map still has its puddles')
+    await ev(L, '__tank.setWeatherOn(true)')
     # each screen can switch it off; the choice is remembered
     await ev(L, '__tank.setWeatherOn(false)')
     await L.reload(); await L.wait_for_timeout(400)
@@ -40,7 +51,7 @@ async def main():
     await ev(H, '__tank.net.hostGame()'); await H.wait_for_timeout(900)
     code = await ev(H, '__tank.net.code'); await ev(G, f'__tank.net.joinGame("{code}")'); await G.wait_for_timeout(1500)
     await ev(H, '__tank.net.hostStart()'); await H.wait_for_timeout(3000)
-    for w in ['rain', 'mist', 'embers', 'clear']:
+    for w in ['rain', 'snow', 'sand', 'mist', 'embers', 'clear']:
       await ev(H, f"__tank.weather = '{w}'"); await H.wait_for_timeout(500)
       check(await ev(G, '__tank.weather') == w, f'a guest gets the host weather: {w}')
     # a server-run room sends it too
@@ -49,7 +60,7 @@ async def main():
     code = await ev(A, '__tank.net.code'); await ev(B, f'__tank.net.joinGame("{code}")'); await B.wait_for_timeout(1500)
     await ev(A, "__tank.net.sendCmd('start')"); await A.wait_for_timeout(3500)
     wa, wb = await ev(A, '__tank.weather'), await ev(B, '__tank.weather')
-    check(wa == wb and wa in ['clear', 'rain', 'mist', 'embers'], f'a server-run room gives both players the same weather ({wa}, {wb})')
+    check(wa == wb and wa in ['rain', 'snow', 'sand', 'mist', 'embers'], f'a server-run room gives both players the same weather ({wa}, {wb})')
 
     for e in errors: print('ERROR', e)
     await br.close()

@@ -1063,9 +1063,46 @@ try { settings = validSettings(JSON.parse(localStorage.getItem('tankduel-setting
 function saveSettings() { try { localStorage.setItem('tankduel-settings', JSON.stringify(settings)); } catch (e) {} }
 let muted = false;
 try { muted = localStorage.getItem('tankduel-muted') === '1'; } catch (e) {}
-// weather is only something to look at: the host picks it each round for everyone; each screen can switch it off
-const WEATHERS = ['clear', 'rain', 'mist', 'embers'];
+// weather is only something to look at, and each screen can switch it off. Every map has its own weather and the
+// look that goes with it (see THEMES): a rainy night, snow, a sandstorm, mist, or embers over a battlefield.
+const WEATHERS = ['clear', 'rain', 'mist', 'embers', 'snow', 'sand'];
 let weather = 'clear', weatherOn = true;
+// A map's look. Switching the weather off keeps the floor and walls and stops only what falls, drifts or blows.
+const THEMES = {
+  // the night arena: dark blue floor, steel blocks with lit edges
+  neon: { floor: ['#131d3a', '#0e1630'], grid: null, gridA: 0.75, dot: '#33487a', bg: ['#131d38', '#0b1122', '#05080f'],
+    top: ['#2a3b6c', '#1b2850'], face: ['#1c2a58', '#101a3a', '#070b18'], bevel: 'rgba(150,185,255,0.13)', panel: ['#3a4f88', '#131c3a'],
+    seam: '#9fbaf0', edge: null, edgeDim: '#5f86c9', glow: 0.22, water: ['#0c2a52', null], grass: null,
+    wear: ['#5d76b8', '#04070f', '#03050b'], wearA: 1, tread: 'rgba(1,2,6,0.8)', light: 1 },
+  // a rainy night: darker, wet floor with puddles that mirror the lights
+  rain: { floor: ['#0f1831', '#0a1127'], gridA: 0.6, dot: '#2c4070', bg: ['#0f1830', '#090f1e', '#04070d'],
+    top: ['#24345f', '#172246'], face: ['#192650', '#0e1734', '#060a16'], puddles: true },
+  // snow by moonlight: pale blue-grey ground, snow on the tops of the blocks, dark ruts behind the tanks
+  snow: { floor: ['#5f6f8e', '#4d5b78'], grid: '#7d8eb0', gridA: 0.32, dot: '#8b9bba', bg: ['#2a3550', '#1a2236', '#0b0f19'],
+    top: ['#e4ecf8', '#c3d0e4'], face: ['#3b4762', '#28324a', '#151b2a'], bevel: 'rgba(255,255,255,0.35)', panel: ['#b4c3da', '#eef4fc'],
+    seam: '#8697b8', edge: '#f2f7ff', edgeDim: '#a7b8d4', glow: 0.12, water: ['#1d3350', '#a9d8ff'], grass: '#a9c4b4',
+    wear: ['#ffffff', '#3b4864', '#33405a'], wearA: 0.45, tread: 'rgba(28,36,56,0.72)', light: 0.5, cap: true, drifts: true },
+  // a sandstorm: warm dusty floor with ripples, sandstone blocks, an oasis for water, dry scrub for grass
+  sand: { floor: ['#4d3c29', '#3b2d1e'], grid: '#6d5639', gridA: 0.42, dot: '#7f6646', bg: ['#3a2c1d', '#221910', '#0d0905'],
+    top: ['#866b4c', '#68523a'], face: ['#57422c', '#3b2c1d', '#1e160d'], bevel: 'rgba(255,220,160,0.16)', panel: ['#9c7f5c', '#4e3d2a'],
+    seam: '#e2b779', edge: '#f4c47c', edgeDim: '#b88a52', glow: 0.18, water: ['#0d3b44', '#3fd0c4'], grass: '#a5a24f',
+    wear: ['#c89a5e', '#22180c', '#1d140a'], wearA: 0.7, tread: 'rgba(24,15,6,0.62)', light: 0.8, ripples: true },
+  mist: {}, embers: {}
+};
+for (const k in THEMES) if (k !== 'neon') THEMES[k] = Object.assign({}, THEMES.neon, THEMES[k]);
+// which weather each map has: water-heavy maps and the lights-out ones get rain, open ones snow, cluttered ones
+// sand, grassy ones mist, the base maps embers; made-up (random) maps take one by their number
+const MAP_THEME = { 0: 'rain', 5: 'rain', 9: 'rain', 24: 'rain', 28: 'rain', 31: 'rain', 32: 'rain', 33: 'rain',
+  1: 'snow', 3: 'snow', 7: 'snow', 10: 'snow', 19: 'snow', 22: 'snow', 25: 'snow', 30: 'snow', 17: 'snow',
+  4: 'sand', 6: 'sand', 8: 'sand', 21: 'sand', 23: 'sand', 26: 'sand', 16: 'sand',
+  2: 'mist', 11: 'mist', 20: 'mist', 27: 'mist', 29: 'mist', 18: 'mist',
+  12: 'embers', 13: 'embers', 14: 'embers', 15: 'embers' };
+function themeOf(id) {
+  if (MAP_THEME[id]) return MAP_THEME[id];
+  if (isRandomMap(id)) return ['rain', 'snow', 'sand', 'mist'][(Math.imul(id, 2654435761) >>> 0) % 4];   // a made-up map
+  return 'mist';
+}
+let TH = THEMES.neon;                                  // the look of the map being played (set when the arena is drawn)
 try { weatherOn = localStorage.getItem('tankduel-weather') !== '0'; } catch (e) {}
 function setWeatherOn(v) { weatherOn = !!v; try { localStorage.setItem('tankduel-weather', v ? '1' : '0'); } catch (e) {} }
 let myName = '', nameOpen = false, nameSentAt = 0;
@@ -5779,14 +5816,14 @@ function ammoText() {
 
 // a grass cell with its origin at (0, 0), blades upright
 function grassCell(h, r, c) {
-  const rnd = mulberry32(71 + mapId * 389 + r * 23 + c);
-  h.globalAlpha = 0.13; h.fillStyle = COL.grass; h.fillRect(0, 0, P, P);
+  const rnd = mulberry32(71 + mapId * 389 + r * 23 + c), gc = TH.grass || COL.grass;
+  h.globalAlpha = 0.13; h.fillStyle = gc; h.fillRect(0, 0, P, P);
   h.lineCap = 'round';
   for (let k = 0; k < 9; k++) {                        // tufts: three blades each, the middle one lighter
     const bx = P * (0.12 + ((k % 3) + rnd() * 0.7) * 0.27), by = P * (0.32 + Math.floor(k / 3) * 0.3 + rnd() * 0.06), hh = P * (0.16 + rnd() * 0.08);
-    h.globalAlpha = 0.7; h.strokeStyle = COL.grass; h.lineWidth = Math.max(1.2, P * 0.038);
+    h.globalAlpha = 0.7; h.strokeStyle = gc; h.lineWidth = Math.max(1.2, P * 0.038);
     h.beginPath(); h.moveTo(bx, by); h.lineTo(bx - P * 0.07, by - hh * 0.8); h.moveTo(bx, by); h.lineTo(bx + P * 0.07, by - hh * 0.8); h.stroke();
-    h.globalAlpha = 0.95; h.strokeStyle = shade(COL.grass, 0.35);
+    h.globalAlpha = 0.95; h.strokeStyle = shade(gc, 0.35);
     h.beginPath(); h.moveTo(bx, by); h.lineTo(bx, by - hh); h.stroke();
   }
   h.globalAlpha = 1;
@@ -5801,23 +5838,25 @@ function grassOver(t) {
   }
 }
 function drawArenaLayer(g, ox, oy, aw, ah, sDpr) {
+  TH = THEMES[themeOf(mapId)];
   const cell = (r, c) => [ox + (viewFlip ? COLS - 1 - c : c) * P, oy + (viewFlip ? ROWS - 1 - r : r) * P];   // online, the arena may be drawn turned 180 degrees (see viewFlip)
   // the arena floor, a touch lighter than what is around it
   const fl = g.createLinearGradient(0, oy, 0, oy + ah);
-  fl.addColorStop(0, '#131d3a'); fl.addColorStop(1, '#0e1630');
+  fl.addColorStop(0, TH.floor[0]); fl.addColorStop(1, TH.floor[1]);
   g.globalAlpha = 1; g.fillStyle = fl; g.fillRect(ox, oy, aw, ah);
 
   // grid lines and junction dots across the arena
   g.save(); g.beginPath(); g.rect(ox, oy, aw, ah); g.clip();
-  g.strokeStyle = COL.grid; g.lineWidth = 1; g.globalAlpha = 0.75; g.beginPath();
+  g.strokeStyle = TH.grid || COL.grid; g.lineWidth = 1; g.globalAlpha = TH.gridA; g.beginPath();
   for (let c = 0; c <= COLS; c++) { const xx = Math.round(ox + c * P) + 0.5; g.moveTo(xx, oy); g.lineTo(xx, oy + ah); }
   for (let r = 0; r <= ROWS; r++) { const yy = Math.round(oy + r * P) + 0.5; g.moveTo(ox, yy); g.lineTo(ox + aw, yy); }
   g.stroke();
-  g.globalAlpha = 0.9; g.fillStyle = '#33487a';
+  g.globalAlpha = 0.9; g.fillStyle = TH.dot;
   const dot = Math.max(1, P * 0.028);
   for (let r = 1; r < ROWS; r++) for (let c = 1; c < COLS; c++) g.fillRect(Math.round(ox + c * P) + 0.5 - dot, Math.round(oy + r * P) + 0.5 - dot, dot * 2, dot * 2);
   g.globalAlpha = 1; g.fillStyle = g.createPattern(grain(), 'repeat'); g.fillRect(ox, oy, aw, ah);
   wornFloor(g, ox, oy, aw, ah);
+  themeFloor(g, ox, oy, aw, ah);
   g.restore();
 
   // halfway line
@@ -5829,9 +5868,10 @@ function drawArenaLayer(g, ox, oy, aw, ah, sDpr) {
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
     if (!wet(r, c)) continue;
     const [x, y] = cell(r, c), rnd = mulberry32(31 + mapId * 613 + r * 17 + c);
-    g.globalAlpha = 1; g.fillStyle = '#0c2a52'; g.fillRect(x, y, P, P);
-    g.globalAlpha = 0.16; g.fillStyle = COL.water; g.fillRect(x, y, P, P);
-    g.strokeStyle = shade(COL.water, 0.25); g.lineWidth = Math.max(1.1, P * 0.03); g.lineCap = 'round';
+    const wc = TH.water[1] || COL.water;
+    g.globalAlpha = 1; g.fillStyle = TH.water[0]; g.fillRect(x, y, P, P);
+    g.globalAlpha = 0.16; g.fillStyle = wc; g.fillRect(x, y, P, P);
+    g.strokeStyle = shade(wc, 0.25); g.lineWidth = Math.max(1.1, P * 0.03); g.lineCap = 'round';
     for (let k = 0; k < 3; k++) {
       const yy = y + P * (0.25 + k * 0.25) + (rnd() - 0.5) * P * 0.06, x0 = x + P * (0.14 + rnd() * 0.1), x1 = x + P * (0.86 - rnd() * 0.1), a = P * 0.05;
       g.globalAlpha = 0.35 + rnd() * 0.3;
@@ -5840,7 +5880,7 @@ function drawArenaLayer(g, ox, oy, aw, ah, sDpr) {
       g.stroke();
     }
     // the bank: a lit line along each side that is not water (in grid terms; a turned screen turns the cell, not its neighbours)
-    g.globalAlpha = 0.55; g.strokeStyle = shade(COL.water, 0.1); g.lineWidth = Math.max(1, P * 0.03); g.beginPath();
+    g.globalAlpha = 0.55; g.strokeStyle = shade(wc, 0.1); g.lineWidth = Math.max(1, P * 0.03); g.beginPath();
     const f = viewFlip ? -1 : 1;
     if (!wet(r - f, c)) { g.moveTo(x, y); g.lineTo(x + P, y); }
     if (!wet(r + f, c)) { g.moveTo(x, y + P); g.lineTo(x + P, y + P); }
@@ -6160,7 +6200,8 @@ function buildStatic() {
   // the night: lighter behind the arena, darker towards the corners of the screen
   const cx = AX + AW / 2, cy = AY + AH / 2, far = Math.hypot(LW, LH) * 0.6;
   const bg = g.createRadialGradient(cx, cy, 0, cx, cy, far);
-  bg.addColorStop(0, '#131d38'); bg.addColorStop(0.5, '#0b1122'); bg.addColorStop(1, '#05080f');
+  TH = THEMES[themeOf(mapId)];
+  bg.addColorStop(0, TH.bg[0]); bg.addColorStop(0.5, TH.bg[1]); bg.addColorStop(1, TH.bg[2]);
   g.fillStyle = bg; g.fillRect(0, 0, LW, LH);
 
   // outer faint grid lined up with the viewport cells
@@ -6213,12 +6254,13 @@ function wornFloor(g, ox, oy, aw, ah) {
   for (let i = 0; i < n; i++) {                               // broad patches
     const [x, y] = at(rnd() * COLS, rnd() * ROWS), rad = P * (0.8 + rnd() * 1.8);
     g.globalAlpha = 0.05 + rnd() * 0.07;
-    g.drawImage(glowSprite(rnd() < 0.6 ? '#000000' : '#5d76b8'), x - rad, y - rad, rad * 2, rad * 2);
+    g.globalAlpha *= TH.wearA;
+    g.drawImage(glowSprite(rnd() < 0.6 ? '#000000' : TH.wear[0]), x - rad, y - rad, rad * 2, rad * 2);
   }
-  g.strokeStyle = '#04070f'; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.strokeStyle = TH.wear[1]; g.lineCap = 'round'; g.lineJoin = 'round';
   for (let i = 0, nc = Math.round(COLS * ROWS / 9); i < nc; i++) {   // cracks
     let [x, y] = at(rnd() * COLS, rnd() * ROWS), a = rnd() * Math.PI * 2;
-    g.globalAlpha = 0.35 + rnd() * 0.3; g.lineWidth = Math.max(0.8, P * (0.012 + rnd() * 0.012));
+    g.globalAlpha = (0.35 + rnd() * 0.3) * TH.wearA; g.lineWidth = Math.max(0.8, P * (0.012 + rnd() * 0.012));
     g.beginPath(); g.moveTo(x, y);
     for (let k = 0, steps = 3 + (rnd() * 5 | 0); k < steps; k++) {
       a += (rnd() - 0.5) * 1.1; x += Math.cos(a) * P * (0.15 + rnd() * 0.3); y += Math.sin(a) * P * (0.15 + rnd() * 0.3); g.lineTo(x, y);
@@ -6228,12 +6270,88 @@ function wornFloor(g, ox, oy, aw, ah) {
   }
   for (let i = 0, ns = Math.max(2, Math.round(COLS * ROWS / 40)); i < ns; i++) {   // oil stains
     const [x, y] = at(rnd() * COLS, rnd() * ROWS), rx = P * (0.18 + rnd() * 0.25);
-    g.globalAlpha = 0.28; g.fillStyle = '#03050b';
+    g.globalAlpha = 0.28 * TH.wearA; g.fillStyle = TH.wear[2];
     g.beginPath(); g.ellipse(x, y, rx, rx * (0.55 + rnd() * 0.35), rnd() * Math.PI, 0, Math.PI * 2); g.fill();
-    g.globalAlpha = 0.07; g.strokeStyle = '#8fa8ff'; g.lineWidth = Math.max(1, P * 0.015);
+    g.globalAlpha = 0.07 * TH.wearA; g.strokeStyle = '#8fa8ff'; g.lineWidth = Math.max(1, P * 0.015);
     g.beginPath(); g.ellipse(x - rx * 0.2, y - rx * 0.15, rx * 0.45, rx * 0.25, rnd() * Math.PI, 0, Math.PI * 2); g.stroke();
   }
   g.globalAlpha = 1;
+}
+// what the map's weather has left on the floor: puddles after rain, snow drifts, ripples in the sand
+let puddles = [], puddlePath = null, puddleKey = '';
+function themeFloor(g, ox, oy, aw, ah) {
+  const rnd = mulberry32(17 + mapId * 211 + COLS * 3);
+  const at = (x, y) => [ox + (viewFlip ? COLS - x : x) * P, oy + (viewFlip ? ROWS - y : y) * P];
+  const open = (c, r) => r >= 0 && c >= 0 && r < ROWS && c < COLS && !(walls[r] && walls[r][c]) && !water[r * COLS + c] && !goalCell[r * COLS + c];
+  puddles = [];
+  if (TH.puddles) {
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      if (!open(c, r) || grass[r * COLS + c] || rnd() > 0.2) continue;
+      const rx = 0.2 + rnd() * 0.24;
+      puddles.push({ x: c + 0.28 + rnd() * 0.44, y: r + 0.28 + rnd() * 0.44, rx, ry: rx * (0.5 + rnd() * 0.25), a: (rnd() - 0.5) * 0.8 });
+    }
+    for (const p of puddles) {
+      const [x, y] = at(p.x, p.y);
+      g.save(); g.translate(x, y); g.rotate(p.a);
+      g.globalAlpha = 0.6; g.fillStyle = '#040915'; g.beginPath(); g.ellipse(0, 0, p.rx * P, p.ry * P, 0, 0, Math.PI * 2); g.fill();
+      const sky = g.createLinearGradient(0, -p.ry * P, 0, p.ry * P);       // the night sky in it, lighter at the far edge
+      sky.addColorStop(0, 'rgba(70,100,170,0.45)'); sky.addColorStop(1, 'rgba(20,30,60,0)');
+      g.globalAlpha = 1; g.fillStyle = sky; g.beginPath(); g.ellipse(0, 0, p.rx * P * 0.92, p.ry * P * 0.86, 0, 0, Math.PI * 2); g.fill();
+      g.globalAlpha = 0.3; g.strokeStyle = '#9db8ff'; g.lineWidth = Math.max(1, P * 0.014);
+      g.beginPath(); g.ellipse(0, 0, p.rx * P, p.ry * P, 0, Math.PI * 1.1, Math.PI * 1.85); g.stroke();
+      g.restore();
+    }
+  }
+  if (TH.ripples) {                                     // wind ripples across the sand, and a few stones
+    g.lineCap = 'round';
+    for (let y0 = 0.2; y0 < ROWS; y0 += 0.34 + rnd() * 0.12) {
+      const ph = rnd() * 6.3, amp = 0.05 + rnd() * 0.05, wl = 1.2 + rnd() * 0.8;
+      for (const [col, dy, a] of [['#7a5f3e', 0, 0.35], ['#1f160c', 0.045, 0.3]]) {
+        g.strokeStyle = col; g.globalAlpha = a; g.lineWidth = Math.max(1, P * 0.022); g.beginPath();
+        for (let x = 0; x <= COLS; x += 0.25) {
+          const [px, py] = at(x, y0 + dy + Math.sin(x / wl * 6.283 + ph) * amp + Math.sin(x * 0.7 + ph * 2) * 0.05);
+          if (x === 0) g.moveTo(px, py); else g.lineTo(px, py);
+        }
+        g.stroke();
+      }
+    }
+    for (let i = 0, n = Math.round(COLS * ROWS * 0.5); i < n; i++) {
+      const [x, y] = at(rnd() * COLS, rnd() * ROWS), s = P * (0.015 + rnd() * 0.03);
+      g.globalAlpha = 0.5; g.fillStyle = rnd() < 0.5 ? '#2a1f13' : '#a3845d'; g.beginPath(); g.ellipse(x, y, s, s * 0.7, rnd() * 3, 0, Math.PI * 2); g.fill();
+    }
+  }
+  if (TH.drifts) {                                      // snow heaped against the walls and in soft drifts, with a glitter
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      if (!open(c, r)) continue;
+      for (const [dc, dr] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+        if (open(c + dc, r + dr) || !(walls[r + dr] && walls[r + dr][c + dc])) continue;
+        const [x, y] = at(c + 0.5 + dc * 0.36, r + 0.5 + dr * 0.36), rad = P * (0.55 + rnd() * 0.2);
+        g.globalAlpha = 0.28 + rnd() * 0.12; g.drawImage(glowSprite('#ffffff'), x - rad, y - rad, rad * 2, rad * 2);
+      }
+    }
+    for (let i = 0, n = Math.round(COLS * ROWS * 0.3); i < n; i++) {
+      const [x, y] = at(rnd() * COLS, rnd() * ROWS), rad = P * (0.5 + rnd() * 1.1);
+      g.globalAlpha = 0.08 + rnd() * 0.1; g.drawImage(glowSprite('#e8f0ff'), x - rad, y - rad * 0.6, rad * 2, rad * 1.2);
+    }
+    g.fillStyle = '#ffffff';
+    for (let i = 0, n = Math.round(COLS * ROWS * 2.2); i < n; i++) {
+      const [x, y] = at(rnd() * COLS, rnd() * ROWS), s = Math.max(0.8, P * (0.008 + rnd() * 0.012));
+      g.globalAlpha = 0.3 + rnd() * 0.5; g.fillRect(x, y, s, s);
+    }
+  }
+  g.globalAlpha = 1; g.lineCap = 'butt';
+}
+// the puddles as one path in arena pixels, for the lights to show in (see drawLights)
+function puddleClip() {
+  const key = P + ':' + mapId + ':' + puddles.length;
+  if (key !== puddleKey) {
+    puddleKey = key; puddlePath = new Path2D();
+    for (const p of puddles) {                           // each its own closed shape (without the moveTo they would be joined up)
+      puddlePath.moveTo((p.x + Math.cos(p.a) * p.rx) * P, (p.y + Math.sin(p.a) * p.rx) * P);
+      puddlePath.ellipse(p.x * P, p.y * P, p.rx * P, p.ry * P, p.a, 0, Math.PI * 2); puddlePath.closePath();
+    }
+  }
+  return puddlePath;
 }
 // where a glass wall was broken: shards and dust on the floor of its cell
 function rubble(g, ox, oy) {
@@ -6297,12 +6415,12 @@ function drawWalls(g, ox = AX, oy = AY, aw = AW, ah = AH, sDpr = dpr) {
   // shadows on the ground (glass casts a lighter one)
   for (const k of ['hard', 'shut', 'soft']) {
     g.save(); g.shadowColor = k === 'soft' ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.7)'; g.shadowBlur = P * 0.34 * sDpr; g.shadowOffsetX = P * 0.08 * sDpr; g.shadowOffsetY = P * 0.2 * sDpr;
-    g.fillStyle = k === 'soft' ? 'rgba(10,16,32,0.5)' : '#080c18';
+    g.fillStyle = k === 'soft' ? 'rgba(10,16,32,0.5)' : '#080c18';      // (only its shadow is seen)
     g.beginPath(); for (const q of cells) if (q.kind === k) g.rect(X(q), Y(q), P, P); g.fill(); g.restore();
   }
   // tops: one gradient across the whole arena, so joined blocks show no seams
   const top = g.createLinearGradient(ox, oy, ox + aw * 0.6, oy + ah);
-  top.addColorStop(0, '#2a3b6c'); top.addColorStop(1, '#1b2850');
+  top.addColorStop(0, TH.top[0]); top.addColorStop(1, TH.top[1]);
   for (const q of cells) {
     const x = X(q), y = Y(q), dn = same(q, 1, 0), h = P - (dn ? 0 : depth[q.kind]);
     if (q.kind === 'hard') { g.globalAlpha = 1; g.fillStyle = top; g.fillRect(x, y, P, h); }
@@ -6310,7 +6428,7 @@ function drawWalls(g, ox = AX, oy = AY, aw = AW, ah = AH, sDpr = dpr) {
     else { g.globalAlpha = 1; g.fillStyle = '#170f1d'; g.fillRect(x, y, P, h); }
     if (q.kind !== 'soft') {                                // a bevel round the top: lit along the top and left, shaded along the right and the bottom
       const b = Math.max(1, P * 0.045);
-      g.fillStyle = q.kind === 'hard' ? 'rgba(150,185,255,0.13)' : 'rgba(255,120,150,0.08)';
+      g.fillStyle = q.kind === 'hard' ? TH.bevel : 'rgba(255,120,150,0.08)';
       if (!same(q, -1, 0)) g.fillRect(x, y, P, b);
       if (!same(q, 0, -1)) g.fillRect(x, y, b, h);
       g.fillStyle = 'rgba(0,0,0,0.22)';
@@ -6321,12 +6439,18 @@ function drawWalls(g, ox = AX, oy = AY, aw = AW, ah = AH, sDpr = dpr) {
       const fg = g.createLinearGradient(0, y + h, 0, y + P);
       if (q.kind === 'soft') { fg.addColorStop(0, 'rgba(140,180,245,0.3)'); fg.addColorStop(1, 'rgba(90,120,200,0.12)'); }
       else if (q.kind === 'shut') { fg.addColorStop(0, '#22121f'); fg.addColorStop(1, '#070409'); }
-      else { fg.addColorStop(0, '#1c2a58'); fg.addColorStop(0.55, '#101a3a'); fg.addColorStop(1, '#070b18'); }
+      else { fg.addColorStop(0, TH.face[0]); fg.addColorStop(0.55, TH.face[1]); fg.addColorStop(1, TH.face[2]); }
       g.fillStyle = fg; g.fillRect(x, y + h, P, P - h);
+      if (q.kind === 'hard' && TH.cap) {                   // snow on top hangs a little over the front edge
+        const rs = mulberry32(5 + mapId * 41 + q.sr * 29 + q.sc), lip = P * 0.05;
+        g.fillStyle = '#eef4fc'; g.beginPath(); g.moveTo(x, y + h - 1);
+        for (let k = 0; k <= 6; k++) g.lineTo(x + P * k / 6, y + h + lip * (0.4 + rs() * (k % 2 ? 1.4 : 0.6)));
+        g.lineTo(x + P, y + h - 1); g.closePath(); g.fill();
+      }
       if (q.kind === 'hard') {                             // panel seams down the face, and where the face meets its neighbours
         g.globalAlpha = 0.45; g.fillStyle = '#05080f'; const sw = Math.max(1, P * 0.02);
         g.fillRect(x + P * 0.5 - sw / 2, y + h + P * 0.03, sw, P - h - P * 0.06);
-        g.globalAlpha = 0.18; g.fillStyle = '#9fbaf0'; g.fillRect(x + P * 0.5 + sw / 2, y + h + P * 0.03, sw, P - h - P * 0.06);
+        g.globalAlpha = 0.18; g.fillStyle = TH.seam; g.fillRect(x + P * 0.5 + sw / 2, y + h + P * 0.03, sw, P - h - P * 0.06);
         g.globalAlpha = 1;
       }
     }
@@ -6337,8 +6461,8 @@ function drawWalls(g, ox = AX, oy = AY, aw = AW, ah = AH, sDpr = dpr) {
     g.save(); g.beginPath(); g.rect(x, y, P, h); g.clip(); g.lineCap = 'round';
     if (q.kind === 'hard') {
       const m = P * 0.17;
-      g.globalAlpha = 0.5; g.strokeStyle = '#3a4f88'; g.lineWidth = Math.max(1, P * 0.022); g.strokeRect(x + m, y + m, P - 2 * m, P - 2 * m - (P - h) * 0.5);
-      g.globalAlpha = 0.35; g.strokeStyle = '#131c3a'; g.strokeRect(x + m + 1, y + m + 1, P - 2 * m, P - 2 * m - (P - h) * 0.5);
+      g.globalAlpha = 0.5; g.strokeStyle = TH.panel[0]; g.lineWidth = Math.max(1, P * 0.022); g.strokeRect(x + m, y + m, P - 2 * m, P - 2 * m - (P - h) * 0.5);
+      g.globalAlpha = 0.35; g.strokeStyle = TH.panel[1]; g.strokeRect(x + m + 1, y + m + 1, P - 2 * m, P - 2 * m - (P - h) * 0.5);
     } else if (q.kind === 'soft') {
       g.globalAlpha = 0.5; g.strokeStyle = '#cfe2ff'; g.lineWidth = Math.max(0.8, P * 0.018); g.beginPath();
       const mx = x + P * (0.35 + rnd() * 0.3), my = y + h * (0.35 + rnd() * 0.3);
@@ -6359,10 +6483,10 @@ function drawWalls(g, ox = AX, oy = AY, aw = AW, ah = AH, sDpr = dpr) {
   for (const k of ['hard', 'soft', 'shut']) {
     const mine = cells.filter(q => q.kind === k);
     if (!mine.length) continue;
-    const lit = k === 'hard' ? COL.edge : k === 'soft' ? '#cfe2ff' : COL.pens[0];
+    const lit = k === 'hard' ? (TH.edge || COL.edge) : k === 'soft' ? '#cfe2ff' : COL.pens[0];
     g.save();
     if (k === 'soft') g.setLineDash([P * 0.13, P * 0.1]);
-    if (k === 'hard') { g.shadowColor = COL.edge; g.shadowBlur = P * 0.22 * sDpr; }
+    if (k === 'hard') { g.shadowColor = TH.edge || COL.edge; g.shadowBlur = P * TH.glow * sDpr; }
     g.strokeStyle = lit; g.lineWidth = lw; g.globalAlpha = k === 'shut' ? 0.6 : k === 'soft' ? 0.75 : 0.95; g.beginPath();
     for (const q of mine) {
       const x = X(q), y = Y(q);
@@ -6370,7 +6494,7 @@ function drawWalls(g, ox = AX, oy = AY, aw = AW, ah = AH, sDpr = dpr) {
       if (!same(q, 0, -1)) { g.moveTo(x, y); g.lineTo(x, y + hOf(q)); }
     }
     g.stroke();
-    g.shadowBlur = 0; g.globalAlpha = k === 'hard' ? 0.55 : 0.45; g.strokeStyle = k === 'hard' ? '#5f86c9' : lit; g.beginPath();
+    g.shadowBlur = 0; g.globalAlpha = k === 'hard' ? 0.55 : 0.45; g.strokeStyle = k === 'hard' ? TH.edgeDim : lit; g.beginPath();
     for (const q of mine) {
       const x = X(q), y = Y(q), h = hOf(q);
       if (!same(q, 0, 1)) { g.moveTo(x + P, y); g.lineTo(x + P, y + h); }
@@ -6378,7 +6502,7 @@ function drawWalls(g, ox = AX, oy = AY, aw = AW, ah = AH, sDpr = dpr) {
     }
     g.stroke();
     if (k !== 'soft') {                                    // the foot of the front face
-      g.setLineDash([]); g.globalAlpha = 0.3; g.strokeStyle = '#5f86c9'; g.lineWidth = Math.max(1, P * 0.02); g.beginPath();
+      g.setLineDash([]); g.globalAlpha = 0.3; g.strokeStyle = TH.edgeDim; g.lineWidth = Math.max(1, P * 0.02); g.beginPath();
       for (const q of mine) {
         if (same(q, 1, 0)) continue;
         const x = X(q), y = Y(q), h = hOf(q);
@@ -7328,7 +7452,7 @@ function stepDecals(dt) {
     if (grass[i] && settings.terrain) { treadLast.set(key, { x, y, a }); return; }
     const onMud = settings.terrain && mud[i], onIce = settings.terrain && ice[i];
     g.lineCap = 'round';
-    g.strokeStyle = onIce ? 'rgba(225,250,255,0.38)' : onMud ? 'rgba(18,10,3,0.9)' : 'rgba(1,2,6,0.8)';
+    g.strokeStyle = onIce ? 'rgba(225,250,255,0.38)' : onMud ? 'rgba(18,10,3,0.9)' : TH.tread;
     g.lineWidth = K * (onMud ? 0.14 : onIce ? 0.045 : 0.1);
     for (const side of [-1, 1]) {
       const o = 0.2 * side;
@@ -7356,19 +7480,7 @@ function stepDecals(dt) {
    Nothing here touches play: mist lies on the floor under everything that moves, rain and embers are thin and
    faint. Rain and embers are drawn in screen space (they fall and rise on the screen, whichever way the arena is
    turned); splashes and mist belong to the floor. */
-function pickWeather() {
-  if (Math.random() < 1 / 3) return 'clear';
-  let wet = 0, grassy = 0;
-  for (let i = 0; i < COLS * ROWS; i++) { if (water[i]) wet++; if (grass[i]) grassy++; }
-  const cells = COLS * ROWS, w = {
-    rain: 1 + (settings.terrain ? wet / cells * 12 : 0),
-    mist: 1 + (settings.terrain ? grassy / cells * 8 : 0),
-    embers: 0.7 + (barrels.length ? 2.2 : 0) + (structs.length ? 0.8 : 0)
-  };
-  let r = Math.random() * (w.rain + w.mist + w.embers);
-  for (const k of ['rain', 'mist', 'embers']) { if ((r -= w[k]) < 0) return k; }
-  return 'rain';
-}
+function pickWeather() { return themeOf(mapId); }   // each map has its own (see MAP_THEME)
 const weatherShown = () => weatherOn && !REDUCED && weather !== 'clear' && !HEADLESS;
 let splashes = [], embers = [], rainSeeds = null, rainNode = null;
 function stepWeather(dt) {
@@ -7423,10 +7535,37 @@ function drawWeatherGround() {
 }
 // in the air, over the arena: rain falling, embers rising
 function drawWeatherAir() {
-  if (!weatherShown() || (weather !== 'rain' && weather !== 'embers')) return;
+  if (!weatherShown() || !['rain', 'embers', 'snow', 'sand'].includes(weather)) return;
   ctx.save(); ctx.beginPath(); ctx.rect(AX, AY, AW, AH); ctx.clip();
   const t = performance.now() / 1000;
-  if (weather === 'rain') {
+  if ((weather === 'snow' || weather === 'sand') && (!rainSeeds || rainSeeds.length < 510)) { const rnd = mulberry32(99); rainSeeds = new Float32Array(170 * 3); for (let i = 0; i < rainSeeds.length; i++) rainSeeds[i] = rnd(); }
+  if (weather === 'snow') {                              // flakes drifting down and swaying, bigger ones nearer and faster
+    const N = Math.min(150, Math.round(AW * AH / (P * P) * 0.9));
+    ctx.fillStyle = '#ffffff'; ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const sx = rainSeeds[i * 3], sy = rainSeeds[i * 3 + 1], sv = rainSeeds[i * 3 + 2], H = AH + P;
+      const y = ((sy * H + t * P * (0.7 + sv * 1.1)) % H) - P * 0.5;
+      const x = AX + ((((sx * AW + t * P * 0.25 + Math.sin(t * (0.6 + sv) + sv * 20) * P * 0.35) % AW) + AW) % AW);
+      const r = P * (0.022 + sv * 0.04);
+      ctx.moveTo(x + r, AY + y); ctx.arc(x, AY + y, r, 0, Math.PI * 2);
+    }
+    ctx.globalAlpha = 0.7; ctx.fill();
+  } else if (weather === 'sand') {                       // a warm haze, gusts rolling across, and grains streaking by
+    ctx.globalAlpha = 0.07; ctx.fillStyle = '#c8954f'; ctx.fillRect(AX, AY, AW, AH);
+    const gust = glowSprite('#d9a866');
+    for (let i = 0; i < 4; i++) {
+      const w = AW * 0.7, x = AX + AW - ((t * P * (1.6 + i * 0.3) + i * AW * 0.45) % (AW + w)), y = AY + AH * (0.15 + 0.23 * i);
+      ctx.globalAlpha = 0.1; ctx.drawImage(gust, x, y - AH * 0.18, w, AH * 0.36);
+    }
+    const N = Math.min(130, Math.round(AW * AH / (P * P) * 0.8)), W = AW + P;
+    ctx.strokeStyle = '#efcf98'; ctx.lineWidth = Math.max(1, P * 0.018); ctx.lineCap = 'round'; ctx.globalAlpha = 0.3; ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const sx = rainSeeds[i * 3], sy = rainSeeds[i * 3 + 1], sv = rainSeeds[i * 3 + 2];
+      const x = AX + AW - ((sx * W + t * P * (6 + sv * 6)) % W), y = AY + sy * AH + Math.sin(t * 2.3 + sv * 30) * P * 0.12, L = P * (0.18 + sv * 0.35);
+      ctx.moveTo(x, y); ctx.lineTo(x + L, y - L * 0.08);
+    }
+    ctx.stroke();
+  } else if (weather === 'rain') {
     const N = Math.min(170, Math.round(AW * AH / (P * P) * 1.0));
     if (!rainSeeds || rainSeeds.length < N * 3) { const rnd = mulberry32(99); rainSeeds = new Float32Array(170 * 3); for (let i = 0; i < rainSeeds.length; i++) rainSeeds[i] = rnd(); }
     const L = P * 0.42, tilt = 0.22, H = AH + L;
@@ -7538,7 +7677,8 @@ function drawLights(eye) {
   const L = lightBuf; L.length = 0;
   let x0 = -2, y0 = -2, x1 = COLS + 2, y1 = ROWS + 2;
   if (camOn()) { const hw = AW / P / 2 + 2, hh = AH / P / 2 + 2; x0 = cam.x - hw; x1 = cam.x + hw; y0 = cam.y - hh; y1 = cam.y + hh; }
-  const add = (x, y, r, col, a, occ) => { if (a > 0.01 && x + r > x0 && x - r < x1 && y + r > y0 && y - r < y1) L.push({ x, y, r, col, a, occ }); };
+  const LK = TH.light;                                   // a bright floor (snow) needs less added light
+  const add = (x, y, r, col, a, occ) => { a *= LK; if (a > 0.01 && x + r > x0 && x - r < x1 && y + r > y0 && y - r < y1) L.push({ x, y, r, col, a, occ }); };
   const crowd = Math.min(1, Math.sqrt(14 / Math.max(1, bullets.length)));   // a gatling's stream should not add up to a floodlight
   for (const b of bullets) {
     const big = b.he ? 1.35 : b.heavy ? 1.2 : 1;
@@ -7572,7 +7712,7 @@ function drawLights(eye) {
     if (age < 0.45) add(m.x, m.y, 3.6, '#ffb066', 0.95 * (1 - age / 0.45), true);   // the flash as the tank blows up
     if (age < 9) add(m.x, m.y, 1.2, '#ff8a3d', 0.3 * (1 - age / 9) * (0.75 + 0.25 * Math.sin(now / 160 + m.seed)), true);
   }
-  if (!L.length) return;
+  if (!L.length && !(puddles.length && lamps.length)) return;
   if (L.length > LIGHT_MAX) { L.sort((p, q) => q.a * q.r - p.a * p.r); L.length = LIGHT_MAX; }
   ctx.globalCompositeOperation = 'lighter';
   let shaded = 0;
@@ -7587,6 +7727,17 @@ function drawLights(eye) {
     }
     ctx.globalAlpha = Math.min(1, l.a) * (occ ? 0.84 : 1); ctx.drawImage(spr, sx, sy, sd, sd);
     if (occ) ctx.restore();
+  }
+  // after rain, the puddles mirror what shines near them: a longer, softer copy of each light, only inside the puddles
+  if (puddles.length) {
+    const lit = L.slice();
+    for (const lp of lamps) if (lp.alive) lit.push({ x: lp.x, y: lp.y, r: C.LAMP_R, col: '#ffcf7a', a: 0.3 });
+    ctx.save(); ctx.clip(puddleClip());
+    for (const l of lit) {
+      const w = l.r * 1.1, hgt = l.r * 2.2;
+      ctx.globalAlpha = Math.min(1, l.a * 1.1); ctx.drawImage(glowSprite(l.col), (l.x - w) * P, (l.y + l.r * 0.25 - hgt) * P, w * 2 * P, hgt * 2 * P);
+    }
+    ctx.restore();
   }
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
 }
@@ -8888,7 +9039,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
+  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,

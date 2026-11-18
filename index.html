@@ -1010,7 +1010,7 @@ function drawTiles(g, t, sx, sy, sw, sh, dx, dy, dw, dh) {
 
 /* ---------- settings ---------- */
 const AMMO_MODES = ['unlimited', 'reload', 'limited', 'single'];
-const LOCAL_MAP_POOLS = ['all', 'classic', 'complex', 'random'];
+const LOCAL_MAP_POOLS = ['all', 'classic', 'complex', 'random', 'dark'];
 const MAP_POOLS = [...LOCAL_MAP_POOLS, 'mega'], WIN_SCORES = [3, 5, 7];
 // classic: last tank standing takes the round. teams: the same, two sides. dm: destroyed tanks come back
 // and kills are counted. hill: tanks come back, and holding the circle in the middle scores.
@@ -1046,7 +1046,9 @@ function mapPool() {
   if (settings.game === 'soccer') return [...SOCCERMAPS].filter(i => NP >= 4 ? MAPS[i].length > 13 : MAPS[i].length <= 13);
   const mp = mapChoice();
   if (mode !== 'local' && mp === 'mega') return [...BIG_MAPS];
-  const all = MAPS.map((_, i) => i).filter(i => !BASEMAPS.has(i) && !SOCCERMAPS.has(i) && !BIG_MAPS.has(i));
+  // the lights-out maps are a pool of their own: only "Dark" plays them
+  if (mp === 'dark') { const d = [...DARK_MAPS], big = d.filter(i => MAPS[i].length > 11); return NP >= 3 || teamsOn() ? big : d; }
+  const all = MAPS.map((_, i) => i).filter(i => !BASEMAPS.has(i) && !SOCCERMAPS.has(i) && !BIG_MAPS.has(i) && !DARK_MAPS.has(i));
   if (NP >= 4 || teamsOn()) return all.filter(i => MAPS[i].length > 11);   // four or five tanks, or teams, need the bigger maps
   if (NP === 3 && mp !== 'classic') return all.filter(i => MAPS[i].length > 11);
   if (mp === 'classic') return all.filter(i => MAPS[i].length <= 11);
@@ -1549,7 +1551,75 @@ function seenBy(viewer, t) {
 }
 // lights-out maps: is (x, y) under a lamp that is still lit; is this tank in the dark (and not just after firing)
 const darkMap = () => DARK_MAPS.has(mapId);
-function litAt(x, y) { for (const l of lamps) if (l.alive && Math.hypot(l.x - x, l.y - y) < C.LAMP_R * 0.82) return true; return false; }
+function litAt(x, y) {
+  for (const l of lamps) if (l.alive && Math.hypot(l.x - x, l.y - y) < C.LAMP_R * 0.82 && lightReaches(l.x, l.y, x, y)) return true;
+  return false;
+}
+// Light and walls. A wall stops light (glass lets it through), so behind a wall from a lamp it stays dark.
+const blocksLight = (c, r) => c < 0 || r < 0 || c >= COLS || r >= ROWS || (walls[r][c] && soft[r * COLS + c] !== 1);
+// how far a ray from (x, y) along (dx, dy), a unit vector, gets before it meets a wall, up to R (a grid walk)
+function lightRay(x, y, dx, dy, R) {
+  let c = Math.floor(x), r = Math.floor(y);
+  const sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1;
+  const ddx = dx ? Math.abs(1 / dx) : Infinity, ddy = dy ? Math.abs(1 / dy) : Infinity;
+  let tx = dx ? (dx > 0 ? c + 1 - x : x - c) * ddx : Infinity, ty = dy ? (dy > 0 ? r + 1 - y : y - r) * ddy : Infinity;
+  for (let i = 0; i < 64; i++) {
+    let t;
+    if (tx < ty) { t = tx; tx += ddx; c += sx; } else { t = ty; ty += ddy; r += sy; }
+    if (t >= R) return R;
+    if (blocksLight(c, r)) return t;
+  }
+  return R;
+}
+function lightReaches(x0, y0, x1, y1) {
+  const d = Math.hypot(x1 - x0, y1 - y0);
+  return d < 1e-6 || lightRay(x0, y0, (x1 - x0) / d, (y1 - y0) / d, d) >= d - 1e-6;
+}
+// the floor a light at (x, y) of radius R can reach, as a polygon (cell units): rays round the circle plus rays
+// just either side of every wall corner in reach, so shadow edges run true. Each ray goes a little way into the
+// wall it meets (bleed), so the face turned to the light is lit too.
+function lightPoly(x, y, R, bleed) {
+  const angs = [], N = 40;
+  for (let i = 0; i < N; i++) angs.push(i / N * Math.PI * 2 - Math.PI);
+  const c0 = Math.max(0, Math.floor(x - R)), c1 = Math.min(COLS - 1, Math.floor(x + R)), r0 = Math.max(0, Math.floor(y - R)), r1 = Math.min(ROWS - 1, Math.floor(y + R));
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    if (!blocksLight(c, r)) continue;
+    for (const [px, py] of [[c, r], [c + 1, r], [c, r + 1], [c + 1, r + 1]]) {
+      if ((px - x) * (px - x) + (py - y) * (py - y) > R * R) continue;
+      const a = Math.atan2(py - y, px - x); angs.push(a - 0.0015, a + 0.0015);
+    }
+  }
+  angs.sort((p, q) => p - q);
+  const pts = [];
+  for (const a of angs) {
+    const dx = Math.cos(a), dy = Math.sin(a), t = lightRay(x, y, dx, dy, R), e = t < R ? Math.min(R, t + bleed) : R;
+    pts.push(x + dx * e, y + dy * e);
+  }
+  return pts;
+}
+// the wall blocks within reach that the light falls on: their tops stand up into it, so the whole block is lit
+function litBlocks(x, y, R) {
+  const out = [];
+  const c0 = Math.max(0, Math.floor(x - R)), c1 = Math.min(COLS - 1, Math.floor(x + R)), r0 = Math.max(0, Math.floor(y - R)), r1 = Math.min(ROWS - 1, Math.floor(y + R));
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    if (!blocksLight(c, r)) continue;
+    let px = clamp(x, c, c + 1), py = clamp(y, r, r + 1);
+    const d = Math.hypot(px - x, py - y);
+    if (d >= R || d < 1e-6) continue;
+    px -= (px - x) / d * 0.03; py -= (py - y) / d * 0.03;  // just short of the block, on the light's side
+    if (lightReaches(x, y, px, py)) out.push(c, r);
+  }
+  return out;
+}
+// the light's reach (the polygon and the blocks it falls on) as a clip path, in pixels (k a cell); both are wound
+// the same way, so where they overlap they add up instead of cancelling out
+function clipPoly(g, pts, k, blocks) {
+  g.beginPath(); g.moveTo(pts[0] * k, pts[1] * k);
+  for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i] * k, pts[i + 1] * k);
+  g.closePath();
+  if (blocks) for (let i = 0; i < blocks.length; i += 2) g.rect(blocks[i] * k, blocks[i + 1] * k, k, k);
+  g.clip();
+}
 const inDark = t => darkMap() && t.alive && !(t.reveal > 0) && !litAt(t.x, t.y);
 // whose eyes this screen shows: nobody's when two people share it (then grass hides no one)
 const viewer = () => twoSided() ? -1 : mySeat;
@@ -5385,7 +5455,7 @@ function withFrame(f, fn) {
   U = f.u; AY = f.y; FRM = f;
   try { return fn(); } finally { U = u; AY = ay; FRM = o; }
 }
-const MAP_TEXT = { all: 'All maps', classic: 'Classic maps', complex: 'Complex maps', random: 'Random maps', mega: '23×23 big maps' };
+const MAP_TEXT = { all: 'All maps', classic: 'Classic maps', complex: 'Complex maps', random: 'Random maps', mega: '23×23 big maps', dark: 'Lights-out maps' };
 // map extras: 0 plain, 1 breakable walls, 2 grass and water, 3 both
 const FEAT_TEXT = ['Plain map', 'Breakable walls', 'Grass & water', 'All terrain'];
 const featIdx = () => (settings.soft ? 1 : 0) + (settings.terrain ? 2 : 0);
@@ -5445,7 +5515,7 @@ function drawModeIcon(m, x, y, s, col) {
   ctx.restore();
 }
 const FEAT_SHORT = ['Plain', 'Breakable', 'Grass & water', 'All'];
-const MAP_SHORT = { all: 'All', classic: 'Small', complex: 'Large', random: 'Random', mega: '23×23' };
+const MAP_SHORT = { all: 'All', classic: 'Small', complex: 'Large', random: 'Random', mega: '23×23', dark: 'Dark' };
 const winText = v => settings.game === 'dm' ? `${KILL_GOAL[v]} kills` : settings.game === 'hill' ? `${HILL_GOAL[v]} s` : settings.game === 'base' ? `${BASE_TIME[v] / 60} min`
   : gunOn() ? `${GUN_LADDER[v].length} weapons` : `First to ${v}`;
 const winLabel = () => settings.game === 'dm' ? 'To win' : settings.game === 'hill' ? 'Hold for' : settings.game === 'base' ? 'Time limit' : gunOn() ? 'Weapons' : soccerOn() ? 'Goals' : 'Rounds';
@@ -5460,6 +5530,7 @@ const whoShort = () => settings.cpu ? `you + ${settings.cpu} CPU` : '2 players';
 const rulesSummary = () => [{ unlimited: 'unlimited ammo', reload: '5 + reload', limited: '5 shots', single: `1 shot per ${C.SINGLE_COOLDOWN} s` }[settings.ammo],
   settings.powerups ? 'power-ups' : 'no power-ups', FEAT_TEXT[featIdx()].toLowerCase(),
   ...(settings.maps === 'mega' && settings.game !== 'base' && settings.game !== 'soccer' ? ['23×23 maps'] : []),
+  ...(settings.maps === 'dark' && settings.game !== 'base' && settings.game !== 'soccer' ? ['lights-out maps'] : []),
   winText(settings.winScore),
   ...(settings.mut === 'off' ? [] : [settings.mut === 'random' ? 'random party rules' : MUTS[settings.mut].name])].join(' · ');
 // the party rules as cards (tapping one picks it and goes back to the rules)
@@ -5591,6 +5662,7 @@ function menuHintText(lobby) {
     'Breakable walls, grass to hide in, and water to shoot across.'][featIdx()] + (settings.terrain ? ' Some maps add deflectors, portals and barrels.' : '');
   const mp = lobby ? settings.maps : mapChoice();
   if (k === 'maps' && mp === 'random') return 'A new map every round, the same on every screen' + (settings.terrain ? ', some with deflectors, portals and barrels.' : '.');
+  if (k === 'maps' && mp === 'dark') return 'Lights-out maps only: in the dark you see a tank close by or when it fires; street lamps light the floor, walls throw their shadows, and a shot puts a lamp out.';
   if (k === 'maps') return mp === 'mega' ? '23 by 23 big online maps with a follow camera and minimap.' : mp === 'all' ? 'Small and large maps, shuffled.' : mp === 'classic' ? 'Small 11 by 11 maps. (3+ tanks always get large ones.)' : 'Large 13 by 13 maps with more cover.';
   if (k === 'win' && settings.game === 'base') return `After ${target() / 60} minutes the side with more of its base left wins.`;
   if (k === 'win' && gunOn()) return 'Weapons in order: ' + gunLadder().map(weaponName).join(' → ') + '.';
@@ -6542,6 +6614,7 @@ function drawRewindGhost(t) {
   ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -P * 0.16); ctx.moveTo(0, 0); ctx.lineTo(P * 0.11, 0); ctx.stroke();
   ctx.restore(); ctx.globalAlpha = 1;
 }
+let tankGlowK = 1;
 function drawTank(t) {
   const col = t.pen || penOf(t.id), zom = t.pen ? t.pen === COL.zombie : isZed(t.id);
   const sk = zom ? 'classic' : validSkin(t.skin || skinOf(t.id));
@@ -6567,7 +6640,7 @@ function drawTank(t) {
     ctx.setLineDash([P * 0.12, P * 0.1]); ctx.beginPath(); ctx.arc(0, 0, P * 0.51, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     ctx.restore();
   }
-  glow(t.x * P, t.y * P, P * (C.TANK_R / C0.TANK_R) * 0.95, col, (zom ? 0.28 : 0.42) * cAlpha);   // its light on the ground
+  glow(t.x * P, t.y * P, P * (C.TANK_R / C0.TANK_R) * 0.95, col, (zom ? 0.28 : 0.42) * cAlpha * tankGlowK);   // its light on the ground (in play the light pass does most of it)
   ctx.save();
   ctx.translate(t.x * P, t.y * P);
   if (C.TANK_R !== C0.TANK_R) ctx.scale(C.TANK_R / C0.TANK_R, C.TANK_R / C0.TANK_R);
@@ -7399,10 +7472,21 @@ function rainSound(on) {
 }
 /* ---------- lights out: a dark layer with holes where lamps shine (DECAL_PX a cell, rebuilt when a lamp goes out),
    warm light under each lamp, and a faint light round the tanks this screen sees with ---------- */
-let darkCv = null, darkKey = '';
+let darkCv = null, darkKey = '', lampPolys = [];
+// which cells near the lamps stop light: the dark layer and the lamp shadows are rebuilt when this changes
+function lampWallKey() {
+  let s = '';
+  for (const l of lamps) {
+    if (!l.alive) { s += '-'; continue; }
+    const R = C.LAMP_R;
+    for (let r = Math.floor(l.y - R); r <= Math.floor(l.y + R); r++) for (let c = Math.floor(l.x - R); c <= Math.floor(l.x + R); c++) s += blocksLight(c, r) ? 1 : 0;
+    s += '|';
+  }
+  return s;
+}
 function drawDark(eye) {
   if (!darkMap() || HEADLESS) return;
-  const K = DECAL_PX, key = mapId + ':' + COLS + ':' + lamps.map(l => l.alive ? 1 : 0).join('');
+  const K = DECAL_PX, key = mapId + ':' + COLS + ':' + lampWallKey();
   if (!darkCv) darkCv = document.createElement('canvas');
   if (key !== darkKey) {
     darkKey = key;
@@ -7410,12 +7494,14 @@ function drawDark(eye) {
     const g = darkCv.getContext('2d');
     g.fillStyle = 'rgba(1,3,10,0.8)'; g.fillRect(0, 0, darkCv.width, darkCv.height);
     g.globalCompositeOperation = 'destination-out';
-    for (const l of lamps) {
-      if (!l.alive) continue;
+    lampPolys = lamps.map(l => l.alive ? [lightPoly(l.x, l.y, C.LAMP_R, 0.32), litBlocks(l.x, l.y, C.LAMP_R)] : null);
+    lamps.forEach((l, i) => {
+      if (!l.alive) return;
       const gr = g.createRadialGradient(l.x * K, l.y * K, 0, l.x * K, l.y * K, C.LAMP_R * K);
       gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(0.55, 'rgba(0,0,0,0.85)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
-      g.fillStyle = gr; g.fillRect(0, 0, darkCv.width, darkCv.height);
-    }
+      g.save(); clipPoly(g, lampPolys[i][0], K, lampPolys[i][1]);              // walls keep the dark on their far side
+      g.fillStyle = gr; g.fillRect(0, 0, darkCv.width, darkCv.height); g.restore();
+    });
     g.globalCompositeOperation = 'source-over';
   }
   let c0 = 0, r0 = 0, c1 = COLS, r1 = ROWS;
@@ -7427,11 +7513,13 @@ function drawDark(eye) {
   if (c1 > c0 && r1 > r0) { ctx.globalAlpha = 1; ctx.drawImage(darkCv, c0 * K, r0 * K, (c1 - c0) * K, (r1 - r0) * K, c0 * P, r0 * P, (c1 - c0) * P, (r1 - r0) * P); }
   ctx.globalCompositeOperation = 'lighter';
   const t = performance.now() / 1000;
-  for (const l of lamps) {
-    if (!l.alive) continue;
+  lamps.forEach((l, i) => {
+    if (!l.alive || !lampPolys[i]) return;
     const flick = REDUCED ? 1 : 0.92 + 0.08 * Math.sin(t * 13 + l.x * 7 + l.y * 3) * Math.sin(t * 3.1 + l.y);
+    ctx.save(); clipPoly(ctx, lampPolys[i][0], P, lampPolys[i][1]);
     ctx.globalAlpha = 0.34 * flick; ctx.drawImage(glowSprite('#ffcf7a'), (l.x - C.LAMP_R) * P, (l.y - C.LAMP_R) * P, C.LAMP_R * 2 * P, C.LAMP_R * 2 * P);
-  }
+    ctx.restore();
+  });
   // how far this side sees in the dark
   for (const o of tanks) {
     if (!o.alive || !(eye < 0 || friendOf(eye, o.id))) continue;
@@ -7444,20 +7532,20 @@ function drawDark(eye) {
 // burning wrecks, and a faint glow under every tank. Drawn after the floor and before what stands on it, as soft
 // pools that add up. Only things this screen can see give light (a hidden tank must not show by its glow), and
 // only lights near the camera are drawn, at most LIGHT_MAX of the brightest, so a busy fight on a tablet stays smooth.
-const LIGHT_MAX = 40, lightBuf = [];
+const LIGHT_MAX = 40, LIGHT_SHADED = 12, lightBuf = [];
 function drawLights(eye) {
   if (HEADLESS || NET_SCREENS.includes(state)) return;
   const L = lightBuf; L.length = 0;
   let x0 = -2, y0 = -2, x1 = COLS + 2, y1 = ROWS + 2;
   if (camOn()) { const hw = AW / P / 2 + 2, hh = AH / P / 2 + 2; x0 = cam.x - hw; x1 = cam.x + hw; y0 = cam.y - hh; y1 = cam.y + hh; }
-  const add = (x, y, r, col, a) => { if (a > 0.01 && x + r > x0 && x - r < x1 && y + r > y0 && y - r < y1) L.push({ x, y, r, col, a }); };
+  const add = (x, y, r, col, a, occ) => { if (a > 0.01 && x + r > x0 && x - r < x1 && y + r > y0 && y - r < y1) L.push({ x, y, r, col, a, occ }); };
   const crowd = Math.min(1, Math.sqrt(14 / Math.max(1, bullets.length)));   // a gatling's stream should not add up to a floodlight
   for (const b of bullets) {
     const big = b.he ? 1.35 : b.heavy ? 1.2 : 1;
     add(b.x, b.y, 1.5 * big, b.chill ? '#7ee8fa' : b.he ? '#ffb057' : (b.pen || penOf(b.owner)), 0.42 * crowd * (b.fade == null ? 1 : b.fade));
   }
-  for (const m of missiles) if (m.type !== 'bomb') add(m.x, m.y, 1.7, penOf(m.owner), 0.45);
-  for (const r of rings) { const k = r.life / r.max; add(r.x, r.y, clamp(r.r * 3, 1.5, 5.5), r.col, 0.8 * k); }
+  for (const m of missiles) if (m.type !== 'bomb') add(m.x, m.y, 1.7, penOf(m.owner), 0.45, true);
+  for (const r of rings) { const k = r.life / r.max; add(r.x, r.y, clamp(r.r * 3, 1.5, 5.5), r.col, 0.8 * k, true); }
   for (const b of beams) {
     const k = b.life / b.max, p = b.path, col = b.pen || penOf(b.owner);
     if (!p) continue;
@@ -7470,20 +7558,72 @@ function drawLights(eye) {
   for (const t of tanks) {
     if (!t.alive || !seenBy(eye, t) || t.cloak > 0) continue;
     const col = t.pen || penOf(t.id);
-    add(t.x, t.y, 1.0, col, 0.14);                          // the glow under it
-    if (t.recoil > 0.15) add(t.x + Math.cos(t.angle) * 0.55, t.y + Math.sin(t.angle) * 0.55, 2.2 * t.recoil, shade(col, 0.5), 0.6 * t.recoil);
+    add(t.x, t.y, 1.1, col, 0.22);                          // the glow under it
+    if (t.recoil > 0.15) {                                 // the flash lights from the muzzle, or from the tank if the muzzle is in a wall
+      let mx = t.x + Math.cos(t.angle) * 0.55, my = t.y + Math.sin(t.angle) * 0.55;
+      if (blocksLight(Math.floor(mx), Math.floor(my))) { mx = t.x; my = t.y; }
+      add(mx, my, 2.2 * t.recoil, shade(col, 0.5), 0.6 * t.recoil, true);
+    }
   }
-  for (const d of decoys) if (decoySeen(eye, d)) add(d.x, d.y, 1.0, penOf(d.owner), 0.14);   // a decoy glows like the real thing
+  for (const d of decoys) if (decoySeen(eye, d)) add(d.x, d.y, 1.1, penOf(d.owner), 0.22);   // a decoy glows like the real thing
   for (const m of marks) {
     if (!m.born || REDUCED) continue;
     const age = (now - m.born) / 1000;
-    if (age < 9) add(m.x, m.y, 1.2, '#ff8a3d', 0.3 * (1 - age / 9) * (0.75 + 0.25 * Math.sin(now / 160 + m.seed)));
+    if (age < 0.45) add(m.x, m.y, 3.6, '#ffb066', 0.95 * (1 - age / 0.45), true);   // the flash as the tank blows up
+    if (age < 9) add(m.x, m.y, 1.2, '#ff8a3d', 0.3 * (1 - age / 9) * (0.75 + 0.25 * Math.sin(now / 160 + m.seed)), true);
   }
   if (!L.length) return;
   if (L.length > LIGHT_MAX) { L.sort((p, q) => q.a * q.r - p.a * p.r); L.length = LIGHT_MAX; }
   ctx.globalCompositeOperation = 'lighter';
-  for (const l of L) { ctx.globalAlpha = Math.min(1, l.a); ctx.drawImage(glowSprite(l.col), (l.x - l.r) * P, (l.y - l.r) * P, l.r * 2 * P, l.r * 2 * P); }
+  let shaded = 0;
+  for (const l of L) {
+    // the strong ones (blasts, muzzle flashes, missiles, fires) are stopped by walls and throw their shadows;
+    // shots are many and small, so they light as plain pools
+    const occ = l.occ && shaded < LIGHT_SHADED && !blocksLight(Math.floor(l.x), Math.floor(l.y));
+    const spr = glowSprite(l.col), sx = (l.x - l.r) * P, sy = (l.y - l.r) * P, sd = l.r * 2 * P;
+    if (occ) {                                           // a little light bounces round the walls, so shadow edges are not knife-sharp
+      shaded++; ctx.globalAlpha = Math.min(1, l.a) * 0.16; ctx.drawImage(spr, sx, sy, sd, sd);
+      ctx.save(); clipPoly(ctx, lightPoly(l.x, l.y, l.r, 0.32), P, litBlocks(l.x, l.y, l.r));
+    }
+    ctx.globalAlpha = Math.min(1, l.a) * (occ ? 0.84 : 1); ctx.drawImage(spr, sx, sy, sd, sd);
+    if (occ) ctx.restore();
+  }
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+}
+// Shadows on the floor: everything that stands or flies throws a soft shadow down and to the right, the way the walls
+// do, so tanks sit on the ground and shots read as being in the air (a shot's shadow falls further off than a tank's).
+// A tank's shadow is one cached blurred sprite, turned with the tank; a shot's is a dark soft dot.
+let shadowSpr = null, shadowSprK = 0;
+function tankShadowSprite() {
+  const k = P * Math.min(2, window.devicePixelRatio || 1);
+  if (shadowSpr && shadowSprK === k) return shadowSpr;
+  const S = Math.ceil(k * 1.3), c = document.createElement('canvas'); c.width = c.height = S;
+  const h = c.getContext('2d'), w = k * 0.72, d = k * 0.6, off = S * 3;
+  h.shadowColor = '#000'; h.shadowBlur = k * 0.13; h.shadowOffsetX = off;   // only the blurred shadow lands on the canvas
+  h.fillStyle = '#000'; h.beginPath();
+  if (h.roundRect) h.roundRect(S / 2 - w / 2 - off, S / 2 - d / 2, w, d, k * 0.1); else h.rect(S / 2 - w / 2 - off, S / 2 - d / 2, w, d);
+  h.fill();
+  shadowSpr = c; shadowSprK = k; return c;
+}
+function drawGroundShadows(eye) {
+  if (HEADLESS || NET_SCREENS.includes(state)) return;
+  const spr = tankShadowSprite(), S = P * 1.3, dot = glowSprite('#000000');
+  const one = (x, y, angle, a) => {
+    ctx.save(); ctx.translate((x + 0.1) * P, (y + 0.17) * P); ctx.rotate(angle);
+    if (C.TANK_R !== C0.TANK_R) ctx.scale(C.TANK_R / C0.TANK_R, C.TANK_R / C0.TANK_R);
+    ctx.globalAlpha = a; ctx.drawImage(spr, -S / 2, -S / 2, S, S); ctx.restore();
+  };
+  for (const t of tanks) if (t.alive && seenBy(eye, t)) one(t.x, t.y, t.angle, t.cloak > 0 ? (eye < 0 ? 0.1 : 0.25) : 0.9);
+  for (const d of decoys) if (decoySeen(eye, d)) one(d.x, d.y, d.angle, 0.9);
+  for (const b of bullets) {
+    const r = C.BULLET_R * (b.he ? 4.6 : b.heavy ? 4.2 : 3.6);
+    ctx.globalAlpha = 0.7 * (b.fade == null ? 1 : b.fade); ctx.drawImage(dot, (b.x + 0.14 - r) * P, (b.y + 0.28 - r) * P, r * 2 * P, r * 2 * P);
+  }
+  for (const m of missiles) {
+    if (m.type === 'bomb') continue;
+    ctx.globalAlpha = 0.45; ctx.drawImage(dot, (m.x + 0.16 - 0.22) * P, (m.y + 0.3 - 0.22) * P, 0.44 * P, 0.44 * P);
+  }
+  ctx.globalAlpha = 1;
 }
 function drawLamps() {
   if (!lamps.length) return;
@@ -8313,7 +8453,8 @@ function render() {
   if (matchOn && !rsv) drawWeatherGround();
   if (matchOn) drawDark(viewer());
   if (structs.length && matchOn) drawBase();
-  if (matchOn) drawLights(viewer());
+  if (matchOn) { const ey = viewer(); drawLights(ey); drawGroundShadows(ey); }
+  tankGlowK = matchOn && !HEADLESS ? 0.3 : 1;     // the glow under a tank comes from the light pass, under its shadow
   const pad = matchOn ? gatPad() : null;
   if (pad && !pickups.some(k => k.type === 'gatling')) {
     ctx.save(); ctx.translate(pad.x * P, pad.y * P); ctx.globalAlpha = 0.3;
@@ -8747,7 +8888,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
+  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,

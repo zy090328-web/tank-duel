@@ -22,7 +22,7 @@ FIND = r"""
   for (let r = 0; r < T.ROWS; r++) for (let c = 0; c < T.COLS; c++) { if (W[r][c]) continue;
     const x = c + 0.5, y = r + 0.5, near = Math.min(...T.lamps.filter(l => l.alive).map(l => Math.hypot(l.x - x, l.y - y)));
     if (kind === 'dark' && near > d) return [x, y];
-    if (kind === 'lit' && near > 0.4 && (!best || near < best[2])) best = [x, y, near]; }
+    if (kind === 'lit' && near > 0.4 && T.litAt(x, y) && (!best || near < best[2])) best = [x, y, near]; }
   return best; }"""
 
 async def main():
@@ -36,6 +36,22 @@ async def main():
     S = await page('solo')
     ids = await ev(S, '[...__tank.DARK_MAPS]')
     check(len(ids) == 3, f'three lights-out maps {ids}')
+    pools = await ev(S, """(() => { const T = __tank, out = {};
+      for (const mp of ['all', 'classic', 'complex', 'dark']) { T.setSettings(Object.assign({}, T.settings(), { maps: mp, cpu: 1 })); out[mp] = T.mapPool(); }
+      return out; })()""")
+    check(all(not set(pools[k]) & set(ids) for k in ('all', 'classic', 'complex')), f'the other pools leave the lights-out maps out {pools}')
+    check(sorted(pools['dark']) == sorted(ids), f'the Dark pool is the lights-out maps {pools["dark"]}')
+    # a wall between a lamp and a cell in its reach keeps that cell dark
+    shade = await ev(S, """(id) => { const T = __tank; T.setSettings(Object.assign({}, T.settings(), { maps: 'dark', cpu: 1 }));
+      let found = null;
+      for (const m of T.DARK_MAPS) { T.loadMap(m); T.resetEntities();
+        for (const l of T.lamps) for (let r = 0; r < T.ROWS && !found; r++) for (let c = 0; c < T.COLS && !found; c++) {
+          const x = c + 0.5, y = r + 0.5;
+          if (!T.walls[r][c] && Math.hypot(l.x - x, l.y - y) < T.C.LAMP_R * 0.7 && !T.lightReaches(l.x, l.y, x, y) && !T.lamps.some(o => o !== l && Math.hypot(o.x - x, o.y - y) < T.C.LAMP_R)) found = [m, x, y, T.litAt(x, y)];
+        }
+        if (found) break; }
+      return found; }""")
+    check(shade is not None and shade[3] is False, f'a cell a lamp would reach but for a wall stays dark {shade}')
     for id in ids:
       await ev(S, SETUP, id)
       sp = await ev(S, '__tank.spawn.map(s => [s.x, s.y])')
@@ -76,7 +92,7 @@ async def main():
 
     # online: a lamp put out on the host goes out for the guest
     H = await page('host'); G = await page('guest')
-    await ev(H, "__tank.setSettings(Object.assign({}, __tank.settings(), {maps:'all', powerups:false, terrain:false, mode:'classic'}))")
+    await ev(H, "__tank.setSettings(Object.assign({}, __tank.settings(), {maps:'dark', powerups:false, terrain:false, mode:'classic'}))")
     await ev(H, '__tank.net.hostGame()'); await H.wait_for_timeout(900)
     code = await ev(H, '__tank.net.code'); await ev(G, f'__tank.net.joinGame("{code}")'); await G.wait_for_timeout(1500)
     await ev(H, '__tank.net.hostStart()'); await H.wait_for_timeout(2500)
@@ -84,7 +100,7 @@ async def main():
     for _ in range(40):
       if await ev(H, '__tank.DARK_MAPS.has(__tank.mapId)'): got = await ev(H, '__tank.mapId'); break
       await ev(H, '__tank.startMatch()'); await H.wait_for_timeout(250)
-    check(got is not None, f'the online pool includes lights-out maps (got {got})')
+    check(got is not None, f'the online Dark pool plays lights-out maps (got {got})')
     if got is not None:
       await H.wait_for_timeout(1200)
       check(await ev(G, '__tank.mapId') == got and await ev(G, '__tank.lamps.length') == await ev(H, '__tank.lamps.length'), 'the guest has the same map and lamps')

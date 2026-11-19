@@ -980,7 +980,8 @@ const IS_TOUCH = (navigator.maxTouchPoints || 0) > 0 || matchMedia('(pointer: co
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+let ctx = canvas.getContext('2d');      // (a tank is drawn to a scratch canvas for its lighting: see drawTank)
+const mainCtx = ctx;
 const st = document.createElement('canvas');   // static layer: ground, grid, water, grass, walls
 const gst = document.createElement('canvas');  // grass, drawn over the tanks
 const arenaSt = document.createElement('canvas');  // scrolling static arena when viewport follows camera
@@ -1220,7 +1221,9 @@ let roundId = 0;          // counts rounds, so guests can tell a new round on th
 let netEvents = [];       // host: recent things that happened, for guests to replay as sound and sparks
 let netSeq = 0;
 let entId = 0;            // ids for bullets, missiles and mines, so guests can follow each one between snapshots
-let shake = 0;
+let shake = 0, hitstop = 0;
+// a tank blowing up, drawn on every screen: a fireball, a shock ring, smoke, and bits of it thrown out that land
+const fireballs = [], debris = [];
 let emptyT = 0;
 let roundT = 0, sdClosed = 0, sdStarted = false;   // play time this round; sudden-death rings closed so far
 let pickupTimer = 0, puBag = [];
@@ -1943,6 +1946,7 @@ function resetEntities() {
   hillHolder = -1;
   minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
   bullets = []; missiles = []; mines = []; traps = []; mortars = []; barricades = []; pickups = []; beams = []; rings = []; radars = []; pings = []; particles = []; marks = []; decoys = [];
+  fireballs.length = 0; debris.length = 0;
   decalReset();
   netEvents = [];
   pickupTimer = C.PICKUP_FIRST; emptyT = 0; gatT = C.GAT_FIRST;
@@ -2989,6 +2993,9 @@ function kill(t, by = -1) {
   const seed = (Math.random() * 1e9) | 0;
   marks.push({ x: t.x, y: t.y, col: penOf(t.id), seed });
   netEv('kill', t.id, r2(t.x), r2(t.y), seed);
+  boomFx(t.x, t.y, penOf(t.id), seed);
+  // the game holds still for an instant as a tank goes up (not online, where it would hold up the other screens)
+  if (!HEADLESS && mode === 'local' && state === 'play') hitstop = 0.07;
   for (let i = 0; i < 30; i++) {
     const a = Math.random() * Math.PI * 2, s = 1 + Math.random() * 4.5, life = 0.35 + Math.random() * 0.6;
     particles.push({ x: t.x, y: t.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, col: i % 3 ? penOf(t.id) : COL.graphite, size: 0.04 + Math.random() * 0.06 });
@@ -3194,10 +3201,7 @@ function scoreGoal(team) {
 
 let lastBounceSound = 0;
 function bounceFx(b) {
-  for (let i = 0; i < 3; i++) {
-    const a = Math.random() * Math.PI * 2, s = 0.4 + Math.random() * 1.2;
-    particles.push({ x: b.x, y: b.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.2, max: 0.2, col: COL.graphite, size: 0.03 });
-  }
+  wallSparks(b.x, b.y, b.pen || penOf(b.owner));
   const now = performance.now();
   if (now - lastBounceSound > 45) { lastBounceSound = now; sfx.bounce(); netEv('bounce', r2(b.x), r2(b.y)); }
 }
@@ -4051,7 +4055,7 @@ function update(dt) {
   for (let i = rings.length - 1; i >= 0; i--) { rings[i].life -= dt; if (rings[i].life <= 0) rings.splice(i, 1); }
   for (let i = radars.length - 1; i >= 0; i--) { radars[i].life -= dt; if (radars[i].life <= 0) radars.splice(i, 1); }
   for (let i = pings.length - 1; i >= 0; i--) { pings[i].life -= dt; if (pings[i].life <= 0) pings.splice(i, 1); }
-  stepDecals(dt); stepWeather(dt);
+  stepDecals(dt); stepWeather(dt); stepBoomFx(dt);
   for (const k of pickups) k.age += dt;
   for (const st of structs) st.flash = Math.max(0, st.flash - dt);
   if (state === 'replay') stepReplay(dt); else if (rpPrev >= 0) { rpPrev = -1; rpParts = []; rpRings = []; rpT = 0; }
@@ -5177,7 +5181,7 @@ function applyDiscrete(g, dt) {
   if ((g.r !== lastRound || g.m !== lastMap) && st !== 'guestWait') {
     lastRound = g.r; lastMap = g.m;
     loadMap(g.m | 0);
-    marks = []; particles = []; beams = []; rings = []; radars = []; pings = []; decoys = []; decalReset(); traps = []; mortars = []; barricades = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
+    marks = []; particles = []; beams = []; rings = []; radars = []; pings = []; decoys = []; decalReset(); fireballs.length = 0; debris.length = 0; traps = []; mortars = []; barricades = []; trails.clear(); seen.clear(); localSd = 0; sdClosed = 0;
     rec.frames = []; rec.tick = 0; rp = null;
     const me = Array.isArray(g.T) && g.T[mySeat];
     if (Array.isArray(me) && tanks[mySeat]) { tanks[mySeat].x = me[0]; tanks[mySeat].y = me[1]; tanks[mySeat].alive = !!(me[3] & 1); }
@@ -5237,6 +5241,78 @@ function applySnapEvents(g) {
     lastSeq = e[0];
     playEvent(e);
   }
+}
+// sparks off a wall where a shot glances off it: a quick white-hot fan and a pinpoint flash
+function wallSparks(x, y, col) {
+  if (HEADLESS) return;
+  for (let i = 0; i < 6; i++) {
+    const a = Math.random() * Math.PI * 2, s = 1 + Math.random() * 2.6, l = 0.12 + Math.random() * 0.14;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: l, max: l, col: i % 3 ? '#fff1c9' : col, size: 0.025 + Math.random() * 0.02 });
+  }
+  fireballs.push({ x, y, t: 0, life: 0.09, r: 0.32, spark: true });
+}
+function boomFx(x, y, col, seed) {
+  if (HEADLESS) return;
+  const rnd = mulberry32((seed | 0) + 7);
+  fireballs.push({ x, y, t: 0, life: REDUCED ? 0.3 : 0.6, r: 1.05, col });
+  if (REDUCED) return;
+  for (let i = 0; i < 7; i++) {                          // smoke rolling up out of the fire
+    const a = rnd() * Math.PI * 2, v = 0.2 + rnd() * 0.5;
+    smoke.push({ x: x + Math.cos(a) * 0.2, y: y + Math.sin(a) * 0.2, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 0.25, life: 1.4 + rnd(), max: 2.4, r: 0.3 + rnd() * 0.2 });
+  }
+  for (let i = 0, n = 6 + ((rnd() * 3) | 0); i < n; i++) {   // bits of the tank thrown up and out
+    const a = rnd() * Math.PI * 2, v = 1.6 + rnd() * 2.6;
+    debris.push({ x, y, z: 0.1, vx: Math.cos(a) * v, vy: Math.sin(a) * v, vz: 2.4 + rnd() * 2.4, ang: rnd() * 6.3, spin: (rnd() - 0.5) * 18,
+      w: 0.08 + rnd() * 0.1, h: 0.05 + rnd() * 0.06, col: rnd() < 0.4 ? col : '#262b38', hops: 0 });
+  }
+}
+function stepBoomFx(dt) {
+  for (let i = fireballs.length - 1; i >= 0; i--) if ((fireballs[i].t += dt) >= fireballs[i].life) fireballs.splice(i, 1);
+  for (let i = debris.length - 1; i >= 0; i--) {
+    const d = debris[i];
+    d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt; d.vz -= 14 * dt; d.ang += d.spin * dt;
+    const c = Math.floor(d.x), r = Math.floor(d.y);
+    if (r < 0 || c < 0 || r >= ROWS || c >= COLS || (walls[r] && walls[r][c] && d.z < 0.6)) { d.vx = -d.vx * 0.4; d.vy = -d.vy * 0.4; d.x += d.vx * dt * 2; d.y += d.vy * dt * 2; }
+    if (d.z <= 0 && d.vz < 0) {
+      if (d.hops < 1 && d.vz < -1.5) { d.hops++; d.z = 0; d.vz = -d.vz * 0.3; d.vx *= 0.45; d.vy *= 0.45; d.spin *= 0.5; }
+      else { landDebris(d); debris.splice(i, 1); }
+    }
+  }
+}
+// a bit that has come down stays on the floor (on the scorch layer, so it costs nothing to keep)
+function landDebris(d) {
+  if (!decalsReady()) return;
+  const g = scarCv.getContext('2d'), K = DECAL_PX;
+  g.save(); g.translate(d.x * K, d.y * K); g.rotate(d.ang);
+  g.fillStyle = shade(d.col, -0.55); g.globalAlpha = 0.9; g.fillRect(-d.w * K / 2, -d.h * K / 2, d.w * K, d.h * K);
+  g.restore(); decalDirty = decalAny = true;
+}
+// the fireball (a white-hot core in an orange swell that reddens and fades), its shock ring, and the flying bits
+function drawBoomFx() {
+  if (!fireballs.length && !debris.length) return;
+  for (const d of debris) {                             // a bit in the air, with its shadow on the floor below it
+    const sh = Math.min(0.5, d.z * 0.5);
+    ctx.globalAlpha = 0.35; ctx.fillStyle = '#000';
+    ctx.fillRect((d.x + sh * 0.3 - d.w / 2) * P, (d.y + sh * 0.6 - d.h / 2) * P, d.w * P, d.h * P);
+    ctx.save(); ctx.translate(d.x * P, (d.y - d.z * 0.35) * P); ctx.rotate(d.ang); ctx.globalAlpha = 1;
+    ctx.fillStyle = d.col; ctx.fillRect(-d.w * P / 2, -d.h * P / 2, d.w * P, d.h * P);
+    ctx.fillStyle = 'rgba(255,170,90,0.6)'; ctx.fillRect(-d.w * P / 2, -d.h * P / 2, d.w * P, Math.max(1, d.h * P * 0.35));
+    ctx.restore();
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  for (const f of fireballs) {
+    const k = f.t / f.life, x = f.x * P, y = f.y * P;
+    if (f.spark) { const r = f.r * P * (0.6 + k); ctx.globalAlpha = 1 - k; ctx.drawImage(glowSprite('#fff4d8'), x - r, y - r, r * 2, r * 2); continue; }
+    const grow = 0.35 + 0.65 * Math.sqrt(k), r = f.r * P * grow, fade = 1 - k;
+    ctx.globalAlpha = fade * fade; ctx.drawImage(glowSprite('#ff4a1e'), x - r * 1.5, y - r * 1.5, r * 3, r * 3);
+    ctx.globalAlpha = fade; ctx.drawImage(glowSprite('#ff9a3c'), x - r, y - r, r * 2, r * 2);
+    if (k < 0.45) { const c = r * (0.7 - k); ctx.globalAlpha = 1 - k / 0.45; ctx.drawImage(glowSprite('#fff2c4'), x - c, y - c, c * 2, c * 2); }
+    if (!REDUCED && k < 0.5) {                           // the shock ring racing out
+      const rr = P * (0.4 + k * 3.6); ctx.globalAlpha = (1 - k / 0.5) * 0.7; ctx.strokeStyle = '#fff1d0'; ctx.lineWidth = Math.max(1.5, P * 0.05 * (1 - k));
+      ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
 }
 function burst(x, y, n, col, sp, life, size) {
   for (let i = 0; i < n; i++) {
@@ -5316,7 +5392,7 @@ function playEvent(e) {
     scorch(e[2], e[3], e[5] || C.GUIDED_BLAST);
   } else if (kind === 'kill') {
     marks.push({ x: e[3], y: e[4], col: pen(e[2]), seed: e[5] | 0 });
-    burst(e[3], e[4], 30, pen(e[2]), 3.2, 0.6, 0.07); shake = 0.35; sfx.boom();
+    burst(e[3], e[4], 30, pen(e[2]), 3.2, 0.6, 0.07); shake = 0.35; sfx.boom(); boomFx(e[3], e[4], pen(e[2]), e[5] | 0);
   } else if (kind === 'warp') {
     portalFx(e[2], e[3], e[4] | 0); sfx.warp();
   } else if (kind === 'pass') {
@@ -5344,7 +5420,7 @@ function playEvent(e) {
   } else if (kind === 'spawn') {
     rings.push({ x: e[3], y: e[4], r: 0.8, life: 0.4, max: 0.4, col: pen(e[2]) }); sfx.spawn();
   } else if (kind === 'bounce') {
-    burst(e[2], e[3], 3, COL.graphite, 1, 0.2, 0.03);
+    wallSparks(e[2], e[3], '#ffd9a0');
     const now = performance.now(); if (now - lastBounceSound > 45) { lastBounceSound = now; sfx.bounce(); }
   }
 }
@@ -6699,6 +6775,8 @@ function glow(x, y, r, col, a) {
   ctx.drawImage(glowSprite(col), x - r, y - r, r * 2, r * 2);
   ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
 }
+// where along a tread its links have rolled to, in pixels from the first link (0 to gap); the tread moves the other way to the tank
+const tread = (dist, gap) => { const v = -((dist || 0) * P) % gap; return v < 0 ? v + gap : v; };
 function rrect(x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
@@ -6900,8 +6978,100 @@ function drawRewindGhost(t) {
   ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -P * 0.16); ctx.moveTo(0, 0); ctx.lineTo(P * 0.11, 0); ctx.stroke();
   ctx.restore(); ctx.globalAlpha = 1;
 }
-let tankGlowK = 1;
+let tankGlowK = 1, tankNoGlow = false;
+// Shading the tanks is the costliest thing drawn each frame; if a device cannot keep up (frames slower than about 50 a
+// second for a couple of seconds running in a match), it is dropped for the rest of the visit and the tanks are drawn flat.
+let tankLit = true, slowFor = 0, frameEma = 1 / 60;
+function watchFrames(fdt) {
+  if (!tankLit || HEADLESS || state !== 'play' || document.hidden) { slowFor = 0; return; }
+  frameEma += (fdt - frameEma) * 0.1;
+  slowFor = frameEma > 0.02 ? slowFor + fdt : 0;
+  if (slowFor > 2.5) { tankLit = false; console.info('tank shading off: frames too slow'); }
+}
+// A tank lit like the rest of the scene. It is drawn onto a scratch canvas the same way it would be on screen, then
+// shaded there before going on screen: brighter towards the top left, where the light comes from, darker to the
+// bottom right, with a lit edge and a shaded edge, and the edge turned to a nearby blast or muzzle flash catches its
+// colour. Where the tank is will be drawn later, the treads roll as it moves.
+const tankCv = document.createElement('canvas'), tankG = tankCv.getContext('2d');
+const tankMask = document.createElement('canvas'), tankMG = tankMask.getContext('2d');
 function drawTank(t) {
+  rollTreads(t);
+  if (HEADLESS || ctx !== mainCtx || !tankLit || tanks.length > 6) return drawTankBody(t);
+  const M = ctx.getTransform(), sc = Math.hypot(M.a, M.b);
+  const c = M.transformPoint(new DOMPoint(t.x * P, t.y * P));
+  const S = Math.ceil(P * 1.6 * sc * Math.max(1, C.TANK_R / C0.TANK_R));   // the tank and its rings; the muzzle flash goes on after
+  if (S < 8 || S > 2048) return drawTankBody(t);
+  if (tankCv.width < S || tankCv.height < S) { tankCv.width = tankCv.height = tankMask.width = tankMask.height = Math.max(S, 64); }
+  const cAlpha = t.cloak > 0 ? (viewer() < 0 ? 0.18 : 0.42) : 1, col = t.pen || penOf(t.id), zom = t.pen ? t.pen === COL.zombie : isZed(t.id);
+  // its glow on the ground goes straight on screen, under the tank, and is not shaded
+  if (!(t.inv > 0 && !REDUCED && Math.floor(performance.now() / 110) % 2 === 0))
+    glow(t.x * P, t.y * P, P * (C.TANK_R / C0.TANK_R) * 0.95, col, (zom ? 0.28 : 0.42) * cAlpha * tankGlowK);
+  const g = tankG, ox = c.x - S / 2, oy = c.y - S / 2;
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1; g.clearRect(0, 0, S, S);
+  g.setTransform(M.a, M.b, M.c, M.d, M.e - ox, M.f - oy);
+  ctx = g; tankNoGlow = true;
+  try { drawTankBody(t); } finally { ctx = mainCtx; tankNoGlow = false; }
+  const flash = t.recoil > 0.15 && !(t.inv > 0 && !REDUCED && Math.floor(performance.now() / 110) % 2 === 0);
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+  shadeSprite(S, sc, t);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(tankCv, 0, 0, S, S, ox, oy, S, S); ctx.restore();
+  if (flash) {                                             // the muzzle flash, unshaded, out past the sprite
+    const k = P * 0.5 * (C.TANK_R / C0.TANK_R);
+    glow(t.x * P + Math.cos(t.angle) * k, t.y * P + Math.sin(t.angle) * k, P * 0.5 * t.recoil * (C.TANK_R / C0.TANK_R), shade(col, 0.5), t.recoil * cAlpha);
+  }
+}
+// the light falls from the screen's top left (as on the walls); d is how far in a lit or shaded edge reaches
+function shadeSprite(S, sc, t) {
+  const g = tankG, m = tankMG, d = Math.max(1, P * 0.035 * sc);
+  // an edge: the tank's shape less the same shape moved (dx, dy), filled with a colour
+  const edge = (dx, dy, col) => {
+    m.globalCompositeOperation = 'source-over'; m.globalAlpha = 1; m.clearRect(0, 0, S, S);
+    m.drawImage(tankCv, 0, 0, S, S, 0, 0, S, S);
+    m.globalCompositeOperation = 'destination-out'; m.drawImage(tankCv, 0, 0, S, S, dx, dy, S, S);
+    m.globalCompositeOperation = 'source-in'; m.fillStyle = col; m.fillRect(0, 0, S, S);
+  };
+  g.globalCompositeOperation = 'source-atop';
+  const gr = g.createLinearGradient(S * 0.3, S * 0.3, S * 0.7, S * 0.7);
+  gr.addColorStop(0, 'rgba(255,255,255,0.1)'); gr.addColorStop(0.5, 'rgba(255,255,255,0)'); gr.addColorStop(1, 'rgba(0,0,0,0.3)');
+  g.fillStyle = gr; g.fillRect(0, 0, S, S);
+  const col = t.pen || penOf(t.id);                              // the lit edge in a pale tint of the tank's own colour, so it stays vivid
+  edge(d, d, shade(col, 0.7)); g.globalAlpha = 0.65; g.drawImage(tankMask, 0, 0, S, S, 0, 0, S, S);
+  // the strongest blast, flash or fire close by lights the edge turned to it
+  const near = rimLight(t);
+  if (near) {
+    const M = mainCtx.getTransform(), a = M.transformPoint(new DOMPoint(t.x * P, t.y * P)), b = M.transformPoint(new DOMPoint(near.x * P, near.y * P));
+    const L = Math.hypot(b.x - a.x, b.y - a.y) || 1, ux = (b.x - a.x) / L, uy = (b.y - a.y) / L;
+    edge(-ux * d * 1.6, -uy * d * 1.6, near.col);
+    g.globalCompositeOperation = 'lighter'; g.globalAlpha = Math.min(1, near.k * 2); g.drawImage(tankMask, 0, 0, S, S, 0, 0, S, S);
+    g.globalCompositeOperation = 'source-atop'; g.globalAlpha = Math.min(0.35, near.k * 0.4); g.fillStyle = near.col; g.fillRect(0, 0, S, S);
+  }
+  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+}
+// of this frame's lights (drawLights), the one that lights this tank most: strong ones only, not its own muzzle flash
+function rimLight(t) {
+  let best = null, bk = 0.12;
+  for (const l of lightBuf) {
+    if (!l.occ) continue;
+    const dx = l.x - t.x, dy = l.y - t.y, dist = Math.hypot(dx, dy);
+    if (dist < 0.62 || dist > l.r) continue;                       // too close is its own flash; out of reach is nothing
+    const k = l.a * (1 - dist / l.r) * 1.6;
+    if (k > bk && lightReaches(l.x, l.y, t.x, t.y)) { bk = k; best = l; }
+  }
+  return best && { x: best.x, y: best.y, col: best.col, k: bk };
+}
+// tread links move with the ground under them: forwards and back as the tank drives, opposite ways as it turns
+function rollTreads(t) {
+  if (t._rx === undefined) { t._rx = t.x; t._ry = t.y; t._ra = t.angle; t._tl = 0; t._tr = 0; return; }
+  const dx = t.x - t._rx, dy = t.y - t._ry;
+  let da = t.angle - t._ra; da = Math.atan2(Math.sin(da), Math.cos(da));
+  if (Math.abs(dx) + Math.abs(dy) < 2) {
+    const fwd = dx * Math.cos(t.angle) + dy * Math.sin(t.angle), turn = da * 0.26;
+    t._tl += fwd + turn; t._tr += fwd - turn;
+  }
+  t._rx = t.x; t._ry = t.y; t._ra = t.angle;
+}
+function drawTankBody(t) {
   const col = t.pen || penOf(t.id), zom = t.pen ? t.pen === COL.zombie : isZed(t.id);
   const sk = zom ? 'classic' : validSkin(t.skin || skinOf(t.id));
   const cloaked = t.cloak > 0, cAlpha = cloaked ? (viewer() < 0 ? 0.18 : 0.42) : 1;
@@ -6926,7 +7096,7 @@ function drawTank(t) {
     ctx.setLineDash([P * 0.12, P * 0.1]); ctx.beginPath(); ctx.arc(0, 0, P * 0.51, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     ctx.restore();
   }
-  glow(t.x * P, t.y * P, P * (C.TANK_R / C0.TANK_R) * 0.95, col, (zom ? 0.28 : 0.42) * cAlpha * tankGlowK);   // its light on the ground (in play the light pass does most of it)
+  if (!tankNoGlow) glow(t.x * P, t.y * P, P * (C.TANK_R / C0.TANK_R) * 0.95, col, (zom ? 0.28 : 0.42) * cAlpha * tankGlowK);   // its light on the ground (in play the light pass does most of it)
   ctx.save();
   ctx.translate(t.x * P, t.y * P);
   if (C.TANK_R !== C0.TANK_R) ctx.scale(C.TANK_R / C0.TANK_R, C.TANK_R / C0.TANK_R);
@@ -6959,14 +7129,24 @@ function drawTank(t) {
     rrect(-L * 0.54, -W * 0.56, L * 1.08, W * 0.3, P * 0.03); ctx.fill();
     rrect(-L * 0.54, W * 0.56 - W * 0.3, L * 1.08, W * 0.3, P * 0.03); ctx.fill();
     ctx.strokeStyle = shade(col, -0.8); ctx.lineWidth = Math.max(1, P * 0.025); ctx.beginPath();
-    for (let i = 1; i < 6; i++) { const x = -L * 0.54 + L * 1.08 * i / 6; ctx.moveTo(x, -W * 0.56 + 1); ctx.lineTo(x, -W * 0.26 - 1); ctx.moveTo(x, W * 0.26 + 1); ctx.lineTo(x, W * 0.56 - 1); }
+    const gap = L * 1.08 / 6, pl = tread(t._tl, gap), pr = tread(t._tr, gap);
+    for (let i = 0; i < 6; i++) {
+      const xl = -L * 0.54 + gap * i + pl, xr = -L * 0.54 + gap * i + pr;
+      if (xl > -L * 0.54 + 1 && xl < L * 0.54 - 1) { ctx.moveTo(xl, -W * 0.56 + 1); ctx.lineTo(xl, -W * 0.26 - 1); }
+      if (xr > -L * 0.54 + 1 && xr < L * 0.54 - 1) { ctx.moveTo(xr, W * 0.26 + 1); ctx.lineTo(xr, W * 0.56 - 1); }
+    }
     ctx.stroke();
   } else if (sk === 'retro') {
     ctx.fillStyle = shade(col, -0.35);
     ctx.fillRect(-L / 2, -W / 2, L, W * 0.26);
     ctx.fillRect(-L / 2, W / 2 - W * 0.26, L, W * 0.26);
     ctx.fillStyle = shade(col, -0.78);
-    for (let i = 0; i < 5; i++) { const x = -L / 2 + (i + 0.3) * L / 5; ctx.fillRect(x, -W / 2 + 1, L * 0.07, W * 0.24); ctx.fillRect(x, W / 2 - W * 0.25, L * 0.07, W * 0.24); }
+    const gap = L / 5, pl = tread(t._tl, gap), pr = tread(t._tr, gap);
+    for (let i = 0; i < 5; i++) {
+      const xl = -L / 2 + i * gap + pl, xr = -L / 2 + i * gap + pr;
+      if (xl < L / 2 - L * 0.07) ctx.fillRect(xl, -W / 2 + 1, L * 0.07, W * 0.24);
+      if (xr < L / 2 - L * 0.07) ctx.fillRect(xr, W / 2 - W * 0.25, L * 0.07, W * 0.24);
+    }
   } else if (sk === 'stealth') {
     ctx.fillStyle = shade(col, -0.42);
     for (const sy of [-1, 1]) {
@@ -6981,7 +7161,12 @@ function drawTank(t) {
     rrect(-L / 2, W / 2 - W * 0.26, L, W * 0.26, P * 0.04); ctx.fill();
     ctx.strokeStyle = sk === 'cyber' ? col : shade(col, -0.75);
     ctx.lineWidth = Math.max(1, P * 0.02); ctx.globalAlpha = (sk === 'cyber' ? 0.55 : 1) * cAlpha; ctx.beginPath();
-    for (let i = 1; i < 8; i++) { const x = -L / 2 + L * i / 8; ctx.moveTo(x, -W / 2 + 1); ctx.lineTo(x, -W / 2 + W * 0.26 - 1); ctx.moveTo(x, W / 2 - W * 0.26 + 1); ctx.lineTo(x, W / 2 - 1); }
+    const gap = L / 8, pl = tread(t._tl, gap), pr = tread(t._tr, gap);
+    for (let i = 0; i < 8; i++) {
+      const xl = -L / 2 + gap * i + pl, xr = -L / 2 + gap * i + pr;
+      if (xl > -L / 2 + 1 && xl < L / 2 - 1) { ctx.moveTo(xl, -W / 2 + 1); ctx.lineTo(xl, -W / 2 + W * 0.26 - 1); }
+      if (xr > -L / 2 + 1 && xr < L / 2 - 1) { ctx.moveTo(xr, W / 2 - W * 0.26 + 1); ctx.lineTo(xr, W / 2 - 1); }
+    }
     ctx.stroke(); ctx.globalAlpha = cAlpha;
   }
   // hull: styled per skin, always keeping the tank's colour as the primary outline
@@ -7235,7 +7420,7 @@ function drawTank(t) {
     for (const dy of [-0.14, 0, 0.14]) { ctx.beginPath(); ctx.moveTo(-L / 2 - P * 0.08, dy * P); ctx.lineTo(-L / 2 - P * 0.36, dy * P); ctx.stroke(); }
     ctx.globalAlpha = cAlpha;
   }
-  if (t.recoil > 0.15) glow(P * 0.5, 0, P * 0.5 * t.recoil, shade(col, 0.5), t.recoil * cAlpha);       // muzzle flash
+  if (t.recoil > 0.15 && !tankNoGlow) glow(P * 0.5, 0, P * 0.5 * t.recoil, shade(col, 0.5), t.recoil * cAlpha);       // muzzle flash (see drawTank)
   ctx.restore();
   ctx.fillStyle = COL.white; ctx.globalAlpha = 0.5 * cAlpha; ctx.beginPath(); ctx.arc(t.x * P - P * 0.04, t.y * P - P * 0.045, P * 0.035, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
   stunDots(t, col);
@@ -8770,7 +8955,7 @@ function render() {
   if (matchOn && !rsv) drawWeatherGround();
   if (matchOn) drawDark(viewer());
   if (structs.length && matchOn) drawBase();
-  if (matchOn) { const ey = viewer(); drawLights(ey); drawGroundShadows(ey); }
+  if (matchOn) { const ey = viewer(); drawLights(ey); drawGroundShadows(ey); } else lightBuf.length = 0;
   tankGlowK = matchOn && !HEADLESS ? 0.3 : 1;     // the glow under a tank comes from the light pass, under its shadow
   const pad = matchOn ? gatPad() : null;
   if (pad && !pickups.some(k => k.type === 'gatling')) {
@@ -8930,6 +9115,7 @@ function render() {
     }
     ctx.restore();
   }
+  drawBoomFx();
   for (const p of particles) {
     // a spark: a short streak along its way
     const a = Math.max(0, p.life / p.max), x = p.x * P, y = p.y * P;
@@ -9021,7 +9207,8 @@ function blendOut() {
 function frame(now) {
   if (wantKey() !== layoutKey) resize();
   if (!last) last = now;
-  acc += Math.min(0.1, (now - last) / 1000); last = now;
+  const fdt = Math.min(0.1, (now - last) / 1000); last = now; watchFrames(fdt);
+  if (hitstop > 0) hitstop -= fdt; else acc += fdt;       // a hit-stop holds the game still for a moment
   while (acc >= C.STEP) { keepPrev(); update(C.STEP); acc -= C.STEP; }
   if (!HEADLESS) { blendIn(acc / C.STEP); try { render(); } finally { blendOut(); } }
   requestAnimationFrame(frame);
@@ -9236,7 +9423,7 @@ window.__tank = {
   get myKey() { return myKey; }, get awaySince() { return awaySince; }, get lastGame() { return lastGame; }, guestReconnect, get peer() { return peer; }, get myId() { return myId; },
   get pot() { return pot; }, get ball() { return ball; }, get goalBy() { return goalBy; }, get goalCell() { return goalCell; }, SOCCERMAPS, gunWeapon, gunLadder, potatoBoom, scoreGoal,
   lobbyFrames, paneItems, ruleRows, applyMut, openBoard, reportResult, get boardData() { return boardData; }, get mutNow() { return mutNow; }, MUTS, get menuStep() { return menuStep; }, set menuStep(v) { menuStep = v; }, get lobbyPane() { return lobbyPane; }, get water() { return water; }, get grass() { return grass; }, seenBy, concealed, viewer,
-  BIG_MAPS, MAP_POOLS, LOCAL_MAP_POOLS, mapChoice, VIEW_CELLS, camOn, updateCamera, drawMinimap, get cam() { return cam; },
+  BIG_MAPS, MAP_POOLS, LOCAL_MAP_POOLS, mapChoice, VIEW_CELLS, camOn, updateCamera, drawMinimap, get cam() { return cam; }, get tankLit() { return tankLit; }, set tankLit(v) { tankLit = v; }, get fireballs() { return fireballs; }, get debris() { return debris; }, get hitstop() { return hitstop; }, watchFrames, get AX() { return AX; }, get AY() { return AY; }, get PX() { return P; },
   get ice() { return ice; }, get mud() { return mud; }, get boosts() { return boosts; }, get sandbags() { return sandbags; }, get bridges() { return bridges; }, get gates() { return gates; }, get beacons() { return beacons; },
   lobby: { get seats() { return lobbySeats(); }, get teams() { return lobbyTeams(); }, get names() { return lobbyNames(); }, get skins() { return lobbySkins(); }, get bots() { return lobbyBots; }, toggleTeam, reseat }
 };

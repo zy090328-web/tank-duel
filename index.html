@@ -1201,8 +1201,45 @@ function setCpuSkin(idx, id) {
   cpuSkins[idx] = validSkin(id);
   try { localStorage.setItem('tankduel-skin-cpu', JSON.stringify(cpuSkins)); } catch (e) {}
 }
-function openSkins() { skinBack = state; skinSlot = 0; state = 'skins'; stateT = 0; layout(); }
-function closeSkins() { state = NET_SCREENS.includes(skinBack) || skinBack === 'title' ? skinBack : 'title'; stateT = 0; layout(); }
+function openSkins() { skinBack = state; skinSlot = 0; skinRoll = null; state = 'skins'; stateT = 0; layout(); }
+function closeSkins() { skinRoll = null; state = NET_SCREENS.includes(skinBack) || skinBack === 'title' ? skinBack : 'title'; stateT = 0; layout(); }
+
+// Random: a highlight runs over the cards like a prize wheel, ticking as it goes, slows down and stops on one
+let skinRoll = null;      // { idx, k, steps, wait, done, flash }
+const slotSkin = () => skinBack === 'title' && skinSlot > 0 ? (settings.cpu === 0 ? p2Skin : cpuSkins[skinSlot - 1]) : mySkin;
+function setSlotSkin(id) {
+  if (skinBack === 'title' && skinSlot > 0) {
+    if (settings.cpu === 0) setP2Skin(id);
+    else setCpuSkin(skinSlot - 1, id);
+  } else setMySkin(id);
+}
+const rolling = () => !!skinRoll && !skinRoll.done;
+const rollStepGap = f => 0.04 + 0.34 * f * f * f;          // the gap between ticks grows as the wheel runs down
+function startRoll() {
+  if (rolling() || state !== 'skins') return;
+  const N = SKIN_IDS.length, cur = SKIN_IDS.indexOf(slotSkin());
+  let target = cur;
+  while (N > 1 && target === cur) target = Math.floor(Math.random() * N);   // always lands on a different one
+  // at least one full lap, then on to the one it lands on
+  const steps = N + (target - cur + N) % N;
+  let total = 0;
+  for (let k = 0; k < steps; k++) total += rollStepGap(k / steps);
+  const scale = 2.4 / total;                               // near or far, it always runs about 2.4 s
+  skinRoll = { idx: cur, k: 0, steps, scale, wait: rollStepGap(0) * scale, done: false, flash: 0 };
+  sfx.rollTick(0);
+}
+function stepRoll(dt) {
+  const r = skinRoll;
+  if (!r) return;
+  if (state !== 'skins') { skinRoll = null; return; }
+  if (r.done) { r.flash -= dt; if (r.flash <= 0) skinRoll = null; return; }
+  r.wait -= dt;
+  while (r.wait <= 0 && !r.done) {
+    r.k++; r.idx = (r.idx + 1) % SKIN_IDS.length;
+    if (r.k >= r.steps) { r.done = true; r.flash = 1.1; setSlotSkin(SKIN_IDS[r.idx]); sfx.rolled(); }
+    else { sfx.rollTick(r.k / r.steps); r.wait += rollStepGap(r.k / r.steps) * r.scale; }
+  }
+}
 
 /* ---------- game state ---------- */
 let walls = [], spawn = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
@@ -5573,6 +5610,9 @@ const sfx = {
     for (let i = 0; i < 4; i++) hiss({ dur: 0.55, vol: 0.26 - i * 0.05, f0: 520 - i * 90, f1: 70, delay: 0.3 + i * 0.4, send: 0.6 });
     voice({ f: 62, to: 32, dur: 1.6, type: 'sine', vol: 0.18, delay: 0.3 });
   },
+  // the prize wheel: a dry click for each card it passes, lower as it slows; a bright ding where it stops
+  rollTick: f => { if (!audible()) return; voice({ f: 1500 - 500 * f, dur: 0.028, type: 'square', vol: 0.03, lp: 3400 }); voice({ f: 2600, dur: 0.012, type: 'sine', vol: 0.012 }); },
+  rolled: () => chime([[784, 0, 0.1], [1046.5, 0.08, 0.1], [1568, 0.16, 0.4]], 0.075),
   tick: () => { voice({ f: 720, to: 900, dur: 0.06, type: 'sine', vol: 0.07 }); voice({ f: 1800, dur: 0.02, type: 'sine', vol: 0.02 }); },
   go: () => chime([[880, 0, 0.26], [1318.5, 0, 0.26]], 0.07),
   point: () => chime([[659.3, 0, 0.12], [987.8, 0.1, 0.22]], 0.07),
@@ -5981,15 +6021,9 @@ function applyMenu(it) {
   if (it.kind === 'bback') { sfx.tick(); closeBoard(); return; }
   if (it.kind === 'skins') { sfx.tick(); openSkins(); return; }
   if (it.kind === 'sback') { sfx.tick(); closeSkins(); return; }
-  if (it.kind === 'skinslot') { sfx.tick(); skinSlot = clamp(it.v | 0, 0, settings.cpu ? settings.cpu : 1); return; }
-  if (it.kind === 'skinpick') {
-    sfx.tick();
-    if (skinBack === 'title' && skinSlot > 0) {
-      if (settings.cpu === 0) setP2Skin(it.v);
-      else setCpuSkin(skinSlot - 1, it.v);
-    } else setMySkin(it.v);
-    return;
-  }
+  if (it.kind === 'sroll') { startRoll(); return; }
+  if (it.kind === 'skinslot') { sfx.tick(); skinRoll = null; skinSlot = clamp(it.v | 0, 0, settings.cpu ? settings.cpu : 1); return; }
+  if (it.kind === 'skinpick') { sfx.tick(); skinRoll = null; setSlotSkin(it.v); return; }
   if (it.kind === 'brow') { boardPick = boardPick === it.v ? -1 : it.v; sfx.tick(); return; }
   if (it.kind === 'btab') { boardTab = it.v; boardPick = -1; sfx.tick(); return; }
   if (SETTING_KINDS.includes(it.kind)) menuFocus = it.kind;
@@ -8561,14 +8595,16 @@ function netItems() {
     const gx = cols === 3 ? U * 0.22 : U * 0.35, gy = cols === 3 ? (rows > 4 ? U * 0.13 : rows > 3 ? U * 0.18 : U * 0.2) : (rows > 3 ? U * 0.24 : U * 0.32);
     const x0 = cx - (cw * cols + gx * (cols - 1)) / 2;
     const y0 = y(skinBack === 'title' ? (cols === 3 ? (rows > 3 ? 2.1 : 2.15) : rows > 3 ? 2.25 : 2.45) : (cols === 3 ? (rows > 3 ? 1.82 : 1.88) : rows > 3 ? 1.95 : 2.15));
-    const cur = skinBack === 'title' && skinSlot > 0 ? (settings.cpu === 0 ? p2Skin : cpuSkins[skinSlot - 1]) : mySkin;
+    const cur = skinRoll ? SKIN_IDS[skinRoll.idx] : slotSkin();
     SKINS.forEach((s, i) => {
       const col = i % cols, row = (i / cols) | 0;
       const lastCount = SKINS.length - row * cols;
       const rowX0 = (row === rows - 1 && lastCount < cols) ? cx - (cw * lastCount + gx * (lastCount - 1)) / 2 : x0;
       items.push({ kind: 'skinpick', v: s.id, skin: s, on: cur === s.id, x: rowX0 + col * (cw + gx), y: y0 + row * (ch + gy), w: cw, h: ch });
     });
-    btn('sback', 'Back', cols === 3 && rows > 3 ? 10.12 : 9.9, 3);
+    const by = cols === 3 && rows > 3 ? 10.12 : 9.9;
+    btn('sroll', 'Random', by, 2.6); items[items.length - 1].x -= U * 1.45;
+    btn('sback', 'Back', by, 2.6); items[items.length - 1].x += U * 1.45;
   }
   return items;
 }
@@ -8657,7 +8693,12 @@ function drawSkins(accent) {
       drawChip(it, it.on, slotCol);
     } else if (it.kind === 'skinpick') {
       panel(it.x, it.y, it.w, it.h, U * 0.18, null, it.on ? previewCol : null);
-      if (it.on) { rrect(it.x, it.y, it.w, it.h, U * 0.18); ctx.globalAlpha = 0.14; ctx.fillStyle = previewCol; ctx.fill(); ctx.globalAlpha = 1; }
+      if (it.on) { rrect(it.x, it.y, it.w, it.h, U * 0.18); ctx.globalAlpha = rolling() ? 0.3 : 0.14; ctx.fillStyle = previewCol; ctx.fill(); ctx.globalAlpha = 1; }
+      if (it.on && skinRoll && skinRoll.done) {                // where the wheel stopped: a ring flashes out from the card
+        const f = 1 - skinRoll.flash / 1.1, grow = U * 0.35 * f;
+        rrect(it.x - grow, it.y - grow, it.w + grow * 2, it.h + grow * 2, U * 0.18 + grow);
+        ctx.globalAlpha = (1 - f) * (0.6 + 0.4 * Math.cos(f * 18)); ctx.strokeStyle = previewCol; ctx.lineWidth = Math.max(2, U * 0.07); ctx.stroke(); ctx.globalAlpha = 1;
+      }
       const tall = it.h > it.w * 0.55, narrow = !tall && it.w < U * 4.0;
       const savedP = P;
       try {
@@ -8684,11 +8725,13 @@ function drawSkins(accent) {
       }
     } else if (it.kind === 'sback') {
       drawChip(it, false, previewCol);
+    } else if (it.kind === 'sroll') {
+      drawChip(it, rolling(), previewCol);
     }
   }
   // the chosen one, in Chinese: what it does, and who it beats / fears
   const picks = items.filter(i => i.kind === 'skinpick'), sel = picks.find(i => i.on), back = items.find(i => i.kind === 'sback');
-  const zh = sel && SKIN_ZH[sel.skin.id];
+  const zh = sel && !rolling() && SKIN_ZH[sel.skin.id];
   if (zh && back) {
     const top = Math.max(...picks.map(i => i.y + i.h)), gap = back.y - top, fs = clamp(gap * 0.27, U * 0.2, U * 0.3), mw = AW - U * 0.3;
     label(`${sel.skin.name}：${zh.d}`, cx, top + gap * 0.3, fs, ink, FONT_B, 0.95, 'center', mw);
@@ -9207,7 +9250,7 @@ function blendOut() {
 function frame(now) {
   if (wantKey() !== layoutKey) resize();
   if (!last) last = now;
-  const fdt = Math.min(0.1, (now - last) / 1000); last = now; watchFrames(fdt);
+  const fdt = Math.min(0.1, (now - last) / 1000); last = now; watchFrames(fdt); stepRoll(fdt);
   if (hitstop > 0) hitstop -= fdt; else acc += fdt;       // a hit-stop holds the game still for a moment
   while (acc >= C.STEP) { keepPrev(); update(C.STEP); acc -= C.STEP; }
   if (!HEADLESS) { blendIn(acc / C.STEP); try { render(); } finally { blendOut(); } }
@@ -9331,16 +9374,12 @@ addEventListener('keydown', e => {
   if (state === 'hostWait') { if (k === 'enter' || k === ' ') hostStart(); return; }
   if (state === 'guestWait' && isLeader) { if (k === 'enter' || k === ' ') sendCmd('start'); return; }
   if (state === 'skins') {
-    if (k === 'tab' && skinBack === 'title') { e.preventDefault(); const n = settings.cpu ? settings.cpu + 1 : 2; skinSlot = (skinSlot + 1) % n; sfx.tick(); return; }
+    if (k === 'tab' && skinBack === 'title') { e.preventDefault(); const n = settings.cpu ? settings.cpu + 1 : 2; skinRoll = null; skinSlot = (skinSlot + 1) % n; sfx.tick(); return; }
+    if (k === 'r') { startRoll(); return; }
     if (/^[0-9-]$/.test(k)) {
       const idx = k === '-' ? 10 : k === '0' ? 9 : +k - 1;
       if (idx < SKINS.length) {
-        const id = SKINS[idx].id;
-        sfx.tick();
-        if (skinBack === 'title' && skinSlot > 0) {
-          if (settings.cpu === 0) setP2Skin(id);
-          else setCpuSkin(skinSlot - 1, id);
-        } else setMySkin(id);
+        sfx.tick(); skinRoll = null; setSlotSkin(SKINS[idx].id);
       }
       return;
     }
@@ -9393,7 +9432,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, wxRule, snowGrip, strikeBolt, gust, get banks() { return banks; }, set banks(v) { banks = v; }, inBank, stepGust, get boltT() { return boltT; }, set boltT(v) { boltT = v; }, get boltFlash() { return boltFlash; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
+  get mySkin() { return mySkin; }, get skinRoll() { return skinRoll; }, startRoll, stepRoll, openSkins, closeSkins, get skinSlot() { return skinSlot; }, set skinSlot(v) { skinSlot = v; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, wxRule, snowGrip, strikeBolt, gust, get banks() { return banks; }, set banks(v) { banks = v; }, inBank, stepGust, get boltT() { return boltT; }, set boltT(v) { boltT = v; }, get boltFlash() { return boltFlash; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy,
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,

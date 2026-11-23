@@ -9344,7 +9344,8 @@ for (const type of ['gesturestart', 'gesturechange', 'contextmenu', 'dblclick', 
   document.addEventListener(type, e => { if (!(e.target && e.target.closest && e.target.closest('#namebox'))) e.preventDefault(); });
 }
 
-// keyboard, for trying it on a computer: arrows + Enter (. / Shift for skill), and W A S D + Space (Q / E for skill).
+// keyboard (a keyboard joined to a tablet, or a computer): W A S D or the arrow keys drive, J fires, K is the skill (Space / Enter / F / M fire, Q / E / Shift / . skill still work).
+// Two players on one screen: the arrow keys + Enter (. / Shift for skill) are one, W A S D + J K (or Space, Q / E) the other.
 // In the menu: G = game mode, C = computer tanks, 1 2 3 4 = ammo, P = power-ups, B = breakable walls, M = maps, N = match length.
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
@@ -9393,14 +9394,14 @@ addEventListener('keydown', e => {
   }
   if (state === 'replay') { if (k === 'enter' || k === 's') skipReplay(); return; }
   if (mode !== 'local' || soloMatch) {
-    if ([' ', 'enter', 'f', 'm', '/'].includes(k)) pressFireFrom(0);
-    else if (['q', 'e', 'shift', '.'].includes(k)) pressSkillFrom(0);
+    if ([' ', 'enter', 'f', 'm', '/', 'j'].includes(k)) pressFireFrom(0);
+    else if (['q', 'e', 'shift', '.', 'k'].includes(k)) pressSkillFrom(0);
     return;
   }
   if (k === 'enter' || k === '/' || k === 'm') pressFire(0);
   else if (k === '.' || k === 'shift') pressSkill(0);
-  if (k === ' ' || k === 'f') pressFire(1);
-  else if (k === 'q' || k === 'e') pressSkill(1);
+  if (k === ' ' || k === 'f' || k === 'j') pressFire(1);
+  else if (k === 'q' || k === 'e' || k === 'k') pressSkill(1);
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => { keys.clear(); players.forEach(pl => { pl.stickId = null; pl.fireId = null; pl.skillId = null; pl.vx = 0; pl.vy = 0; }); });

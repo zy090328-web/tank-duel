@@ -2751,6 +2751,13 @@ function useSkill(t) {
   return true;
 }
 const MIRROR_COL = '#bfe6ff';
+// each hero's own body colour (Classic keeps the player's colour all over)
+const HERO_COL = {
+  heavy: '#8f9d5e', stealth: '#69727f', cyber: '#3fcfe0', retro: '#d9a441', striker: '#c3dd4c', mortar: '#c4a978',
+  engineer: '#f0c33c', trapper: '#4fb7a0', titan: '#d6b45c', recon: '#a7ad70', decoy: '#b7a2de', rewind: '#c98b5a',
+  blink: '#7fa8ff', mirror: '#cdd9e6', smoker: '#8f8f96', splitter: '#e06cc4', turret: '#7f8d9b', hook: '#b8683d',
+  blade: '#aeb8c4', burner: '#d2582f', frost: '#a3e6ff', railgun: '#6eefd2'
+};
 // a Blade's slash: everything in reach in front is cut
 function slash(t) {
   if ((t.spin || 0) > 0) return false;
@@ -7710,6 +7717,13 @@ function watchFrames(fdt) {
 const tankCv = document.createElement('canvas'), tankG = tankCv.getContext('2d');
 const tankMask = document.createElement('canvas'), tankMG = tankMask.getContext('2d');
 function drawTank(t) {
+  if (t.alive !== false && !(t.cloak > 0) && state !== 'skins') {   // a ring of the player's colour on the ground under it: who it is, whatever hero
+    const col = t.pen || penOf(t.id), x = t.x * P, y = t.y * P, r = P * 0.5 * (C.TANK_R / C0.TANK_R);
+    ctx.save(); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.globalAlpha = 0.95; ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, P * 0.045); ctx.stroke();
+    ctx.globalAlpha = 0.5; ctx.strokeStyle = COL.white; ctx.lineWidth = Math.max(1, P * 0.015); ctx.beginPath(); ctx.arc(x, y, r + Math.max(1.5, P * 0.035), 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
   drawTankSprite(t);
   if (t.alive !== false && (t.frozen || 0) > 0) drawIceBlock(t);
   if (t.alive !== false && ((t.spin || 0) > 0 || (t.slashAt && performance.now() - t.slashAt < C.SLASH_TIME * 1000))) drawBladeFx(t);
@@ -7821,6 +7835,8 @@ function rollTreads(t) {
 function drawTankBody(t) {
   const col = t.pen || penOf(t.id), zom = t.pen ? t.pen === COL.zombie : isZed(t.id);
   const sk = zom ? 'classic' : validSkin(t.skin || skinOf(t.id));
+  // the body is the hero's own colour; the player's colour is the outline, the turret cap and the ring under it
+  const body = !zom && HERO_COL[sk] ? HERO_COL[sk] : col, hero = body !== col;
   const cloaked = t.cloak > 0, cAlpha = cloaked ? (viewer() < 0 ? 0.18 : 0.42) : 1;
   if (t.inv > 0) {
     const a = REDUCED ? 0 : performance.now() / 300;
@@ -7881,10 +7897,10 @@ function drawTankBody(t) {
   ctx.lineJoin = 'round';
   // treads, with cleats (styled per skin)
   if (sk === 'heavy' || sk === 'titan') {
-    ctx.fillStyle = shade(col, -0.45);
+    ctx.fillStyle = shade(body, -0.45);
     rrect(-L * 0.54, -W * 0.56, L * 1.08, W * 0.3, P * 0.03); ctx.fill();
     rrect(-L * 0.54, W * 0.56 - W * 0.3, L * 1.08, W * 0.3, P * 0.03); ctx.fill();
-    ctx.strokeStyle = shade(col, -0.8); ctx.lineWidth = Math.max(1, P * 0.025); ctx.beginPath();
+    ctx.strokeStyle = shade(body, -0.8); ctx.lineWidth = Math.max(1, P * 0.025); ctx.beginPath();
     const gap = L * 1.08 / 6, pl = tread(t._tl, gap), pr = tread(t._tr, gap);
     for (let i = 0; i < 6; i++) {
       const xl = -L * 0.54 + gap * i + pl, xr = -L * 0.54 + gap * i + pr;
@@ -7893,10 +7909,10 @@ function drawTankBody(t) {
     }
     ctx.stroke();
   } else if (sk === 'retro') {
-    ctx.fillStyle = shade(col, -0.35);
+    ctx.fillStyle = shade(body, -0.35);
     ctx.fillRect(-L / 2, -W / 2, L, W * 0.26);
     ctx.fillRect(-L / 2, W / 2 - W * 0.26, L, W * 0.26);
-    ctx.fillStyle = shade(col, -0.78);
+    ctx.fillStyle = shade(body, -0.78);
     const gap = L / 5, pl = tread(t._tl, gap), pr = tread(t._tr, gap);
     for (let i = 0; i < 5; i++) {
       const xl = -L / 2 + i * gap + pl, xr = -L / 2 + i * gap + pr;
@@ -7904,7 +7920,7 @@ function drawTankBody(t) {
       if (xr < L / 2 - L * 0.07) ctx.fillRect(xr, W / 2 - W * 0.25, L * 0.07, W * 0.24);
     }
   } else if (sk === 'stealth') {
-    ctx.fillStyle = shade(col, -0.42);
+    ctx.fillStyle = shade(body, -0.42);
     for (const sy of [-1, 1]) {
       ctx.beginPath();
       ctx.moveTo(-L * 0.48, sy * W * 0.24); ctx.lineTo(-L * 0.36, sy * W * 0.48);
@@ -7912,10 +7928,10 @@ function drawTankBody(t) {
       ctx.closePath(); ctx.fill();
     }
   } else {
-    ctx.fillStyle = sk === 'cyber' ? shade(col, -0.55) : shade(col, -0.35);
+    ctx.fillStyle = sk === 'cyber' ? shade(body, -0.55) : shade(body, -0.35);
     rrect(-L / 2, -W / 2, L, W * 0.26, P * 0.04); ctx.fill();
     rrect(-L / 2, W / 2 - W * 0.26, L, W * 0.26, P * 0.04); ctx.fill();
-    ctx.strokeStyle = sk === 'cyber' ? col : shade(col, -0.75);
+    ctx.strokeStyle = sk === 'cyber' ? body : shade(body, -0.75);
     ctx.lineWidth = Math.max(1, P * 0.02); ctx.globalAlpha = (sk === 'cyber' ? 0.55 : 1) * cAlpha; ctx.beginPath();
     const gap = L / 8, pl = tread(t._tl, gap), pr = tread(t._tr, gap);
     for (let i = 0; i < 8; i++) {
@@ -7926,20 +7942,20 @@ function drawTankBody(t) {
     ctx.stroke(); ctx.globalAlpha = cAlpha;
   }
   // hull: styled per skin, always keeping the tank's colour as the primary outline
-  ctx.lineWidth = lw; ctx.strokeStyle = col; ctx.fillStyle = shade(col, -0.7);
+  ctx.lineWidth = lw; ctx.strokeStyle = col; ctx.fillStyle = shade(body, hero ? -0.12 : -0.7);
   if (sk === 'stealth') {
     ctx.beginPath();
     ctx.moveTo(L * 0.54, 0); ctx.lineTo(L * 0.14, -W * 0.38); ctx.lineTo(-L * 0.44, -W * 0.32);
     ctx.lineTo(-L * 0.34, 0); ctx.lineTo(-L * 0.44, W * 0.32); ctx.lineTo(L * 0.14, W * 0.38);
     ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = shade(col, 0.3); ctx.lineWidth = Math.max(1, P * 0.02);
+    ctx.strokeStyle = shade(body, 0.3); ctx.lineWidth = Math.max(1, P * 0.02);
     ctx.beginPath(); ctx.moveTo(-L * 0.22, -W * 0.18); ctx.lineTo(L * 0.3, 0); ctx.lineTo(-L * 0.22, W * 0.18); ctx.stroke();
   } else if (sk === 'heavy') {
     rrect(-L * 0.5, -W * 0.34, L, W * 0.68, P * 0.04); ctx.fill(); ctx.stroke();
     // front ram plate and rear vent
-    ctx.fillStyle = shade(col, -0.35);
+    ctx.fillStyle = shade(body, -0.35);
     rrect(L * 0.42, -W * 0.38, P * 0.07, W * 0.76, P * 0.02); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = shade(col, 0.25); ctx.lineWidth = Math.max(1, P * 0.02);
+    ctx.strokeStyle = shade(body, 0.25); ctx.lineWidth = Math.max(1, P * 0.02);
     ctx.beginPath(); ctx.moveTo(-L * 0.36, -W * 0.18); ctx.lineTo(-L * 0.36, W * 0.18); ctx.stroke();
   } else if (sk === 'cyber') {
     const ch = P * 0.08;
@@ -7949,21 +7965,21 @@ function drawTankBody(t) {
     ctx.lineTo(L * 0.46 - ch, W * 0.32); ctx.lineTo(-L * 0.46 + ch, W * 0.32);
     ctx.lineTo(-L * 0.46, W * 0.32 - ch); ctx.lineTo(-L * 0.46, -W * 0.32 + ch);
     ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = shade(col, 0.5); ctx.lineWidth = Math.max(1, P * 0.02);
+    ctx.strokeStyle = shade(body, 0.5); ctx.lineWidth = Math.max(1, P * 0.02);
     ctx.strokeRect(-L * 0.32, -W * 0.19, L * 0.64, W * 0.38);
   } else if (sk === 'retro') {
     ctx.fillRect(-L * 0.46, -W * 0.3, L * 0.92, W * 0.6);
     ctx.strokeRect(-L * 0.46, -W * 0.3, L * 0.92, W * 0.6);
-    ctx.fillStyle = shade(col, -0.45);
+    ctx.fillStyle = shade(body, -0.45);
     ctx.fillRect(-L * 0.34, -W * 0.18, P * 0.08, W * 0.36);
   } else if (sk === 'striker') {
     rrect(-L / 2 + P * 0.03, -W / 2 + W * 0.2, L - P * 0.06, W * 0.6, P * 0.08); ctx.fill(); ctx.stroke();
     // swept side winglets + twin racing stripes
-    ctx.fillStyle = shade(col, -0.45);
+    ctx.fillStyle = shade(body, -0.45);
     for (const sy of [-1, 1]) {
       ctx.beginPath(); ctx.moveTo(-L * 0.1, sy * W * 0.32); ctx.lineTo(-L * 0.45, sy * W * 0.48); ctx.lineTo(-L * 0.45, sy * W * 0.28); ctx.closePath(); ctx.fill();
     }
-    ctx.fillStyle = shade(col, 0.45); ctx.globalAlpha = 0.75 * cAlpha;
+    ctx.fillStyle = shade(body, 0.45); ctx.globalAlpha = 0.75 * cAlpha;
     ctx.fillRect(-L * 0.4, -P * 0.055, L * 0.8, P * 0.03);
     ctx.fillRect(-L * 0.4, P * 0.025, L * 0.8, P * 0.03);
     ctx.globalAlpha = cAlpha;
@@ -7974,21 +7990,21 @@ function drawTankBody(t) {
     ctx.lineTo(-L * 0.48, -W * 0.34 + ch); ctx.lineTo(-L * 0.48, W * 0.34 - ch); ctx.lineTo(-L * 0.42, W * 0.34);
     ctx.lineTo(L * 0.28, W * 0.34); ctx.closePath(); ctx.fill(); ctx.stroke();
     // side sensor pods
-    ctx.fillStyle = shade(col, 0.35);
+    ctx.fillStyle = shade(body, 0.35);
     for (const sy of [-1, 1]) {
       rrect(-L * 0.22, sy * W * 0.28 - P * 0.025, L * 0.36, P * 0.05, P * 0.02); ctx.fill();
     }
   } else if (sk === 'mortar') {
     rrect(-L * 0.5, -W * 0.36, L * 0.94, W * 0.72, P * 0.05); ctx.fill(); ctx.stroke();
     // rear stabilizer spades and side shell racks
-    ctx.fillStyle = shade(col, -0.3);
+    ctx.fillStyle = shade(body, -0.3);
     for (const sy of [-1, 1]) {
       rrect(-L * 0.6, sy * W * 0.24 - P * 0.04, P * 0.1, P * 0.08, P * 0.015); ctx.fill(); ctx.stroke();
     }
   } else if (sk === 'engineer') {
     rrect(-L * 0.48, -W * 0.33, L * 0.9, W * 0.66, P * 0.04); ctx.fill(); ctx.stroke();
     // front minesweeper plow blade
-    ctx.fillStyle = shade(col, 0.25);
+    ctx.fillStyle = shade(body, 0.25);
     ctx.beginPath();
     ctx.moveTo(L * 0.44, -W * 0.44); ctx.lineTo(L * 0.55, -W * 0.28);
     ctx.lineTo(L * 0.55, W * 0.28); ctx.lineTo(L * 0.44, W * 0.44);
@@ -8000,7 +8016,7 @@ function drawTankBody(t) {
     ctx.lineTo(-L * 0.5, -W * 0.34 + ch); ctx.lineTo(-L * 0.5, W * 0.34 - ch); ctx.lineTo(-L * 0.44, W * 0.34);
     ctx.lineTo(L * 0.22, W * 0.34); ctx.closePath(); ctx.fill(); ctx.stroke();
     // side snare-trap canisters
-    ctx.fillStyle = shade(col, -0.35);
+    ctx.fillStyle = shade(body, -0.35);
     for (const sy of [-1, 1]) {
       ctx.beginPath(); ctx.arc(-L * 0.16, sy * W * 0.32, P * 0.065, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
@@ -8013,7 +8029,7 @@ function drawTankBody(t) {
     ctx.lineTo(-L * 0.46 + ch, -W * 0.39); ctx.lineTo(L * 0.34, -W * 0.39);
     ctx.closePath(); ctx.fill(); ctx.stroke();
     // reactive side armor plates + gold-white vanguard chevron
-    ctx.fillStyle = shade(col, 0.25);
+    ctx.fillStyle = shade(body, 0.25);
     for (const sy of [-1, 1]) {
       rrect(-L * 0.26, sy * W * 0.34 - P * 0.032, L * 0.46, P * 0.064, P * 0.015); ctx.fill(); ctx.stroke();
     }
@@ -8023,12 +8039,12 @@ function drawTankBody(t) {
     // a hull split down the middle, like two halves of a mask
     rrect(-L / 2 + P * 0.03, -W * 0.34, L - P * 0.06, W * 0.68, P * 0.08); ctx.fill(); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-L * 0.42, 0); ctx.lineTo(L * 0.1, 0); ctx.stroke();
-    ctx.fillStyle = shade(col, 0.3);
+    ctx.fillStyle = shade(body, 0.3);
     for (const sy of [-1, 1]) { ctx.beginPath(); ctx.ellipse(-L * 0.22, sy * W * 0.17, P * 0.06, P * 0.035, 0, 0, Math.PI * 2); ctx.fill(); }
   } else if (sk === 'rewind') {
     // a rounded hull with a curved arrow on its back
     rrect(-L / 2 + P * 0.03, -W * 0.36, L - P * 0.06, W * 0.72, P * 0.14); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = shade(col, 0.35); ctx.lineWidth = Math.max(1.2, P * 0.03);
+    ctx.strokeStyle = shade(body, 0.35); ctx.lineWidth = Math.max(1.2, P * 0.03);
     ctx.beginPath(); ctx.arc(-L * 0.3, 0, P * 0.08, -Math.PI * 0.75, Math.PI * 0.75); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-L * 0.3 - P * 0.08 * Math.cos(Math.PI * 0.25), P * 0.08 * Math.sin(Math.PI * 0.25) + P * 0.03); ctx.lineTo(-L * 0.3 - P * 0.06, P * 0.06); ctx.lineTo(-L * 0.3 - P * 0.11, P * 0.07); ctx.stroke();
   } else if (sk === 'frost') {
@@ -8052,12 +8068,12 @@ function drawTankBody(t) {
     ctx.beginPath();
     ctx.moveTo(L * 0.5, 0); ctx.lineTo(L * 0.25, -W * 0.32); ctx.lineTo(-L * 0.46, -W * 0.3); ctx.lineTo(-L * 0.46, W * 0.3); ctx.lineTo(L * 0.25, W * 0.32);
     ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = shade(col, 0.4); ctx.lineWidth = Math.max(1.2, P * 0.026);
+    ctx.strokeStyle = shade(body, 0.4); ctx.lineWidth = Math.max(1.2, P * 0.026);
     ctx.beginPath(); ctx.moveTo(-L * 0.44, -W * 0.18); ctx.lineTo(-L * 0.26, -W * 0.06); ctx.moveTo(-L * 0.44, W * 0.18); ctx.lineTo(-L * 0.26, W * 0.06); ctx.stroke();
   } else if (sk === 'blink') {
     // a rounded hull with a spark of lightning on its back
     rrect(-L / 2 + P * 0.03, -W * 0.34, L - P * 0.06, W * 0.68, P * 0.11); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = shade(col, 0.5); ctx.lineWidth = Math.max(1.2, P * 0.03);
+    ctx.strokeStyle = shade(body, 0.5); ctx.lineWidth = Math.max(1.2, P * 0.03);
     ctx.beginPath(); ctx.moveTo(-L * 0.44, -W * 0.2); ctx.lineTo(-L * 0.33, W * 0.02); ctx.lineTo(-L * 0.4, W * 0.02); ctx.lineTo(-L * 0.28, W * 0.22); ctx.stroke();
   } else if (sk === 'mirror') {
     // a hexagonal hull with a glint across its back
@@ -8070,7 +8086,7 @@ function drawTankBody(t) {
   } else if (sk === 'smoker') {
     // a broad hull with two smoke stacks at the back
     rrect(-L * 0.48, -W * 0.38, L * 0.95, W * 0.76, P * 0.12); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = shade(col, -0.25);
+    ctx.fillStyle = shade(body, -0.25);
     for (const sy of [-1, 1]) { ctx.beginPath(); ctx.arc(-L * 0.36, sy * W * 0.2, P * 0.052, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
     ctx.fillStyle = '#0b0f1c';
     for (const sy of [-1, 1]) { ctx.beginPath(); ctx.arc(-L * 0.36, sy * W * 0.2, P * 0.024, 0, Math.PI * 2); ctx.fill(); }
@@ -8079,21 +8095,21 @@ function drawTankBody(t) {
     ctx.beginPath();
     ctx.moveTo(L * 0.5, -W * 0.32); ctx.lineTo(L * 0.32, 0); ctx.lineTo(L * 0.5, W * 0.32);
     ctx.lineTo(-L * 0.46, W * 0.32); ctx.lineTo(-L * 0.46, -W * 0.32); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = shade(col, 0.35); ctx.lineWidth = Math.max(1.2, P * 0.028);
+    ctx.strokeStyle = shade(body, 0.35); ctx.lineWidth = Math.max(1.2, P * 0.028);
     ctx.beginPath(); ctx.moveTo(-L * 0.44, 0); ctx.lineTo(-L * 0.3, 0); ctx.lineTo(-L * 0.22, -W * 0.14); ctx.moveTo(-L * 0.3, 0); ctx.lineTo(-L * 0.22, W * 0.14); ctx.stroke();
   } else if (sk === 'turret') {
     // a boxy hull with the gun's crate on its back
     rrect(-L * 0.48, -W * 0.34, L * 0.94, W * 0.68, P * 0.03); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = shade(col, -0.2);
+    ctx.fillStyle = shade(body, -0.2);
     rrect(-L * 0.5, -W * 0.22, L * 0.2, W * 0.44, P * 0.015); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = shade(col, 0.3); ctx.lineWidth = Math.max(1, P * 0.02);
+    ctx.strokeStyle = shade(body, 0.3); ctx.lineWidth = Math.max(1, P * 0.02);
     ctx.beginPath(); ctx.moveTo(-L * 0.5, -W * 0.22); ctx.lineTo(-L * 0.3, W * 0.22); ctx.moveTo(-L * 0.3, -W * 0.22); ctx.lineTo(-L * 0.5, W * 0.22); ctx.stroke();
   } else if (sk === 'hook') {
     // a hull with the winch drum on its back
     ctx.beginPath();
     ctx.moveTo(L * 0.5, -W * 0.22); ctx.lineTo(L * 0.5, W * 0.22); ctx.lineTo(L * 0.32, W * 0.36); ctx.lineTo(-L * 0.46, W * 0.36);
     ctx.lineTo(-L * 0.46, -W * 0.36); ctx.lineTo(L * 0.32, -W * 0.36); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = shade(col, 0.35); ctx.lineWidth = Math.max(1.2, P * 0.026);
+    ctx.strokeStyle = shade(body, 0.35); ctx.lineWidth = Math.max(1.2, P * 0.026);
     ctx.beginPath(); ctx.arc(-L * 0.33, 0, P * 0.075, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.arc(-L * 0.33, 0, P * 0.04, 0, Math.PI * 2); ctx.stroke();
   } else if (sk === 'railgun') {
@@ -8101,7 +8117,7 @@ function drawTankBody(t) {
     ctx.beginPath();
     ctx.moveTo(L * 0.55, -W * 0.2); ctx.lineTo(L * 0.55, W * 0.2); ctx.lineTo(L * 0.3, W * 0.36); ctx.lineTo(-L * 0.48, W * 0.36);
     ctx.lineTo(-L * 0.48, -W * 0.36); ctx.lineTo(L * 0.3, -W * 0.36); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = t.charge > 0 ? COL.white : shade(col, 0.4); ctx.lineWidth = Math.max(1.2, P * 0.026);
+    ctx.strokeStyle = t.charge > 0 ? COL.white : shade(body, 0.4); ctx.lineWidth = Math.max(1.2, P * 0.026);
     ctx.beginPath(); for (const xx of [-0.42, -0.34, -0.26]) { ctx.moveTo(L * xx, -W * 0.24); ctx.lineTo(L * xx, W * 0.24); } ctx.stroke();
   } else {
     rrect(-L / 2 + P * 0.03, -W / 2 + W * 0.2, L - P * 0.06, W * 0.6, P * 0.05); ctx.fill(); ctx.stroke();
@@ -8114,7 +8130,7 @@ function drawTankBody(t) {
     const a = P * 0.045;
     for (const sy of [-1, 1]) { const ex = P * 0.17, ey = sy * P * 0.075; ctx.beginPath(); ctx.moveTo(ex - a, ey - a); ctx.lineTo(ex + a, ey + a); ctx.moveTo(ex + a, ey - a); ctx.lineTo(ex - a, ey + a); ctx.stroke(); }
     if (t.hp === 1) { ctx.beginPath(); ctx.moveTo(-L * 0.4, -W * 0.15); ctx.lineTo(-L * 0.2, 0); ctx.lineTo(-L * 0.32, W * 0.05); ctx.lineTo(-L * 0.12, W * 0.18); ctx.stroke(); }
-    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(-P * 0.05, 0, P * 0.1, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = body; ctx.beginPath(); ctx.arc(-P * 0.05, 0, P * 0.1, 0, Math.PI * 2); ctx.fill();
     if (t.dash > 0) {                                    // a dash: speed lines behind
       ctx.globalAlpha = 0.6;
       for (const dy of [-0.14, 0, 0.14]) { ctx.beginPath(); ctx.moveTo(-L / 2 - P * 0.08, dy * P); ctx.lineTo(-L / 2 - P * 0.36, dy * P); ctx.stroke(); }
@@ -8122,20 +8138,20 @@ function drawTankBody(t) {
     }
     ctx.restore();
     ctx.globalAlpha = 1;
-    stunDots(t, col);
+    stunDots(t, body);
     snareRing(t);
     return;
   }
   // barrel (kicks back when firing); a gatling has three, which shake as it fires
   const kick = t.recoil * P * 0.06;
-  ctx.fillStyle = shade(col, 0.55); ctx.strokeStyle = shade(col, -0.3); ctx.lineWidth = Math.max(1, P * 0.025);
+  ctx.fillStyle = shade(body, 0.55); ctx.strokeStyle = shade(body, -0.3); ctx.lineWidth = Math.max(1, P * 0.025);
   if (t.power === 'gatling' || t.gat > 0) {
     const spin = t.gat > 0 && !REDUCED ? Math.sin(performance.now() / 25) * P * 0.015 : 0;
     for (const dy of [-0.075, 0, 0.075]) { rrect(P * 0.06 - kick * 0.4, dy * P - P * 0.028 + spin, P * 0.4, P * 0.056, P * 0.015); ctx.fill(); ctx.stroke(); }
-    ctx.fillStyle = col; rrect(P * 0.2, -P * 0.12, P * 0.06, P * 0.24, P * 0.01); ctx.fill();
+    ctx.fillStyle = body; rrect(P * 0.2, -P * 0.12, P * 0.06, P * 0.24, P * 0.01); ctx.fill();
   } else if (sk === 'heavy') {
     rrect(P * 0.04 - kick, -P * 0.07, P * 0.36, P * 0.14, P * 0.02); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = col; rrect(P * 0.35 - kick, -P * 0.09, P * 0.08, P * 0.18, P * 0.015); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = body; rrect(P * 0.35 - kick, -P * 0.09, P * 0.08, P * 0.18, P * 0.015); ctx.fill(); ctx.stroke();
   } else if (sk === 'cyber') {
     rrect(P * 0.05 - kick, -P * 0.065, P * 0.38, P * 0.045, P * 0.01); ctx.fill(); ctx.stroke();
     rrect(P * 0.05 - kick, P * 0.02, P * 0.38, P * 0.045, P * 0.01); ctx.fill(); ctx.stroke();
@@ -8150,16 +8166,16 @@ function drawTankBody(t) {
     ctx.closePath(); ctx.fill(); ctx.stroke();
   } else if (sk === 'recon') {
     rrect(P * 0.04 - kick, -P * 0.045, P * 0.4, P * 0.09, P * 0.02); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = col; rrect(P * 0.32 - kick, -P * 0.065, P * 0.06, P * 0.13, P * 0.015); ctx.fill();
+    ctx.fillStyle = body; rrect(P * 0.32 - kick, -P * 0.065, P * 0.06, P * 0.13, P * 0.015); ctx.fill();
   } else if (sk === 'mortar') {
     rrect(P * 0.02 - kick, -P * 0.1, P * 0.28, P * 0.2, P * 0.03); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = col; rrect(P * 0.25 - kick, -P * 0.125, P * 0.08, P * 0.25, P * 0.02); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = body; rrect(P * 0.25 - kick, -P * 0.125, P * 0.08, P * 0.25, P * 0.02); ctx.fill(); ctx.stroke();
   } else if (sk === 'engineer') {
     rrect(P * 0.04 - kick, -P * 0.055, P * 0.36, P * 0.11, P * 0.02); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = col; rrect(P * 0.22 - kick, -P * 0.085, P * 0.08, P * 0.17, P * 0.015); ctx.fill();
+    ctx.fillStyle = body; rrect(P * 0.22 - kick, -P * 0.085, P * 0.08, P * 0.17, P * 0.015); ctx.fill();
   } else if (sk === 'trapper') {
     rrect(P * 0.04 - kick, -P * 0.042, P * 0.4, P * 0.084, P * 0.02); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = col; rrect(P * 0.26 - kick, -P * 0.075, P * 0.055, P * 0.15, P * 0.015); ctx.fill();
+    ctx.fillStyle = body; rrect(P * 0.26 - kick, -P * 0.075, P * 0.055, P * 0.15, P * 0.015); ctx.fill();
   } else if (sk === 'titan') {
     rrect(P * 0.04 - kick, -P * 0.062, P * 0.38, P * 0.124, P * 0.02); ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#ffe28a'; rrect(P * 0.33 - kick, -P * 0.085, P * 0.09, P * 0.17, P * 0.015); ctx.fill(); ctx.stroke();
@@ -8167,7 +8183,7 @@ function drawTankBody(t) {
     rrect(P * 0.04 - kick, -P * 0.045, P * 0.38, P * 0.09, P * 0.03); ctx.fill(); ctx.stroke();
   } else if (sk === 'rewind') {
     rrect(P * 0.04 - kick, -P * 0.05, P * 0.37, P * 0.1, P * 0.02); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = col; rrect(P * 0.3 - kick, -P * 0.07, P * 0.05, P * 0.14, P * 0.012); ctx.fill();
+    ctx.fillStyle = body; rrect(P * 0.3 - kick, -P * 0.07, P * 0.05, P * 0.14, P * 0.012); ctx.fill();
   } else if (sk === 'frost') {
     // a barrel ending in a long ice crystal
     rrect(P * 0.04 - kick, -P * 0.045, P * 0.22, P * 0.09, P * 0.02); ctx.fill(); ctx.stroke();
@@ -8182,32 +8198,32 @@ function drawTankBody(t) {
     // no barrel: a curved blade, which sweeps across as it slashes
     const sl = t.slashAt ? (performance.now() - t.slashAt) / (C.SLASH_TIME * 1000) : 1;
     ctx.save(); if (sl < 1) ctx.rotate(C.SLASH_ARC * (1 - 2 * (1 - (1 - sl) * (1 - sl))));
-    ctx.fillStyle = shade(col, -0.3); rrect(P * 0.1, -P * 0.05, P * 0.1, P * 0.1, P * 0.02); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = shade(body, -0.3); rrect(P * 0.1, -P * 0.05, P * 0.1, P * 0.1, P * 0.02); ctx.fill(); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(P * 0.2, -P * 0.05); ctx.quadraticCurveTo(P * 0.46, -P * 0.085, P * 0.64, -P * 0.005);
     ctx.quadraticCurveTo(P * 0.45, P * 0.035, P * 0.2, P * 0.05); ctx.closePath();
-    ctx.fillStyle = '#dfe8f5'; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, P * 0.022); ctx.stroke();
+    ctx.fillStyle = '#dfe8f5'; ctx.fill(); ctx.strokeStyle = body; ctx.lineWidth = Math.max(1, P * 0.022); ctx.stroke();
     ctx.strokeStyle = COL.white; ctx.lineWidth = Math.max(1, P * 0.016);
     ctx.beginPath(); ctx.moveTo(P * 0.22, -P * 0.035); ctx.quadraticCurveTo(P * 0.46, -P * 0.068, P * 0.6, -P * 0.008); ctx.stroke();
     ctx.restore();
   } else if (sk === 'smoker') {
     rrect(P * 0.04 - kick, -P * 0.065, P * 0.32, P * 0.13, P * 0.04); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = col; rrect(P * 0.3 - kick, -P * 0.08, P * 0.06, P * 0.16, P * 0.02); ctx.fill();
+    ctx.fillStyle = body; rrect(P * 0.3 - kick, -P * 0.08, P * 0.06, P * 0.16, P * 0.02); ctx.fill();
   } else if (sk === 'splitter') {
     for (const sa of [-0.17, 0.17]) { ctx.save(); ctx.rotate(sa); rrect(P * 0.04 - kick, -P * 0.03, P * 0.37, P * 0.06, P * 0.015); ctx.fill(); ctx.stroke(); ctx.restore(); }
   } else if (sk === 'hook') {
     rrect(P * 0.04 - kick, -P * 0.045, P * 0.33, P * 0.09, P * 0.02); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.4, P * 0.035); ctx.lineCap = 'round';
+    ctx.strokeStyle = body; ctx.lineWidth = Math.max(1.4, P * 0.035); ctx.lineCap = 'round';
     ctx.beginPath(); ctx.arc(P * 0.4 - kick, 0, P * 0.07, -1.9, -0.4); ctx.stroke();
     ctx.beginPath(); ctx.arc(P * 0.4 - kick, 0, P * 0.07, 0.4, 1.9); ctx.stroke(); ctx.lineCap = 'butt';
   } else if (sk === 'railgun') {
     for (const yy of [-0.06, 0.06]) { rrect(P * 0.02 - kick, yy * P - P * 0.02, P * 0.5, P * 0.04, P * 0.01); ctx.fill(); ctx.stroke(); }
-    ctx.fillStyle = t.charge > 0 ? COL.white : col; ctx.globalAlpha = (t.charge > 0 ? 1 : 0.6) * cAlpha;
+    ctx.fillStyle = t.charge > 0 ? COL.white : body; ctx.globalAlpha = (t.charge > 0 ? 1 : 0.6) * cAlpha;
     ctx.fillRect(P * 0.1 - kick, -P * 0.012, P * 0.36, P * 0.024); ctx.globalAlpha = cAlpha;
-    if (t.charge > 0 && !tankNoGlow) glow(P * 0.3, 0, P * 0.35, col, 0.6);
+    if (t.charge > 0 && !tankNoGlow) glow(P * 0.3, 0, P * 0.35, body, 0.6);
   } else { rrect(P * 0.04 - kick, -P * 0.055, P * 0.38, P * 0.11, P * 0.025); ctx.fill(); ctx.stroke(); }
   // turret: styled per skin (carries power-up colour when active)
   const capCol = t.power && !gunOn() ? COL.graphite : col;
-  ctx.fillStyle = shade(col, -0.5); ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, P * 0.025);
+  ctx.fillStyle = shade(body, hero ? -0.3 : -0.5); ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, P * 0.025);
   if (sk === 'stealth') {
     ctx.beginPath(); ctx.moveTo(P * 0.19, 0); ctx.lineTo(-P * 0.13, -P * 0.15); ctx.lineTo(-P * 0.07, 0); ctx.lineTo(-P * 0.13, P * 0.15); ctx.closePath(); ctx.fill(); ctx.stroke();
     ctx.fillStyle = capCol; ctx.beginPath(); ctx.moveTo(P * 0.12, 0); ctx.lineTo(-P * 0.07, -P * 0.08); ctx.lineTo(-P * 0.07, P * 0.08); ctx.closePath(); ctx.fill();
@@ -8313,7 +8329,7 @@ function drawTankBody(t) {
   } else if (sk === 'turret') {
     rrect(-P * 0.15, -P * 0.15, P * 0.3, P * 0.3, P * 0.03); ctx.fill(); ctx.stroke();
     ctx.fillStyle = capCol; ctx.beginPath(); ctx.arc(0, 0, P * 0.08, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = shade(col, 0.3);
+    ctx.fillStyle = shade(body, 0.3);
     for (const [bx, by] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { ctx.beginPath(); ctx.arc(bx * P * 0.1, by * P * 0.1, Math.max(1, P * 0.02), 0, Math.PI * 2); ctx.fill(); }
   } else if (sk === 'hook') {
     ctx.beginPath(); ctx.arc(0, 0, P * 0.165, 0, Math.PI * 2); ctx.fill(); ctx.stroke();

@@ -271,8 +271,9 @@ const C = {
   FIREBOMB_FLIGHT: 0.6,  // seconds in the air
   POOL_R: 1.15,          // the pool of fire it leaves...
   POOL_TIME: 3.5,        // ...and how long it burns
-  NOVA_R: 2.3,           // a Frost's nova freezes enemies this close (walls shelter them)...
-  FREEZE_TIME: 1.6,      // ...for this long: no driving, turning, firing or skill
+  NOVA_R: 3.0,           // a Frost's nova freezes enemies this close (walls shelter them)...
+  FREEZE_TIME: 2.0,      // ...for this long: no driving, turning, firing or skill
+  SKATE: 1.25,           // a Frost on ice skates: full grip, and this much faster
   FROST_TIME: 4.0,       // the ice it leaves on the floor lasts this long (and is slippery)
   NOVA_ICE_R: 1.8,       // ice round a nova
   SHARD_ICE_R: 0.55,     // ice where an ice shard breaks on a wall
@@ -1211,7 +1212,7 @@ const SKINS = [
   { id: 'hook', name: 'Hook', desc: 'Quick shot · Skill: Hook (7s) · pulls the first enemy it catches to you', atk: 'Quick shot', skill: 'HOOK', scool: 7.0, speed: 1.02, turn: 1.08, bSpeed: 1.08, fCool: 0.95 },
   { id: 'blade', name: 'Blade', desc: 'No gun: slashes what is in front · Skill: Spin (8s) · whirling blades for 1.5s that cut shots in two', atk: 'Blade (no gun)', skill: 'SPIN', scool: 8.0, speed: 1.15, turn: 1.2, bSpeed: 1.0, fCool: 1.0 },
   { id: 'burner', name: 'Burner', desc: 'Flamethrower: a short burst of fire about 2 cells out · Skill: Firebomb (9s) · thrown over walls, a pool of fire for 3.5s', atk: 'Flamethrower', skill: 'FIREBOMB', scool: 9.0, speed: 1.0, turn: 1.05, bSpeed: 1.0, fCool: 1.0 },
-  { id: 'frost', name: 'Frost', desc: 'Ice shard: fast, no bounce, leaves slippery ice where it breaks · Skill: Frost Nova (9s) · freezes enemies close by for 1.6s', atk: 'Ice shard', skill: 'NOVA', scool: 9.0, speed: 1.0, turn: 1.05, bSpeed: 1.15, fCool: 1.0, maxB: 0 },
+  { id: 'frost', name: 'Frost', desc: 'Ice shard: fast, one bounce, leaves ice where it breaks · Skates on ice · Skill: Frost Nova (7s) · freezes enemies within 3 cells for 2s', atk: 'Ice shard', skill: 'NOVA', scool: 7.0, speed: 1.0, turn: 1.05, bSpeed: 1.15, fCool: 1.0, maxB: 1 },
   { id: 'railgun', name: 'Railgun', desc: 'Rail: charges 1.1s, goes through a wall and a shield · Skill: Tri-rail (11s)', atk: 'Rail (1.1s charge)', skill: 'TRI-RAIL', scool: 11.0, speed: 0.92, turn: 0.96, bSpeed: 1.0, fCool: 1.6 }
 ];
 // one line in Chinese for the skin screen, and who each one is good against / weak to
@@ -1237,7 +1238,7 @@ const SKIN_ZH = {
   hook:     { d: '快速射击 · 技能：甩出钩爪，钩住第一个敌人拉到面前，被拉的人会愣一下', good: 'Heavy、Titan、Mortar', bad: 'Turret、Splitter' },
   blade:    { d: '不能开枪：近身挥刀砍前方 · 技能：旋转切割 1.5 秒，周围一圈都砍，飞来的子弹会被劈成两半，转的时候跑得更快（只能捡护盾道具）', good: 'Mortar、Railgun、Turret', bad: 'Heavy、Cyber、Splitter' },
   burner:   { d: '喷火器：每按一次喷 0.7 秒火，射程约 2 格，在火里连着待 0.35 秒就会被烧掉，火会被墙挡住；喷火时开得慢一点 · 技能：扔燃烧弹（能越过墙），落地烧出一片火海 3.5 秒', good: 'Blade、Stealth、Engineer', bad: 'Railgun、Recon、Mortar' },
-  frost:    { d: '冰锥：飞得快、不反弹，撞墙碎成一小片冰面（4 秒，开上去会打滑） · 技能：冰冻新星，周围 2.3 格内的敌人被冻住 1.6 秒（不能动、不能开火、不能放技能），脚下结一大片冰；被冻住的坦克挨一下就碎', good: 'Blade、Burner、Striker', bad: 'Railgun、Mortar、Turret' },
+  frost:    { d: '冰锥：飞得快、能反弹一次，碎掉的地方结一小片冰（4 秒，敌人开上去会打滑） · 被动：在任何冰面上都不打滑、还开得更快 · 技能：冰冻新星，周围 3 格内的敌人被冻住 2 秒（不能动、不能开火、不能放技能），脚下结一大片冰；被冻住的坦克挨一下就碎', good: 'Blade、Burner、Striker', bad: 'Railgun、Mortar、Turret' },
   railgun:  { d: '轨道炮：蓄力 1.1 秒，能穿过一堵墙和护盾，打完 1.5 秒才能再打 · 技能：蓄力 1.3 秒后同时打出三道（冷却 11 秒）', good: 'Heavy、Mirror、Engineer', bad: 'Striker、Blink' }
 };
 const SKIN_IDS = SKINS.map(s => s.id);
@@ -2723,7 +2724,7 @@ function useSkill(t) {
       if (o.shield > 0) { o.shield = 0; rings.push({ x: o.x, y: o.y, r: 0.75, life: 0.3, max: 0.3, col: penOf(o.id) }); netEv('block', o.id, r2(o.x), r2(o.y)); continue; }
       freeze(o);
     }
-    icePatch(t.x, t.y, C.NOVA_ICE_R);
+    icePatch(t.x, t.y, C.NOVA_ICE_R, t.id);
     novaFx(t.x, t.y); netEv('nova', t.id, r2(t.x), r2(t.y));
   } else if (sk === 'burner') {
     // Firebomb: lobbed C.FIREBOMB_DIST ahead (over walls); where it lands, a pool of fire
@@ -2774,11 +2775,15 @@ function freeze(o) {
   if (o.cloak > 0) { o.cloak = 0; unstickFromWall(o, C.TANK_R); }
 }
 // a patch of slippery ice on the floor (it counts as ice terrain)
-function icePatch(x, y, r) {
-  frost.push({ id: ++entId, x, y, r, age: 0, life: C.FROST_TIME });
+function icePatch(x, y, r, owner = -1) {
+  frost.push({ id: ++entId, x, y, r, owner, age: 0, life: C.FROST_TIME });
   if (frost.length > 24) frost.shift();
 }
-function frostAt(x, y) { for (const f of frost) if (Math.hypot(f.x - x, f.y - y) < f.r) return true; return false; }
+function frostAt(x, y, id = -1) { for (const f of frost) if ((id < 0 || f.owner < 0 || !friendOf(f.owner, id)) && Math.hypot(f.x - x, f.y - y) < f.r) return true; return false; }
+// does tank id slide at (x, y): ice terrain, or a Frost's ice laid by the other side; a Frost itself never slides
+const skater = id => classOf(id).id === 'frost' && !gunOn() && !isZed(id);
+const slipAt = (id, x, y) => !skater(id) && ((frost.length && frostAt(x, y, id)) || (settings.terrain && iceGrid(x, y)));
+const iceGrid = (x, y) => { const c = Math.floor(x), r = Math.floor(y); return c >= 0 && r >= 0 && c < COLS && r < ROWS && ice[r * COLS + c] === 1; };
 function stepFrost(dt) { for (let i = frost.length - 1; i >= 0; i--) if ((frost[i].age += dt) >= frost[i].life) frost.splice(i, 1); }
 const ICE_COL = '#bfeeff';
 function novaFx(x, y) {
@@ -3408,7 +3413,7 @@ function hit(t, by = -1) {
     const src = tanks[by];
     if (src && src !== t) { const dx = t.x - src.x, dy = t.y - src.y, d = Math.hypot(dx, dy); if (d > 1e-3) { ax = dx / d; ay = dy / d; } }
     // the same short shove everywhere: where the tank slides (ice, snow with weather rules) it is a smaller push that carries on
-    const g = iceAt(t.x, t.y) ? 0 : snowGrip() * (bots.has(t.id) ? 1.6 : 1), push = iceAt(t.x, t.y) ? 1 : g ? 0.35 * g : C.ARMOR_PUSH;
+    const g = slipAt(t.id, t.x, t.y) ? 0 : snowGrip() * (bots.has(t.id) ? 1.6 : 1), push = slipAt(t.id, t.x, t.y) ? 1 : g ? 0.35 * g : C.ARMOR_PUSH;
     t.svx = ax * push; t.svy = ay * push;
     rings.push({ x: t.x, y: t.y, r: 0.75, life: 0.35, max: 0.35, col: ARMOR_COL });
     burst(t.x, t.y, 10, ARMOR_COL, 2.4, 0.3, 0.04);
@@ -3694,7 +3699,7 @@ function humanGone(id) {
 function driveSpeed(t) {
   if (t.stun > 0) return 0;
   const chill = (t.chill || 0) > 0 ? C.CHILL_SPEED : 1;
-  const terr = (mudAt(t.x, t.y) ? C.MUD_SPEED : 1) * ((t.boost || 0) > 0 ? C.BOOST_SPEED : 1);
+  const terr = (mudAt(t.x, t.y) ? C.MUD_SPEED : 1) * ((t.boost || 0) > 0 ? C.BOOST_SPEED : 1) * (skater(t.id) && iceAt(t.x, t.y) ? C.SKATE : 1);
   if (isZed(t.id)) return C.TANK_SPEED * C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) * chill * terr;
   const cls = classOf(t.id);
   return C.TANK_SPEED * (cls.speed || 1) * (t.gat > 0 ? C.GAT_SLOW : 1) * (t.dash > 0 ? C.DASH_SPEED : 1) * (t.cloak > 0 ? 1.22 : 1) * ((t.spin || 0) > 0 ? C.SPIN_SPEED : 1) * ((t.flame || 0) > 0 ? C.FLAME_SLOW : 1) * (potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1) * chill * terr;
@@ -4332,7 +4337,7 @@ function stepPhysics(dt, lethal, control) {
       }
       t.boost = C.BOOST_TIME; t.boostDir = bDir;
     }
-    const onIce = iceAt(t.x, t.y);
+    const onIce = slipAt(t.id, t.x, t.y);
     const inp = control && !locked ? getInput(t.id) : IDLE;
     let dvx = 0, dvy = 0;
     if (inp.mag > 0) {
@@ -4530,7 +4535,7 @@ function stepPhysics(dt, lethal, control) {
     if (++b.tick % 2 === 0) { b.trail.push(b.x, b.y); if (b.trail.length > 22) b.trail.splice(0, 2); }
     if (b.age > (b.life || C.BULLET_LIFE) || b.bounces > (b.maxB ?? C.MAX_BOUNCES)) {
       if (b.he) miniBlast(b);
-      if (b.shard && b.bounces > 0) { icePatch(b.x, b.y, C.SHARD_ICE_R); shardBreak(b.x, b.y); netEv('shardBreak', r2(b.x), r2(b.y)); }
+      if (b.shard && b.bounces > 0) { icePatch(b.x, b.y, C.SHARD_ICE_R, b.owner); shardBreak(b.x, b.y); netEv('shardBreak', r2(b.x), r2(b.y)); }
       bullets.splice(i, 1); continue;
     }
     // any shot sets off a mine it touches
@@ -5428,7 +5433,7 @@ function buildSnap() {
     BK: play && barricades.length ? barricades.map(k => [k.id, r2(k.x), r2(k.y), k.owner, k.hp, r1(k.life - k.age), k.max || C.BARRICADE_HP, k.mega ? 1 : 0, k.turret ? 1 : 0, r2(k.aim || 0)]) : [],
     FW: play && firebombs.length ? firebombs.map(f => [f.id, r2(f.sx), r2(f.sy), r2(f.tx), r2(f.ty), f.owner, r2(f.age)]) : null,
     FP: play && pools.length ? pools.map(p => [p.id, r2(p.x), r2(p.y), p.owner, r2(p.age)]) : null,
-    FR: play && frost.length ? frost.map(f => [f.id, r2(f.x), r2(f.y), r2(f.r), r2(f.age)]) : null,
+    FR: play && frost.length ? frost.map(f => [f.id, r2(f.x), r2(f.y), r2(f.r), r2(f.age), f.owner]) : null,
     CL: play && clouds.length ? clouds.map(c => [c.id, r2(c.x), r2(c.y), c.owner, r2(c.age)]) : null,
     HK: play && hooks.length ? hooks.map(h => [h.id, r2(h.x), r2(h.y), h.owner, h.phase, h.tgt]) : null,
     P: play ? pickups.map(k => [r2(k.x), r2(k.y), POWER_TYPES.indexOf(k.type)]) : [],
@@ -5742,7 +5747,7 @@ function predictStep(dt) {
   pred.boost = t.boost;
   if (now < predDashEnd) t.dash = predDash > 0 ? 1 : 0;
   if (now < predCloakEnd) t.cloak = predCloak > 0 ? 1 : 0;
-  const onIce = iceAt(pred.x, pred.y);
+  const onIce = slipAt(mySeat, pred.x, pred.y);
   let dvx = 0, dvy = 0;
   if (inp.mag > 0) {
     const diff = wrapAngle(Math.atan2(inp.y, inp.x) - pred.angle);
@@ -6178,7 +6183,7 @@ function applyEntities(a, b, k, dt) {
   barricades = (b.BK || []).map(q => ({ id: q[0], x: q[1], y: q[2], owner: q[3], hp: q[4] | 0, max: q[6] || C.BARRICADE_HP, rem: q[5], mega: !!q[7], turret: !!q[8], aim: +q[9] || 0, r: q[8] ? C.TURRET_R : q[7] ? C.BARRICADE_BIG_R : C.BARRICADE_R }));
   firebombs = (b.FW || []).map(q => ({ id: q[0], sx: q[1], sy: q[2], tx: q[3], ty: q[4], owner: q[5], age: +q[6] || 0 }));
   pools = (b.FP || []).map(q => ({ id: q[0], x: q[1], y: q[2], owner: q[3], age: +q[4] || 0, life: C.POOL_TIME }));
-  frost = (b.FR || []).map(q => ({ id: q[0], x: q[1], y: q[2], r: q[3], age: +q[4] || 0, life: C.FROST_TIME }));
+  frost = (b.FR || []).map(q => ({ id: q[0], x: q[1], y: q[2], r: q[3], age: +q[4] || 0, owner: q[5] ?? -1, life: C.FROST_TIME }));
   clouds = (b.CL || []).map(q => ({ id: q[0], x: q[1], y: q[2], owner: q[3], age: +q[4] || 0, life: C.CLOUD_TIME }));
   const aHK = byId(a.HK);
   hooks = (b.HK || []).map(q => { const p = aHK.get(q[0]) || q; return { id: q[0], x: lerp(p[1], q[1]), y: lerp(p[2], q[2]), owner: q[3], phase: q[4] | 0, tgt: q[5] }; });
@@ -10411,7 +10416,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, get skinRoll() { return skinRoll; }, startRoll, stepRoll, openSkins, closeSkins, get skinSlot() { return skinSlot; }, set skinSlot(v) { skinSlot = v; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, wxRule, snowGrip, strikeBolt, gust, get banks() { return banks; }, set banks(v) { banks = v; }, inBank, stepGust, get boltT() { return boltT; }, set boltT(v) { boltT = v; }, get boltFlash() { return boltFlash; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy, get clouds() { return clouds; }, get hooks() { return hooks; }, get pools() { return pools; }, get frost() { return frost; }, iceAt, get firebombs() { return firebombs; }, get flames() { return flames; }, inCloud, railPath,
+  get mySkin() { return mySkin; }, get skinRoll() { return skinRoll; }, startRoll, stepRoll, openSkins, closeSkins, get skinSlot() { return skinSlot; }, set skinSlot(v) { skinSlot = v; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, wxRule, snowGrip, strikeBolt, gust, get banks() { return banks; }, set banks(v) { banks = v; }, inBank, stepGust, get boltT() { return boltT; }, set boltT(v) { boltT = v; }, get boltFlash() { return boltFlash; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy, get clouds() { return clouds; }, get hooks() { return hooks; }, get pools() { return pools; }, get frost() { return frost; }, iceAt, slipAt, driveSpeed, get firebombs() { return firebombs; }, get flames() { return flames; }, inCloud, railPath,
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,

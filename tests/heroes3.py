@@ -40,7 +40,7 @@ async def main():
     T0 = lambda f: ev(P, f'__tank.tanksNow[0].{f}')
     T1 = lambda f: ev(P, f'__tank.tanksNow[1].{f}')
 
-    check(await ev(P, '__tank.SKINS.length') == 20, 'there are 20 heroes')
+    check(await ev(P, '__tank.SKINS.length') >= 20, 'there are 20 heroes or more')
 
     # ---------- Blink ----------
     run = await ev(P, LOCAL, ['blink', 'classic', 0]); await ev(P, STEP, 2)

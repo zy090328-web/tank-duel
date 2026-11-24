@@ -26,13 +26,18 @@ async def main():
       for (const k of [2, 1]) for (let r = k; r < T.ROWS - k; r++) for (let c = k; c < T.COLS - k; c++) { let good = true; for (let dr = -k; dr <= k && good; dr++) for (let dc = -k; dc <= k; dc++) if (!ok(c + dc, r + dr)) { good = false; break; } if (good) return [c + 0.5, r + 0.5]; }
       return [8, 6]; })()""")
     for key, dim in (('w', 'y'), ('s', 'y'), ('a', 'x'), ('d', 'x'), ('ArrowUp', 'y')):
-      await ev(L, f"(() => {{ const a = __tank.tanksNow[0]; a.x = {spot[0]}; a.y = {spot[1]}; a.angle = 0; }})()")
+      want = {'w': -1, 's': 1, 'a': -1, 'd': 1, 'ArrowUp': -1}[key]
+      dx, dy = (want, 0) if dim == 'x' else (0, want)
+      # an open cell with two more open cells the way this key drives
+      spot = await ev(L, f"""(() => {{ const T = __tank, W = T.walls, ok = (c, r) => c >= 0 && r >= 0 && c < T.COLS && r < T.ROWS && !W[r][c];
+        for (let r = 0; r < T.ROWS; r++) for (let c = 0; c < T.COLS; c++) if (ok(c, r) && ok(c + {dx}, r + {dy}) && ok(c + 2 * {dx}, r + 2 * {dy})) return [c + 0.5, r + 0.5];
+        return [8, 6]; }})()""")
+      await ev(L, f"(() => {{ const a = __tank.tanksNow[0]; a.x = {spot[0]}; a.y = {spot[1]}; a.angle = 0; a.svx = a.svy = 0; }})()")
       before = await ev(L, "(() => { const a = __tank.tanksNow[0]; return [a.x, a.y]; })()")
       await L.keyboard.down(key); await L.wait_for_timeout(700); await L.keyboard.up(key)
       after = await ev(L, "(() => { const a = __tank.tanksNow[0]; return [a.x, a.y]; })()")
       d = (after[1] - before[1]) if dim == 'y' else (after[0] - before[0])
-      want = {'w': -1, 's': 1, 'a': -1, 'd': 1, 'ArrowUp': -1}[key]
-      check(d * want > 0.15, f'{key} drives the tank ({dim} {d:+.2f})')
+      check(d * want > 0.15, f'{key} drives the tank ({dim} {d:+.2f}) spot {spot} map {await ev(L, "__tank.mapId")} before {before} after {after}')
     n0 = await ev(L, '__tank.tanksNow[0].shots !== undefined ? __tank.tanksNow[0].shots : __tank.bullets.length')
     await ev(L, '__tank.bullets.length = 0')
     await L.keyboard.press('j'); await L.wait_for_timeout(120)
@@ -63,6 +68,9 @@ async def main():
     await ev(H, '__tank.net.hostStart()'); await H.wait_for_timeout(3000)
     await ev(G, "(async () => { for (let i = 0; i < 100 && __tank.state !== 'play'; i++) await new Promise(r => setTimeout(r, 100)); })()")
     await G.wait_for_timeout(300)
+    await ev(H, """(() => { const T = __tank, W = T.walls, ok = (c, r) => c >= 0 && r >= 0 && c < T.COLS && r < T.ROWS && !W[r][c], t = T.tanksNow[1];
+      for (let r = 0; r < T.ROWS; r++) for (let c = 0; c < T.COLS; c++) if (ok(c, r) && ok(c + 1, r) && ok(c + 2, r)) { t.x = c + 0.5; t.y = r + 0.5; t.angle = 0; return; } })()""")
+    await H.wait_for_timeout(300)
     await ev(H, '__tank.bullets.length = 0')
     await G.keyboard.press('j'); await H.wait_for_timeout(400)
     own = await ev(H, '__tank.bullets.map(b => b.owner)')

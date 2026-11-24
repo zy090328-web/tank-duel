@@ -253,6 +253,13 @@ const C = {
   RAIL_CHARGE: 1.1,      // a Railgun charges this long before the rail goes (time to see the line and move)
   RAIL_TRI_CHARGE: 1.3,  // ...and this long before the three rails of its skill
   RAIL_RELOAD: 1.5,      // after a rail it cannot fire again for this long
+  SLASH_REACH: 1.05,     // a Blade's slash reaches this far from its centre...
+  SLASH_ARC: 1.0,        // ...this far each side of where it faces (radians)
+  SLASH_COOL: 0.5,       // seconds between slashes
+  SLASH_TIME: 0.2,       // how long the swing shows
+  SPIN_TIME: 1.5,        // a Blade's spin lasts this long
+  SPIN_R: 1.0,           // it cuts everything this close, all round
+  SPIN_SPEED: 1.3,       // and it drives this much faster while spinning
   RAIL_FAN: 0.22,        // the angle between the three rails of its skill
   INVULN_TIME: 2.0,      // seconds Titan's invulnerability lasts (can still attack)
   MINI_BLAST: 0.68,      // splash radius of Mortar primary HE shell on wall impact
@@ -1186,6 +1193,7 @@ const SKINS = [
   { id: 'splitter', name: 'Splitter', desc: 'Shots split in two at the first bounce · Skill: Burst (6s) · 8 shots all round', atk: 'Split shot', skill: 'BURST', scool: 6.0, speed: 1.0, turn: 1.05, bSpeed: 1.0, fCool: 1.05, maxB: 3 },
   { id: 'turret', name: 'Turret', desc: 'Steady shot · Skill: Turret (8s) · a gun that shoots the nearest enemy for 5s', atk: 'Steady shot', skill: 'TURRET', scool: 8.0, speed: 0.94, turn: 1.0, bSpeed: 1.0, fCool: 1.0 },
   { id: 'hook', name: 'Hook', desc: 'Quick shot · Skill: Hook (7s) · pulls the first enemy it catches to you', atk: 'Quick shot', skill: 'HOOK', scool: 7.0, speed: 1.02, turn: 1.08, bSpeed: 1.08, fCool: 0.95 },
+  { id: 'blade', name: 'Blade', desc: 'No gun: slashes what is in front · Skill: Spin (8s) · whirling blades for 1.5s that cut shots in two', atk: 'Blade (no gun)', skill: 'SPIN', scool: 8.0, speed: 1.15, turn: 1.2, bSpeed: 1.0, fCool: 1.0 },
   { id: 'railgun', name: 'Railgun', desc: 'Rail: charges 1.1s, goes through a wall and a shield · Skill: Tri-rail (11s)', atk: 'Rail (1.1s charge)', skill: 'TRI-RAIL', scool: 11.0, speed: 0.92, turn: 0.96, bSpeed: 1.0, fCool: 1.6 }
 ];
 // one line in Chinese for the skin screen, and who each one is good against / weak to
@@ -1209,6 +1217,7 @@ const SKIN_ZH = {
   splitter: { d: '子弹第一次反弹时分成两发 · 技能：一圈 8 发短程子弹', good: 'Stealth、Blink、Decoy', bad: 'Mirror、Heavy' },
   turret:   { d: '稳定射击 · 技能：放一座炮塔 5 秒，自动打最近看得见的敌人，挨 2 下就坏', good: 'Stealth、Striker、Blink', bad: 'Mortar、Titan' },
   hook:     { d: '快速射击 · 技能：甩出钩爪，钩住第一个敌人拉到面前，被拉的人会愣一下', good: 'Heavy、Titan、Mortar', bad: 'Turret、Splitter' },
+  blade:    { d: '不能开枪：近身挥刀砍前方 · 技能：旋转切割 1.5 秒，周围一圈都砍，飞来的子弹会被劈成两半，转的时候跑得更快（只能捡护盾道具）', good: 'Mortar、Railgun、Turret', bad: 'Heavy、Cyber、Splitter' },
   railgun:  { d: '轨道炮：蓄力 1.1 秒，能穿过一堵墙和护盾，打完 1.5 秒才能再打 · 技能：蓄力 1.3 秒后同时打出三道（冷却 11 秒）', good: 'Heavy、Mirror、Engineer', bad: 'Striker、Blink' }
 };
 const SKIN_IDS = SKINS.map(s => s.id);
@@ -1387,7 +1396,7 @@ const isInvuln = t => !!t && ((t.inv || 0) > 0 || (t.invuln || 0) > 0);
 const canPhase = t => !!t && !isZed(t.id) && (t.cloak || 0) > 0;
 let tanks = [0, 1].map(makeTank);
 function setTankCount(n) { NP = n; tanks = Array.from({ length: n }, (_, i) => makeTank(i)); }
-let bullets = [], missiles = [], mines = [], traps = [], mortars = [], barricades = [], pickups = [], beams = [], rings = [], radars = [], particles = [], marks = [], decoys = [], clouds = [], hooks = [];
+let bullets = [], missiles = [], mines = [], traps = [], mortars = [], barricades = [], pickups = [], beams = [], rings = [], radars = [], particles = [], marks = [], decoys = [], clouds = [], hooks = [], cuts = [];
 // the two control strips of this screen (index = screen side: 0 near, 1 far)
 const players = [0, 1].map(id => ({ id, stickId: null, ox: 0, oy: 0, vx: 0, vy: 0, fireId: null, skillId: null }));
 const IDLE = { x: 0, y: 0, mag: 0 };
@@ -2010,7 +2019,7 @@ function resetEntities() {
     // two tanks face each other as before; with more, each one faces the middle
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
-    t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.rail = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0; t.skillQ = 0; t.reflect = 0;
+    t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.rail = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0; t.skillQ = 0; t.reflect = 0; t.spin = 0;
     t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.invuln = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.snare = 0; t.chill = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0; t.armor = undefined; t.armorCd = 0; t.armorGrace = 0; t.past = []; t.pastT = 0;
   });
   ball = null; goalBy = -1;
@@ -2018,7 +2027,7 @@ function resetEntities() {
   rec.frames = []; rec.t = 0; rec.tick = 0; hl = null; rp = null; shotNow = null;
   hillHolder = -1;
   minions = []; shells = []; waveT = C.WAVE_FIRST; baseWinner = -1;
-  bullets = []; missiles = []; mines = []; traps = []; mortars = []; barricades = []; pickups = []; beams = []; rings = []; radars = []; pings = []; particles = []; marks = []; decoys = []; clouds = []; hooks = [];
+  bullets = []; missiles = []; mines = []; traps = []; mortars = []; barricades = []; pickups = []; beams = []; rings = []; radars = []; pings = []; particles = []; marks = []; decoys = []; clouds = []; hooks = []; cuts = [];
   fireballs.length = 0; debris.length = 0;
   decalReset();
   netEvents = [];
@@ -2152,7 +2161,7 @@ function respawnTank(t) {
   }
   if (!best) best = spawn[t.id] || spawn[0];
   t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
-  t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.rail = 0; t.laserPath = null; t.guided = null; t.fireQ = 0; t.skillQ = 0; t.reflect = 0;
+  t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.rail = 0; t.laserPath = null; t.guided = null; t.fireQ = 0; t.skillQ = 0; t.reflect = 0; t.spin = 0;
   t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.invuln = 0; t.ai = null; t.portLock = -1; t.snare = 0; t.chill = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0; t.armor = undefined; t.armorCd = 0; t.armorGrace = 0; t.past = []; t.pastT = 0;
   if (isZed(t.id)) { t.inv = 0; t.hp = C.ZED_HP; t.stun = 0.3; t.dash = 0; t.dcool = 0; }
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
@@ -2389,6 +2398,7 @@ function fire(t) {
     if (ok && gunOn()) t.cool = Math.max(t.cool, GUN_COOL[ty] || 0.5);
     return ok;
   }
+  if (classOf(t.id).id === 'blade' && !gunOn()) return slash(t);   // a Blade has no gun
   if (shotsLeft(t) <= 0) return false;
   if (t.cloak > 0) { t.cloak = 0; unstickFromWall(t, C.TANK_R); }
   const cls = classOf(t.id), sk = cls.id;
@@ -2683,6 +2693,11 @@ function useSkill(t) {
     hooks.push({ id: ++entId, x: s.x, y: s.y, angle: t.angle, owner: t.id, age: 0, phase: 0, tgt: -1, d: 0 });
     t.recoil = 1; t.cloak = 0; t.reveal = C.GRASS_REVEAL;
     sfx.hook(); netEv('sfx', 'hook', t.id);
+  } else if (sk === 'blade') {
+    // Spin: whirling blades for C.SPIN_TIME, cutting all round (and the shots that come at it), and faster
+    t.spin = C.SPIN_TIME;
+    if (t.cloak > 0) { t.cloak = 0; unstickFromWall(t, C.TANK_R); }
+    sfx.spin(); netEv('sfx', 'spin', t.id);
   } else if (sk === 'railgun') {
     // Tri-rail: after the same charge, three rails at once in a narrow fan
     t.charge = C.RAIL_TRI_CHARGE; t.rail = 3; t.laserPath = railPath(t.x, t.y, t.angle);
@@ -2692,6 +2707,78 @@ function useSkill(t) {
   return true;
 }
 const MIRROR_COL = '#bfe6ff';
+// a Blade's slash: everything in reach in front is cut
+function slash(t) {
+  if ((t.spin || 0) > 0) return false;
+  if (t.cloak > 0) { t.cloak = 0; unstickFromWall(t, C.TANK_R); }
+  t.cool = C.SLASH_COOL; t.slashAt = performance.now(); t.reveal = C.GRASS_REVEAL; t.inv = 0;
+  if (stats[t.id]) stats[t.id].s++;
+  sfx.slash(); netEv('slash', t.id);
+  cutAround(t, C.SLASH_REACH, C.SLASH_ARC);
+  return true;
+}
+// a shot cut in two: the halves fly apart either side of the cut, tumbling, with a flash along the cut and sparks
+function cutShot(x, y, vx, vy, ca, owner) {
+  sfx.cut();
+  if (HEADLESS) return;
+  const col = penOf(owner), nx = Math.cos(ca + Math.PI / 2), ny = Math.sin(ca + Math.PI / 2), sp = 2.4;
+  for (const side of [1, -1]) cuts.push({ x, y, vx: vx * 0.35 + nx * side * sp, vy: vy * 0.35 + ny * side * sp, a: ca, spin: side * (8 + Math.random() * 6), side, age: 0, life: 0.7, col });
+  cuts.push({ x, y, a: ca, flash: true, age: 0, life: 0.18, col });
+  for (let i = 0; i < 10; i++) {
+    const d = ca + (Math.random() < 0.5 ? 0 : Math.PI) + (Math.random() - 0.5) * 0.5, v = 2 + Math.random() * 3;
+    particles.push({ x, y, vx: Math.cos(d) * v, vy: Math.sin(d) * v, life: 0.12 + Math.random() * 0.14, max: 0.26, col: i % 2 ? COL.white : '#ffd27a', size: 0.025 });
+  }
+}
+function stepCuts(dt) {
+  for (let i = cuts.length - 1; i >= 0; i--) {
+    const c = cuts[i];
+    if ((c.age += dt) >= c.life) { cuts.splice(i, 1); continue; }
+    if (c.flash) continue;
+    c.x += c.vx * dt; c.y += c.vy * dt; c.vx *= 1 - 3 * dt; c.vy *= 1 - 3 * dt; c.a += c.spin * dt;
+  }
+}
+function drawCuts() {
+  for (const c of cuts) {
+    const k = c.age / c.life, x = c.x * P, y = c.y * P, r = C.BULLET_R * P * 1.6;
+    if (!c.flash) glow(x, y, P * 0.2, c.col, 0.55 * (1 - k));       // each half still glows, fading
+    ctx.save(); ctx.translate(x, y); ctx.rotate(c.a);
+    if (c.flash) {                                         // the cut itself: a thin white-hot line
+      ctx.globalAlpha = 1 - k; ctx.strokeStyle = COL.white; ctx.lineWidth = Math.max(1.5, P * 0.03); ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(-P * 0.3 * (1 + k), 0); ctx.lineTo(P * 0.3 * (1 + k), 0); ctx.stroke();
+      ctx.restore(); glow(x, y, P * 0.45, COL.white, 0.8 * (1 - k)); continue;
+    }
+    // a half shot: a half disc, its cut face hot white, cooling as it tumbles away
+    ctx.globalAlpha = 1 - k * k;
+    ctx.fillStyle = c.col; ctx.beginPath(); ctx.arc(0, 0, r, c.side > 0 ? 0 : Math.PI, c.side > 0 ? Math.PI : Math.PI * 2); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = k < 0.35 ? COL.white : '#ffb35c'; ctx.lineWidth = Math.max(1, P * 0.02);
+    ctx.beginPath(); ctx.moveTo(-r, 0); ctx.lineTo(r, 0); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+}
+// what a blade cuts: enemy shots in the air, enemy tanks, decoys and bunkers, within R and arc (half-angle; PI = all round)
+function cutAround(t, R, arc) {
+  const reach = (x, y, extra) => {
+    const d = Math.hypot(x - t.x, y - t.y);
+    if (d > R + extra) return false;
+    return arc >= Math.PI || d < 1e-3 || Math.abs(wrapAngle(Math.atan2(y - t.y, x - t.x) - t.angle)) <= arc;
+  };
+  if (arc >= Math.PI) for (let i = bullets.length - 1; i >= 0; i--) {     // the spin cuts shots out of the air (a slash does not)
+    const b = bullets[i];
+    if (b.owner === t.id || friendOf(b.owner, t.id) || !reach(b.x, b.y, 0.15)) continue;
+    bullets.splice(i, 1);
+    const ca = Math.atan2(b.y - t.y, b.x - t.x) + Math.PI / 2;                      // the cut runs the way the blade was going
+    cutShot(b.x, b.y, b.vx, b.vy, ca, b.owner);
+    netEv('cut', b.owner, r2(b.x), r2(b.y), r2(b.vx), r2(b.vy), r2(ca));
+  }
+  if (!LETHAL) return;
+  for (let i = decoys.length - 1; i >= 0; i--) { const d = decoys[i]; if (!friendOf(t.id, d.owner) && reach(d.x, d.y, C.TANK_R * 0.8)) popDecoy(i); }
+  for (const k of barricades.slice()) if (!friendOf(t.id, k.owner) && reach(k.x, k.y, (k.r || C.BARRICADE_R) * 0.8) && barricades.includes(k)) damageBarricade(k, 1, t.id);
+  for (const o of tanks) {
+    if (o === t || !o.alive || o.gone || !canHurt(t.id, o) || !reach(o.x, o.y, C.TANK_R * 0.8)) continue;
+    if (hit(o, t.id)) burst(o.x, o.y, 8, COL.white, 2.6, 0.25, 0.04);
+  }
+}
 // where a Blink cannot land: a wall, water, the edge, another tank, a barrel or a bunker
 function blinkBlocked(t, x, y) {
   if (circleHitsWall(x, y, C.TANK_R, true)) return true;
@@ -3292,7 +3379,7 @@ function miniBlast(b, R = C.MINI_BLAST, skipId = -1) {
 
 function kill(t, by = -1) {
   if (state === 'play' || state === 'ending') noteKill(t.id, by);
-  t.alive = false; t.charge = 0; t.rail = 0; t.reflect = 0; t.gat = 0; t.snare = 0; t.chill = 0; t.cloak = 0; t.scan = 0; t.inv = 0; t.invuln = 0;
+  t.alive = false; t.charge = 0; t.rail = 0; t.reflect = 0; t.spin = 0; t.gat = 0; t.snare = 0; t.chill = 0; t.cloak = 0; t.scan = 0; t.inv = 0; t.invuln = 0;
   const seed = (Math.random() * 1e9) | 0;
   marks.push({ x: t.x, y: t.y, col: penOf(t.id), seed });
   netEv('kill', t.id, r2(t.x), r2(t.y), seed);
@@ -3375,7 +3462,7 @@ function driveSpeed(t) {
   const terr = (mudAt(t.x, t.y) ? C.MUD_SPEED : 1) * ((t.boost || 0) > 0 ? C.BOOST_SPEED : 1);
   if (isZed(t.id)) return C.TANK_SPEED * C.ZED_SPEED * (t.dash > 0 ? C.DASH_SPEED : 1) * chill * terr;
   const cls = classOf(t.id);
-  return C.TANK_SPEED * (cls.speed || 1) * (t.gat > 0 ? C.GAT_SLOW : 1) * (t.dash > 0 ? C.DASH_SPEED : 1) * (t.cloak > 0 ? 1.22 : 1) * (potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1) * chill * terr;
+  return C.TANK_SPEED * (cls.speed || 1) * (t.gat > 0 ? C.GAT_SLOW : 1) * (t.dash > 0 ? C.DASH_SPEED : 1) * (t.cloak > 0 ? 1.22 : 1) * ((t.spin || 0) > 0 ? C.SPIN_SPEED : 1) * (potatoOn() && t.id === pot.holder ? C.POT_SPEED : 1) * chill * terr;
 }
 
 /* ---------- the gatling ---------- */
@@ -3680,7 +3767,7 @@ function botInput(seat) {
     ai.da = Math.atan2(-b.vx * side, b.vy * side); ai.dodge = 0.3;
     if (classOf(seat).id === 'rewind' && t.scool <= 0 && t.past && t.past.length > 10) pressSkill(seat);   // a rewind steps out of a shot's way
     if (t.power === 'shield') pressFire(seat);
-    else if (t.scool <= 0 && ['heavy', 'striker', 'stealth', 'engineer', 'titan', 'mirror', 'blink'].includes(classOf(seat).id)) pressSkill(seat);
+    else if (t.scool <= 0 && ['heavy', 'striker', 'stealth', 'engineer', 'titan', 'mirror', 'blink', 'blade'].includes(classOf(seat).id)) pressSkill(seat);
     return { x: Math.cos(ai.da), y: Math.sin(ai.da), mag: 1 };
   }
   if (ai.wander > 0) { ai.wander -= dt; return { x: Math.cos(ai.wa), y: Math.sin(ai.wa), mag: 1 }; }
@@ -3710,7 +3797,7 @@ function botInput(seat) {
   }
   if ((settings.powerups || pickups.some(k => k.fixed)) && !t.power && !isZed(seat) && !(los && dFoe < 3.5)) {
     let bd = 4.5, bk = null;
-    for (const k of pickups) { const d = Math.hypot(k.x - t.x, k.y - t.y); if (d < bd) { bd = d; bk = k; } }
+    for (const k of pickups) { if (k.type !== 'shield' && classOf(seat).id === 'blade' && !gunOn()) continue; const d = Math.hypot(k.x - t.x, k.y - t.y); if (d < bd) { bd = d; bk = k; } }
     if (bk) { goal = bk; fight = false; }
   }
   if (!goal && !infOn() && !potatoOn()) goal = ai.last;                     // (a survivor does not go looking for a zombie)
@@ -3737,6 +3824,7 @@ function botInput(seat) {
     else if (sk === 'titan' && hasFoe && !(t.invuln > 0) && dFoe < 4.8) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'decoy' && hasFoe && !foe.decoy && los && dFoe < 5) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'rewind' && t.snare > 0 && t.past && t.past.length > 5) { pressSkill(seat); ai.react = 0.3; }
+    else if (sk === 'blade' && hasFoe && dFoe < 1.9) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'smoker' && hasFoe && los && dFoe < 4.5 && !inCloud(t.x, t.y)) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'splitter' && hasFoe && dFoe < 2.8) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'turret' && hasFoe && dFoe < 6.5 && !barricades.some(k => k.turret && k.owner === seat)) { pressSkill(seat); ai.react = 0.4; }
@@ -3745,7 +3833,9 @@ function botInput(seat) {
   }
   if (hasFoe && los) {
     const off = Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle));
-    if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0 && !isInvuln(foe) && !(t.power === 'bomb' && dFoe > C.BOMB_SPEED * C.BOMB_LIFE + 0.5) && !barrelInWay(t, foe.x, foe.y)) { pressFire(seat); ai.react = infOn() ? 0.1 + Math.random() * 0.2 : 0.3 + Math.random() * 0.55; }
+    if (classOf(seat).id === 'blade' && !gunOn() && !t.power) {                // a Blade swings only when it is close enough to cut
+      if (off < 0.7 && dFoe < C.SLASH_REACH + 0.15 && t.cool <= 0 && !(t.spin > 0) && !isInvuln(foe)) pressFire(seat);
+    } else if (off < 0.13 && ai.react <= 0 && t.cool <= 0 && t.shield <= 0 && !isInvuln(foe) && !(t.power === 'bomb' && dFoe > C.BOMB_SPEED * C.BOMB_LIFE + 0.5) && !barrelInWay(t, foe.x, foe.y)) { pressFire(seat); ai.react = infOn() ? 0.1 + Math.random() * 0.2 : 0.3 + Math.random() * 0.55; }
   } else if (hasFoe && ai.react <= 0 && (t.power === 'homing' || t.power === 'guided' || t.power === 'mine')) {
     pressFire(seat); ai.react = 0.6;                         // missiles and mines do not need a clear line
   }
@@ -3771,6 +3861,7 @@ function botInput(seat) {
     const sd = seat % 2 ? 1 : -1, dx = foe.x - t.x, dy = foe.y - t.y, d = Math.hypot(dx, dy) || 1;
     return unitTo(-dy / d * sd - dx / d * 0.3, dx / d * sd - dy / d * 0.3, 1);
   }
+  if (fight && los && classOf(seat).id === 'blade' && !gunOn()) return unitTo(foe.x - t.x, foe.y - t.y, dFoe > 0.8 ? 1 : 0.04);   // a Blade closes right in
   if (fight && los) return unitTo(foe.x - t.x, foe.y - t.y, dFoe > 3 ? 1 : 0.04);
 
   ai.replan -= dt;
@@ -3970,6 +4061,7 @@ function stepPhysics(dt, lethal, control) {
     t.inv = Math.max(0, t.inv - dt);
     t.invuln = Math.max(0, (t.invuln || 0) - dt);
     t.reflect = Math.max(0, (t.reflect || 0) - dt);
+    if (t.spin > 0) { t.spin = Math.max(0, t.spin - dt); if (t.alive && control) cutAround(t, C.SPIN_R, Math.PI); }
     if (t.gat > 0) gatStep(t, dt, control);
     t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.snare = Math.max(0, t.snare - dt); t.chill = Math.max(0, (t.chill || 0) - dt); t.boost = Math.max(0, (t.boost || 0) - dt); if (t.snare > 0) t.dash = 0; t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt); t.scool = Math.max(0, t.scool - dt); t.cloak = Math.max(0, t.cloak - dt); t.scan = Math.max(0, t.scan - dt);
     if (wasCloaked && !(t.cloak > 0)) unstickFromWall(t, C.TANK_R);
@@ -4041,6 +4133,7 @@ function stepPhysics(dt, lethal, control) {
     if (!t.power && !t.guided && t.charge <= 0 && !isZed(t.id)) {
       for (let i = pickups.length - 1; i >= 0; i--) {
         const k = pickups[i];
+        if (k.type !== 'shield' && classOf(t.id).id === 'blade' && !gunOn()) continue;   // a Blade has no gun to use the rest with
         if (Math.hypot(k.x - t.x, k.y - t.y) < C.TANK_R + 0.24) { t.power = k.type; pickups.splice(i, 1); if (k.fixed) gatT = C.GAT_RESPAWN; sfx.pickup(); netEv('sfx', 'pickup', t.id); break; }
       }
     }
@@ -4091,6 +4184,7 @@ function stepPhysics(dt, lethal, control) {
   }
   if (lethal && barricades.length) stepTurrets(dt);
   if (clouds.length) stepClouds(dt);
+  if (cuts.length) stepCuts(dt);
   if (hooks.length) stepHooks(dt);
 
   if (bridges.length) {
@@ -4453,7 +4547,7 @@ function noteKill(v, by, touch) {
 }
 function recFrame() {
   rec.frames.push({ t: rec.t,
-    T: tanks.map(o => [o.x, o.y, o.angle, (o.alive ? 1 : 0) | (o.shield > 0 ? 2 : 0) | (o.power ? 4 : 0) | (o.gone ? 8 : 0) | (o.snare > 0 ? 16 : 0) | (o.invuln > 0 ? 32 : 0) | (o.cloak > 0 ? 64 : 0) | ((o.chill || 0) > 0 ? 128 : 0) | ((o.reflect || 0) > 0 ? 256 : 0), penOf(o.id)]),
+    T: tanks.map(o => [o.x, o.y, o.angle, (o.alive ? 1 : 0) | (o.shield > 0 ? 2 : 0) | (o.power ? 4 : 0) | (o.gone ? 8 : 0) | (o.snare > 0 ? 16 : 0) | (o.invuln > 0 ? 32 : 0) | (o.cloak > 0 ? 64 : 0) | ((o.chill || 0) > 0 ? 128 : 0) | ((o.reflect || 0) > 0 ? 256 : 0) | ((o.spin || 0) > 0 ? 512 : 0), penOf(o.id)]),
     B: bullets.map(b => [b.id, b.x, b.y, penOf(b.owner), b.pierce ? 1 : b.he ? 2 : b.heavy ? 3 : b.rivet ? 4 : b.chill ? 5 : 0]),
     M: missiles.map(m => [m.id, m.x, m.y, m.angle, m.owner, m.type]),
     N: mines.map(n => [n.id, n.x, n.y, n.owner, n.armed ? 1 : 0]),
@@ -4581,7 +4675,7 @@ function enterReplayWorld() {
   tanks = a.T.map((q, i) => {
     const r = b.T[i] || q, o = makeTank(i);
     o.x = lerp(q[0], r[0]); o.y = lerp(q[1], r[1]); o.angle = lerpA(q[2], r[2]);
-    o.alive = !!(q[3] & 1) && !(q[3] & 8); o.shield = q[3] & 2 ? 1 : 0; o.power = q[3] & 4 ? 'laser' : null; o.snare = q[3] & 16 ? 1 : 0; o.invuln = q[3] & 32 ? 1 : 0; o.cloak = q[3] & 64 ? 1 : 0; o.chill = q[3] & 128 ? 1 : 0; o.reflect = q[3] & 256 ? 1 : 0; o.pen = q[4];
+    o.alive = !!(q[3] & 1) && !(q[3] & 8); o.shield = q[3] & 2 ? 1 : 0; o.power = q[3] & 4 ? 'laser' : null; o.snare = q[3] & 16 ? 1 : 0; o.invuln = q[3] & 32 ? 1 : 0; o.cloak = q[3] & 64 ? 1 : 0; o.chill = q[3] & 128 ? 1 : 0; o.reflect = q[3] & 256 ? 1 : 0; o.spin = q[3] & 512 ? 1 : 0; o.pen = q[4];
     return o;
   });
   // bullets, with trails from the frames before
@@ -5070,7 +5164,7 @@ function buildSnap() {
     hl: hl ? [r2(hl.t), r2(hl.age), hl.v, hl.k, hl.b, hl.n, hl.touch ? 1 : 0, hl.goal] : null,
     pt: play && potatoOn() ? [pot.holder, r1(pot.fuse)] : null, bl: play && ball ? [r2(ball.x), r2(ball.y)] : null, gb: goalBy,
     rp: state === 'replay' && rp ? [rp.from, rp.to, rp.dur] : null,
-    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0) | (t.cloak > 0 ? 128 : 0) | ((t.chill || 0) > 0 ? 256 : 0) | (t.armor > 0 ? 512 : 0) | ((t.reflect || 0) > 0 ? 1024 : 0) | (t.charge > 0 && t.rail === 1 ? 2048 : 0) | (t.charge > 0 && t.rail === 3 ? 4096 : 0),
+    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0) | (t.cloak > 0 ? 128 : 0) | ((t.chill || 0) > 0 ? 256 : 0) | (t.armor > 0 ? 512 : 0) | ((t.reflect || 0) > 0 ? 1024 : 0) | (t.charge > 0 && t.rail === 1 ? 2048 : 0) | (t.charge > 0 && t.rail === 3 ? 4096 : 0) | ((t.spin || 0) > 0 ? 8192 : 0),
       shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0, t.dcool > 0 ? r1(t.dcool) : 0, t.scool > 0 ? r1(t.scool) : 0, t.scan > 0 ? r1(t.scan) : 0, t.snare > 0 ? r1(t.snare) : 0, t.invuln > 0 ? r1(t.invuln) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.he ? 3 : b.heavy ? 4 : b.rivet ? 5 : b.chill ? 6 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
@@ -5296,7 +5390,7 @@ function guestFire() {
   if (state !== 'play' && state !== 'ending' && state !== 'result') return;
   if (shotsLeft(t) <= 0) { if (state === 'play') sfx.empty(); return; }
   if (now - lastLocalShot < C.FIRE_COOLDOWN * (classOf(mySeat).fCool || 1) * 1000) return;
-  if (classOf(mySeat).id === 'railgun' && !gunOn()) return;      // a rail charges first: its sound comes with the host's word
+  if (['railgun', 'blade'].includes(classOf(mySeat).id) && !gunOn()) return;      // a rail charges first, a blade swings: their sound comes with the host's word
   // answer the press at once with the sound and the muzzle puff; the bullet itself comes from the host
   lastLocalShot = now; localShots++;
   t.recoil = 1;
@@ -5673,6 +5767,11 @@ function playEvent(e) {
     boltFx(e[2]);
   } else if (kind === 'decoyPop') {
     decoyFx(e[2], e[3], e[4]);
+  } else if (kind === 'cut') {
+    cutShot(e[3], e[4], e[5], e[6], e[7], e[2]);
+  } else if (kind === 'slash') {
+    if (tanks[e[2]]) tanks[e[2]].slashAt = performance.now();
+    sfx.slash();
   } else if (kind === 'blink') {
     blinkFx(e[2], e[3], e[4], e[5], e[6]); sfx.blink();
     if (e[2] === mySeat && pred.active) { pred.x = e[5]; pred.y = e[6]; pred.hist = []; pred.errX = pred.errY = pred.errA = 0; pred.svx = pred.svy = 0; pred.portLock = portalNear(pred.x, pred.y, C.PORTAL_R + 0.3); }
@@ -5776,7 +5875,7 @@ function applyEntities(a, b, k, dt) {
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
     t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0; t.inv = +q[11] || 0;
-    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.chill = q[3] & 256 ? 1 : 0; t.armor = q[3] & 512 ? 1 : 0; t.reflect = q[3] & 1024 ? 1 : 0; t.rail = q[3] & 4096 ? 3 : q[3] & 2048 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0; t.scan = +q[14] || 0; t.snare = +q[15] || 0; t.invuln = +q[16] || 0;
+    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.chill = q[3] & 256 ? 1 : 0; t.armor = q[3] & 512 ? 1 : 0; t.reflect = q[3] & 1024 ? 1 : 0; t.spin = q[3] & 8192 ? 1 : 0; t.rail = q[3] & 4096 ? 3 : q[3] & 2048 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0; t.scan = +q[14] || 0; t.snare = +q[15] || 0; t.invuln = +q[16] || 0;
     t.laserPath = t.charge > 0 ? aimPath(t) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -5942,6 +6041,12 @@ const sfx = {
   slam: () => { hiss({ dur: 0.24, vol: 0.2, f0: 1200, f1: 80, send: 0.3 }); voice({ f: 95, to: 45, dur: 0.2, type: 'sine', vol: 0.2 }); },
   crack: () => { hiss({ dur: 0.1, vol: 0.13, kind: 'bandpass', f0: 2400, f1: 500, q: 1 }); voice({ f: 170, to: 80, dur: 0.09, type: 'triangle', vol: 0.06 }); },
   spin: () => voice({ f: 120, to: 900, dur: 0.35, type: 'sawtooth', vol: 0.045, lp: 2000 }),
+  cut: () => { voice({ f: 4200, to: 3600, dur: 0.12, type: 'triangle', vol: 0.05, send: 0.4 }); voice({ f: 6300, dur: 0.06, type: 'sine', vol: 0.025, delay: 0.01 }); hiss({ dur: 0.05, vol: 0.06, kind: 'highpass', f0: 5000, f1: 7000 }); },
+  slash: () => { hiss({ dur: 0.16, vol: 0.12, kind: 'bandpass', f0: 1800, f1: 5200, q: 1.2 }); voice({ f: 3200, to: 2200, dur: 0.09, type: 'triangle', vol: 0.03, delay: 0.04 }); },
+  spin: () => {
+    for (let i = 0; i < 6; i++) hiss({ dur: 0.18, vol: 0.08, kind: 'bandpass', f0: 1400, f1: 3600, q: 1.4, delay: i * 0.24 });
+    voice({ f: 220, to: 340, dur: 1.4, type: 'sawtooth', vol: 0.025, lp: 1600 });
+  },
   blink: () => { voice({ f: 1800, to: 500, dur: 0.12, type: 'sine', vol: 0.05, send: 0.5 }); hiss({ dur: 0.1, vol: 0.06, kind: 'highpass', f0: 4000, f1: 2000 }); },
   smoke: () => { hiss({ dur: 0.7, vol: 0.12, kind: 'lowpass', f0: 1400, f1: 300, send: 0.4 }); voice({ f: 140, to: 80, dur: 0.2, type: 'sine', vol: 0.06 }); },
   hook: () => { hiss({ dur: 0.18, vol: 0.08, kind: 'bandpass', f0: 1200, f1: 3200, q: 1.5 }); voice({ f: 420, to: 900, dur: 0.12, type: 'square', vol: 0.03, lp: 2400 }); },
@@ -7341,6 +7446,37 @@ function watchFrames(fdt) {
 const tankCv = document.createElement('canvas'), tankG = tankCv.getContext('2d');
 const tankMask = document.createElement('canvas'), tankMG = tankMask.getContext('2d');
 function drawTank(t) {
+  drawTankSprite(t);
+  if (t.alive !== false && ((t.spin || 0) > 0 || (t.slashAt && performance.now() - t.slashAt < C.SLASH_TIME * 1000))) drawBladeFx(t);
+}
+// a Blade's swing (a fading wedge where the blade went) and its spin (whirling blades all round)
+function drawBladeFx(t) {
+  const now = performance.now(), col = t.pen || penOf(t.id), x = t.x * P, y = t.y * P;
+  const sl = t.slashAt ? (now - t.slashAt) / (C.SLASH_TIME * 1000) : 1;
+  ctx.save();
+  if (sl < 1) {
+    const a0 = t.angle + C.SLASH_ARC, a1 = t.angle + C.SLASH_ARC * (1 - 2 * (1 - (1 - sl) * (1 - sl)));
+    ctx.globalAlpha = 0.5 * (1 - sl); ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(x, y, P * C.SLASH_REACH, a1, a0); ctx.arc(x, y, P * 0.42, a0, a1, true); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 0.9 * (1 - sl); ctx.strokeStyle = COL.white; ctx.lineWidth = Math.max(1.5, P * 0.04);
+    ctx.beginPath(); ctx.arc(x, y, P * C.SLASH_REACH * 0.94, a1, a0); ctx.stroke();
+  }
+  if ((t.spin || 0) > 0) {
+    ctx.translate(x, y); ctx.rotate(REDUCED ? 0 : now / 45);
+    const R = P * C.SPIN_R;
+    ctx.globalAlpha = 0.16; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.65; ctx.strokeStyle = COL.white; ctx.lineWidth = Math.max(1.2, P * 0.025);
+    for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(0, 0, R * 0.93, i * Math.PI / 2, i * Math.PI / 2 + 1.0); ctx.stroke(); }
+    ctx.globalAlpha = 0.95;
+    for (let i = 0; i < 4; i++) {
+      ctx.rotate(Math.PI / 2);
+      ctx.beginPath(); ctx.moveTo(R * 0.32, -P * 0.04); ctx.quadraticCurveTo(R * 0.7, -P * 0.1, R, -P * 0.01); ctx.quadraticCurveTo(R * 0.68, P * 0.03, R * 0.32, P * 0.04); ctx.closePath();
+      ctx.fillStyle = '#dfe8f5'; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, P * 0.02); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+function drawTankSprite(t) {
   rollTreads(t);
   if (HEADLESS || ctx !== mainCtx || !tankLit || tanks.length > 6) return drawTankBody(t);
   const M = ctx.getTransform(), sc = Math.hypot(M.a, M.b);
@@ -7630,6 +7766,13 @@ function drawTankBody(t) {
     ctx.strokeStyle = shade(col, 0.35); ctx.lineWidth = Math.max(1.2, P * 0.03);
     ctx.beginPath(); ctx.arc(-L * 0.3, 0, P * 0.08, -Math.PI * 0.75, Math.PI * 0.75); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-L * 0.3 - P * 0.08 * Math.cos(Math.PI * 0.25), P * 0.08 * Math.sin(Math.PI * 0.25) + P * 0.03); ctx.lineTo(-L * 0.3 - P * 0.06, P * 0.06); ctx.lineTo(-L * 0.3 - P * 0.11, P * 0.07); ctx.stroke();
+  } else if (sk === 'blade') {
+    // a narrow, pointed hull with fins down its sides
+    ctx.beginPath();
+    ctx.moveTo(L * 0.5, 0); ctx.lineTo(L * 0.25, -W * 0.32); ctx.lineTo(-L * 0.46, -W * 0.3); ctx.lineTo(-L * 0.46, W * 0.3); ctx.lineTo(L * 0.25, W * 0.32);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = shade(col, 0.4); ctx.lineWidth = Math.max(1.2, P * 0.026);
+    ctx.beginPath(); ctx.moveTo(-L * 0.44, -W * 0.18); ctx.lineTo(-L * 0.26, -W * 0.06); ctx.moveTo(-L * 0.44, W * 0.18); ctx.lineTo(-L * 0.26, W * 0.06); ctx.stroke();
   } else if (sk === 'blink') {
     // a rounded hull with a spark of lightning on its back
     rrect(-L / 2 + P * 0.03, -W * 0.34, L - P * 0.06, W * 0.68, P * 0.11); ctx.fill(); ctx.stroke();
@@ -7744,6 +7887,17 @@ function drawTankBody(t) {
   } else if (sk === 'rewind') {
     rrect(P * 0.04 - kick, -P * 0.05, P * 0.37, P * 0.1, P * 0.02); ctx.fill(); ctx.stroke();
     ctx.fillStyle = col; rrect(P * 0.3 - kick, -P * 0.07, P * 0.05, P * 0.14, P * 0.012); ctx.fill();
+  } else if (sk === 'blade') {
+    // no barrel: a curved blade, which sweeps across as it slashes
+    const sl = t.slashAt ? (performance.now() - t.slashAt) / (C.SLASH_TIME * 1000) : 1;
+    ctx.save(); if (sl < 1) ctx.rotate(C.SLASH_ARC * (1 - 2 * (1 - (1 - sl) * (1 - sl))));
+    ctx.fillStyle = shade(col, -0.3); rrect(P * 0.1, -P * 0.05, P * 0.1, P * 0.1, P * 0.02); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(P * 0.2, -P * 0.05); ctx.quadraticCurveTo(P * 0.46, -P * 0.085, P * 0.64, -P * 0.005);
+    ctx.quadraticCurveTo(P * 0.45, P * 0.035, P * 0.2, P * 0.05); ctx.closePath();
+    ctx.fillStyle = '#dfe8f5'; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = Math.max(1, P * 0.022); ctx.stroke();
+    ctx.strokeStyle = COL.white; ctx.lineWidth = Math.max(1, P * 0.016);
+    ctx.beginPath(); ctx.moveTo(P * 0.22, -P * 0.035); ctx.quadraticCurveTo(P * 0.46, -P * 0.068, P * 0.6, -P * 0.008); ctx.stroke();
+    ctx.restore();
   } else if (sk === 'smoker') {
     rrect(P * 0.04 - kick, -P * 0.065, P * 0.32, P * 0.13, P * 0.04); ctx.fill(); ctx.stroke();
     ctx.fillStyle = col; rrect(P * 0.3 - kick, -P * 0.08, P * 0.06, P * 0.16, P * 0.02); ctx.fill();
@@ -7829,6 +7983,10 @@ function drawTankBody(t) {
     ctx.save(); ctx.rotate(hand - t.angle);
     ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -P * 0.085); ctx.moveTo(0, 0); ctx.lineTo(P * 0.055, 0); ctx.stroke();
     ctx.restore();
+  } else if (sk === 'blade') {
+    ctx.beginPath(); ctx.arc(0, 0, P * 0.15, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = capCol; ctx.lineWidth = Math.max(1.4, P * 0.035); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-P * 0.08, -P * 0.08); ctx.lineTo(P * 0.08, P * 0.08); ctx.moveTo(-P * 0.08, P * 0.08); ctx.lineTo(P * 0.08, -P * 0.08); ctx.stroke(); ctx.lineCap = 'butt';
   } else if (sk === 'blink') {
     ctx.beginPath(); ctx.arc(0, 0, P * 0.16, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     ctx.fillStyle = capCol; ctx.beginPath();
@@ -8802,6 +8960,7 @@ function drawStrip(p, seat) {
   else if (t.charge > 0) { text = t.rail ? 'RAIL' : POWER_NAME.laser; fsz = FR * 0.42; hot = true; can = true; }
   else if (t.shield > 0) { text = POWER_NAME.shield; fsz = FR * 0.42; can = false; }
   else if (t.power) { text = POWER_NAME[t.power]; fsz = FR * 0.42; hot = true; can = t.alive; }
+  else if (classOf(seat).id === 'blade' && !gunOn()) { text = 'SLASH'; fsz = FR * 0.42; can = t.alive && !(t.spin > 0); }
   else if (t.reload > 0) { const one = settings.ammo === 'single'; text = one ? 'WAIT' : 'RELOAD'; fsz = FR * (one ? 0.5 : 0.4); can = false; }
   else if (settings.ammo === 'limited' && left <= 0) { text = 'EMPTY'; fsz = FR * 0.44; can = false; }
   if (can && (pressed || hot)) glow(FX0, CY0, FR * 1.7, col, pressed ? 0.5 : 0.28);
@@ -9075,9 +9234,9 @@ function netItems() {
       const x0 = cx - (sw * slots.length + g * (slots.length - 1)) / 2;
       slots.forEach((txt, i) => items.push({ kind: 'skinslot', v: i, text: txt, on: skinSlot === i, x: x0 + i * (sw + g), y: y(1.65) - sh / 2, w: sw, h: sh }));
     }
-    const cols = SKINS.length > 15 ? 5 : SKINS.length > 8 ? 3 : 2, rows = Math.ceil(SKINS.length / cols);
-    const cw = cols === 5 ? U * 1.98 : cols === 3 ? U * 3.25 : U * 4.5, ch = cols === 5 ? U * 1.66 : cols === 3 ? (rows > 4 ? U * 1.24 : rows > 3 ? U * 1.46 : U * 2.08) : (rows > 3 ? U * 1.42 : U * 1.65);
-    const gx = cols === 5 ? U * 0.14 : cols === 3 ? U * 0.22 : U * 0.35, gy = cols === 5 ? U * 0.12 : cols === 3 ? (rows > 4 ? U * 0.13 : rows > 3 ? U * 0.18 : U * 0.2) : (rows > 3 ? U * 0.24 : U * 0.32);
+    const cols = SKINS.length > 20 ? 6 : SKINS.length > 15 ? 5 : SKINS.length > 8 ? 3 : 2, rows = Math.ceil(SKINS.length / cols);
+    const cw = cols === 6 ? U * 1.63 : cols === 5 ? U * 1.98 : cols === 3 ? U * 3.25 : U * 4.5, ch = cols >= 5 ? U * 1.66 : cols === 3 ? (rows > 4 ? U * 1.24 : rows > 3 ? U * 1.46 : U * 2.08) : (rows > 3 ? U * 1.42 : U * 1.65);
+    const gx = cols === 6 ? U * 0.12 : cols === 5 ? U * 0.14 : cols === 3 ? U * 0.22 : U * 0.35, gy = cols >= 5 ? U * 0.12 : cols === 3 ? (rows > 4 ? U * 0.13 : rows > 3 ? U * 0.18 : U * 0.2) : (rows > 3 ? U * 0.24 : U * 0.32);
     const x0 = cx - (cw * cols + gx * (cols - 1)) / 2;
     const y0 = y(skinBack === 'title' ? (cols >= 3 ? (rows > 3 ? 2.1 : 2.15) : rows > 3 ? 2.25 : 2.45) : (cols >= 3 ? (rows > 3 ? 1.82 : 1.88) : rows > 3 ? 1.95 : 2.15));
     const cur = skinRoll ? SKIN_IDS[skinRoll.idx] : slotSkin();
@@ -9601,6 +9760,7 @@ function render() {
   if (!NET_SCREENS.includes(state)) {
     for (const d of decoys) if (decoySeen(eye, d)) drawDecoy(d, eye);
     drawSmoke();
+    if (cuts.length) drawCuts();
     drawClouds(eye);
     if (!replayView) for (const t of tanks) if (t.alive && (eye < 0 || t.id === eye) && classOf(t.id).id === 'rewind' && t.past && t.past.length > 2) drawRewindGhost(t);
   }

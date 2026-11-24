@@ -76,7 +76,7 @@ async def main():
     await ev(P, STEP, 30)
     check(not await T0('alive'), 'after 1.5 s it reflects no more')
     await ev(P, LOCAL, ['mirror', 'railgun', 6]); await ev(P, STEP, 2)
-    await skill(0); await skill(1); await ev(P, STEP, int(0.85 * SEC))
+    await skill(0); await skill(1); await ev(P, STEP, int(1.4 * SEC))
     check(not await T0('alive'), 'a rail goes through the reflect (beams are not reflected)')
 
     # ---------- Smoker ----------
@@ -145,19 +145,24 @@ async def main():
     run = await ev(P, LOCAL, ['railgun', 'classic', 5]); await ev(P, STEP, 2)
     r, c0 = run[1], run[2]
     await ev(P, f'__tank.walls[{r}][{c0} + 2] = 1')        # one wall between them
-    check(await ev(P, '__tank.fire(__tank.tanksNow[0])') is True and await T0('charge') > 0.7, 'a Railgun charges first')
-    x0 = await T0('x'); await ev(P, STEP, int(0.5 * SEC))
+    check(await ev(P, '__tank.fire(__tank.tanksNow[0])') is True and await T0('charge') > 1.0, 'a Railgun charges first (1.1 s)')
+    x0 = await T0('x'); await ev(P, STEP, int(0.9 * SEC))
     check(await T1('alive') and abs(await T0('x') - x0) < 1e-6, 'it holds still while charging, and nothing has gone yet')
     await ev(P, '__tank.tanksNow[1].shield = 2')
-    await ev(P, STEP, int(0.4 * SEC))
+    await ev(P, STEP, int(0.3 * SEC))
     check(not await T1('alive'), 'the rail goes through the wall and the shield')
+    check(await ev(P, '__tank.fire(__tank.tanksNow[0])') is False, 'right after a rail it cannot fire again')
+    await ev(P, STEP, int(1.5 * SEC))
+    check(await ev(P, '__tank.fire(__tank.tanksNow[0])') is True, '...1.5 s later it can')
     run = await ev(P, LOCAL, ['railgun', 'classic', 6]); await ev(P, STEP, 2)
     await ev(P, f'(() => {{ const W = __tank.walls; W[{r}][{c0} + 2] = 1; W[{r}][{c0} + 4] = 1; }})()')
     await ev(P, '__tank.fire(__tank.tanksNow[0])'); await ev(P, STEP, SEC)
     check(await T1('alive'), 'the second wall stops it')
     await ev(P, f'(() => {{ const W = __tank.walls; W[{r}][{c0} + 2] = 0; W[{r}][{c0} + 4] = 0; }})()')
     await ev(P, LOCAL, ['railgun', 'classic', 6]); await ev(P, STEP, 2); await ev(P, '__tank.beams.length = 0')
-    await skill(0); await ev(P, STEP, int(0.82 * SEC))
+    await skill(0); await ev(P, STEP, int(1.2 * SEC))
+    check(await ev(P, '__tank.beams.length') == 0, 'the three rails charge longer (1.3 s)')
+    await ev(P, STEP, int(0.15 * SEC))
     check(await ev(P, '__tank.beams.length') == 3, 'its skill sends three rails')
 
     # ---------- online: the guest sees them ----------

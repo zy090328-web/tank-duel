@@ -20,9 +20,13 @@ async def main():
     L = await page()
     await ev(L, "(() => { const T = __tank; T.setSettings(Object.assign({}, T.settings(), { game: 'classic', cpu: 1, winScore: 7 })); T.goMenu(); T.beginFromMenu(); })()")
     await ev(L, PLAY)
-    await ev(L, "(() => { const [a, b] = __tank.tanksNow; b.alive = false; })()")   # keep the round open, with nothing to disturb the test
+    await ev(L, "(() => { const [a, b] = __tank.tanksNow; b.x = -5; b.y = -5; b.stun = 999; })()")   # the computer tank out of the way (alive, so the round goes on)
+    # a cell with two open cells on every side, to drive about in
+    spot = await ev(L, """(() => { const T = __tank, W = T.walls, ok = (c, r) => c >= 0 && r >= 0 && c < T.COLS && r < T.ROWS && !W[r][c];
+      for (const k of [2, 1]) for (let r = k; r < T.ROWS - k; r++) for (let c = k; c < T.COLS - k; c++) { let good = true; for (let dr = -k; dr <= k && good; dr++) for (let dc = -k; dc <= k; dc++) if (!ok(c + dc, r + dr)) { good = false; break; } if (good) return [c + 0.5, r + 0.5]; }
+      return [8, 6]; })()""")
     for key, dim in (('w', 'y'), ('s', 'y'), ('a', 'x'), ('d', 'x'), ('ArrowUp', 'y')):
-      await ev(L, "(() => { const a = __tank.tanksNow[0]; a.x = 8; a.y = 6; a.angle = 0; })()")
+      await ev(L, f"(() => {{ const a = __tank.tanksNow[0]; a.x = {spot[0]}; a.y = {spot[1]}; a.angle = 0; }})()")
       before = await ev(L, "(() => { const a = __tank.tanksNow[0]; return [a.x, a.y]; })()")
       await L.keyboard.down(key); await L.wait_for_timeout(700); await L.keyboard.up(key)
       after = await ev(L, "(() => { const a = __tank.tanksNow[0]; return [a.x, a.y]; })()")
@@ -56,7 +60,9 @@ async def main():
     H = await page(); G = await page()
     await ev(H, '__tank.net.hostGame()'); await H.wait_for_timeout(900)
     code = await ev(H, '__tank.net.code'); await ev(G, f'__tank.net.joinGame("{code}")'); await G.wait_for_timeout(1500)
-    await ev(H, '__tank.net.hostStart()'); await H.wait_for_timeout(4500)
+    await ev(H, '__tank.net.hostStart()'); await H.wait_for_timeout(3000)
+    await ev(G, "(async () => { for (let i = 0; i < 100 && __tank.state !== 'play'; i++) await new Promise(r => setTimeout(r, 100)); })()")
+    await G.wait_for_timeout(300)
     await ev(H, '__tank.bullets.length = 0')
     await G.keyboard.press('j'); await H.wait_for_timeout(400)
     own = await ev(H, '__tank.bullets.map(b => b.owner)')

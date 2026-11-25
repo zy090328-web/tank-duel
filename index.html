@@ -208,7 +208,8 @@ const C = {
   FOG_SEE: 3.2,          // party rule Fog: enemy tanks further than this from your side are not shown
   RADAR_PING: 2.0,       // seconds the marks of a radar scan stay (where enemies, mines and traps were at that moment)
   RADAR_SPIN: 0.8,       // seconds the recon's dish spins after a scan
-  ARMOR_REGEN: 8.0,      // seconds before a Heavy's broken armour grows back
+  ARMOR_FIRST: 4.0,      // a Heavy's armour goes on this long after it starts (or comes back)
+  ARMOR_REGEN: 12.0,      // seconds before a Heavy's broken armour grows back
   ARMOR_GRACE: 0.3,      // after the armour breaks, the rest of the same volley glances off for this long
   ARMOR_PUSH: 14,        // knock-back speed when the armour takes a hit (about 0.35 cells)
   MORTAR_DIST: 4.0,      // how far ahead a mortar shell lobs over walls
@@ -233,54 +234,54 @@ const C = {
   REWIND_BACK: 2.0,      // how far back in time a rewind goes (seconds)
   REWIND_STEP: 0.1,      // how often a rewind tank notes where it is
   BLINK_DIST: 3.0,       // how far a Blink jumps (cells); it stops short of a wall, water or a tank
-  REFLECT_TIME: 1.5,     // seconds a Mirror's reflecting shield lasts
+  REFLECT_TIME: 0.9,     // seconds a Mirror's reflecting shield lasts
   CLOUD_TIME: 4.0,       // seconds a Smoker's cloud hangs
   CLOUD_R: 1.6,          // radius of a smoke cloud
   CLOUD_SEE: 1.1,        // a tank in a cloud is seen only by enemies this close (or for a moment after it fires)
   SPLIT_ANGLE: 0.32,     // a Splitter shot opens into two, this far each way, at its first bounce
   BURST_N: 8,            // shots in a Splitter's all-round burst
   BURST_LIFE: 0.9,       // ...and how long they last
-  TURRET_LIFE: 5.0,      // seconds a Turret's gun stands
+  TURRET_LIFE: 3.5,      // seconds a Turret's gun stands
   TURRET_HP: 2,          // hits it takes
   TURRET_R: 0.3,
   TURRET_RANGE: 7.0,     // it shoots the nearest enemy it can see this close
-  TURRET_RELOAD: 0.8,
+  TURRET_RELOAD: 1.15,
   TURRET_TURN: 6.0,      // how fast it turns (radians a second)
   HOOK_SPEED: 15,        // how fast a Hook's claw flies out
   HOOK_RANGE: 6.5,       // how far it reaches
   HOOK_PULL: 13,         // how fast it drags the one it catches
   HOOK_R: 0.14,
-  RAIL_CHARGE: 1.1,      // a Railgun charges this long before the rail goes (time to see the line and move)
+  RAIL_CHARGE: 0.9,      // a Railgun charges this long before the rail goes (time to see the line and move)
   RAIL_TRI_CHARGE: 1.3,  // ...and this long before the three rails of its skill
-  RAIL_RELOAD: 1.5,      // after a rail it cannot fire again for this long
+  RAIL_RELOAD: 1.2,      // after a rail it cannot fire again for this long
   SLASH_REACH: 1.05,     // a Blade's slash reaches this far from its centre...
   SLASH_ARC: 1.0,        // ...this far each side of where it faces (radians)
   SLASH_COOL: 0.5,       // seconds between slashes
   SLASH_TIME: 0.2,       // how long the swing shows
-  SPIN_TIME: 1.5,        // a Blade's spin lasts this long
+  SPIN_TIME: 1.2,        // a Blade's spin lasts this long
   SPIN_R: 1.0,           // it cuts everything this close, all round
   SPIN_SPEED: 1.3,       // and it drives this much faster while spinning
   FLAME_TIME: 0.7,       // a Burner's press sends out fire for this long
   FLAME_COOL: 0.45,      // ...and the next can start this long after it ends
-  FLAME_RANGE: 1.9,      // how far the fire reaches (cells, from the tank's centre)
+  FLAME_RANGE: 2.2,      // how far the fire reaches (cells, from the tank's centre)
   FLAME_SPREAD: 0.32,    // the cone, each side of where it faces (radians)
   FLAME_SLOW: 0.8,       // it drives slower while the fire is going
-  HEAT_KILL: 0.35,       // seconds in fire (the flame or a fire pool) that burn a tank up
+  HEAT_KILL: 0.18,       // seconds in fire (the flame or a fire pool) that burn a tank up
   HEAT_COOL: 1.2,        // heat lost a second out of the fire
   FIREBOMB_DIST: 4.0,    // how far a firebomb is thrown (over walls)
   FIREBOMB_FLIGHT: 0.6,  // seconds in the air
   POOL_R: 1.15,          // the pool of fire it leaves...
   POOL_TIME: 3.5,        // ...and how long it burns
   NOVA_R: 3.0,           // a Frost's nova freezes enemies this close (walls shelter them)...
-  FREEZE_TIME: 2.0,      // ...for this long: no driving, turning, firing or skill
+  FREEZE_TIME: 1.8,      // ...for this long: no driving, turning, firing or skill
   SKATE: 1.25,           // a Frost on ice skates: full grip, and this much faster
   FROST_TIME: 4.0,       // the ice it leaves on the floor lasts this long (and is slippery)
   NOVA_ICE_R: 1.8,       // ice round a nova
   SHARD_ICE_R: 0.55,     // ice where an ice shard breaks on a wall
-  ABSORB_TIME: 2.0,      // a Black Hole swallows for this long...
+  ABSORB_TIME: 1.3,      // a Black Hole swallows for this long...
   ABSORB_R: 1.7,         // ...pulling in enemy shots this close
   RAIL_FAN: 0.22,        // the angle between the three rails of its skill
-  INVULN_TIME: 2.0,      // seconds Titan's invulnerability lasts (can still attack)
+  INVULN_TIME: 1.3,      // seconds Titan's invulnerability lasts (can still attack)
   MINI_BLAST: 0.68,      // splash radius of Mortar primary HE shell on wall impact
   CHILL_TIME: 0.9,       // seconds Trapper bolt chills/slows an enemy on graze or shield hit
   CHILL_SPEED: 0.72,     // movement speed multiplier while chilled
@@ -1194,35 +1195,35 @@ if (nameOk && nameInput && nameOk.addEventListener) {
 }
 const SKINS = [
   { id: 'classic', name: 'Classic', desc: 'Balanced · Skill: Spread (5s)', atk: 'Balanced (5b)', skill: 'SPREAD', scool: 5.0, speed: 1.02, turn: 1.04, bSpeed: 1.04, fCool: 0.95 },
-  { id: 'stealth', name: 'Stealth', desc: 'Fast sniper · Skill: Cloak (6s) · Phase walls', atk: 'Hyper sniper (2b)', skill: 'CLOAK', scool: 6.0, speed: 1.12, turn: 1.15, bSpeed: 1.55, fCool: 1.30, maxB: 2 },
-  { id: 'heavy', name: 'Heavy', desc: 'Armour takes one hit (back in 8s) · Buckshot · Skill: Shield (7s)', atk: 'Buckshot · armour', skill: 'SHIELD', scool: 7.0, speed: 0.84, turn: 0.88, bSpeed: 0.92, fCool: 1.35 },
+  { id: 'stealth', name: 'Stealth', desc: 'Fast sniper · Skill: Cloak (7.5s) · Phase walls', atk: 'Hyper sniper (2b)', skill: 'CLOAK', scool: 7.5, speed: 1.06, turn: 1.15, bSpeed: 1.22, fCool: 1.5, maxB: 2 },
+  { id: 'heavy', name: 'Heavy', desc: 'Armour (on 4s in, back 12s after a hit) takes one hit · Buckshot · Skill: Shield (11s)', atk: 'Buckshot · armour', skill: 'SHIELD', scool: 11.0, speed: 0.78, turn: 0.88, bSpeed: 0.88, fCool: 1.6 },
   { id: 'cyber', name: 'Cyber', desc: 'Twin plasma · 2x vs shields · Skill: EMP (6s)', atk: 'Twin bolts (2x shld)', skill: 'EMP', scool: 6.0, speed: 1.04, turn: 1.08, bSpeed: 1.14, fCool: 1.08 },
-  { id: 'retro', name: 'Retro', desc: 'Super ricochet · Skill: Mine (5s)', atk: '9-bounce shot', skill: 'MINE', scool: 5.0, speed: 0.98, turn: 1.02, bSpeed: 0.96, fCool: 1.0, maxB: 9 },
+  { id: 'retro', name: 'Retro', desc: 'Super ricochet · Skill: Mine (4s)', atk: '9-bounce shot', skill: 'MINE', scool: 4.0, speed: 1.08, turn: 1.02, bSpeed: 1.12, fCool: 0.82, maxB: 9 },
   { id: 'striker', name: 'Striker', desc: 'Fastest · Rapid carbine · Skill: Dash (4s)', atk: 'Rapid carbine (3b)', skill: 'DASH', scool: 4.0, speed: 1.20, turn: 1.22, bSpeed: 1.10, fCool: 0.65, maxB: 3 },
-  { id: 'recon', name: 'Recon', desc: 'Quick · 2-round burst · Skill: Radar ping (7s)', atk: '2-round burst', skill: 'RADAR', scool: 7.0, speed: 1.16, turn: 1.20, bSpeed: 1.28, fCool: 0.88 },
+  { id: 'recon', name: 'Recon', desc: 'Quick · 2-round burst · Skill: Radar ping (7s)', atk: '2-round burst', skill: 'RADAR', scool: 7.0, speed: 1.16, turn: 1.20, bSpeed: 1.2, fCool: 0.88 },
   { id: 'mortar', name: 'Mortar', desc: 'HE wall-blast · Skill: Mortar (8.5s)', atk: 'HE wall-blast', skill: 'MORTAR', scool: 8.5, speed: 0.88, turn: 0.88, bSpeed: 0.85, fCool: 1.40, maxB: 0 },
-  { id: 'engineer', name: 'Engineer', desc: 'Siege/repair rivet · Skill: Bunker (6s) · Link Big Shield', atk: 'Rivet (2x/repair)', skill: 'BUNKER', scool: 6.0, speed: 0.96, turn: 1.05, bSpeed: 1.10, fCool: 1.0, maxB: 3 },
-  { id: 'trapper', name: 'Trapper', desc: 'Chilling bolt · Skill: Snare Trap (6.5s) · Invisible trap binds 3s', atk: 'Chilling bolt', skill: 'TRAP', scool: 6.5, speed: 1.06, turn: 1.12, bSpeed: 1.18, fCool: 0.95, maxB: 3 },
-  { id: 'titan', name: 'Titan', desc: 'Heavy cannon · Skill: Invuln (8s) · Immune 2s while attacking', atk: 'Cannon (2x vs walls)', skill: 'INVULN', scool: 8.0, speed: 0.86, turn: 0.90, bSpeed: 1.12, fCool: 1.15, maxB: 2 },
-  { id: 'decoy', name: 'Decoy', desc: 'Quick shot · Skill: Decoy (6s) · a fake of this tank drives on for 3s', atk: 'Quick shot', skill: 'DECOY', scool: 6.0, speed: 1.08, turn: 1.10, bSpeed: 1.08, fCool: 0.9 },
+  { id: 'engineer', name: 'Engineer', desc: 'Siege/repair rivet · Skill: Bunker (5s) · Link Big Shield', atk: 'Rivet (2x/repair)', skill: 'BUNKER', scool: 5.0, speed: 1.0, turn: 1.05, bSpeed: 1.15, fCool: 0.8, maxB: 3 },
+  { id: 'trapper', name: 'Trapper', desc: 'Chilling bolt · Skill: Snare Trap (6.5s) · Invisible trap binds 3s', atk: 'Chilling bolt', skill: 'TRAP', scool: 6.5, speed: 1.06, turn: 1.12, bSpeed: 1.18, fCool: 0.9, maxB: 3 },
+  { id: 'titan', name: 'Titan', desc: 'Heavy cannon · Skill: Invuln (11s) · Immune 1.3s while attacking', atk: 'Cannon (2x vs walls)', skill: 'INVULN', scool: 11.0, speed: 0.86, turn: 0.90, bSpeed: 1.12, fCool: 1.15, maxB: 2 },
+  { id: 'decoy', name: 'Decoy', desc: 'Quick shot · Skill: Decoy (5s) · a fake of this tank drives on for 3s', atk: 'Quick shot', skill: 'DECOY', scool: 5.0, speed: 1.16, turn: 1.10, bSpeed: 1.14, fCool: 0.78 },
   { id: 'rewind', name: 'Rewind', desc: 'Steady shot · Skill: Rewind (9s) · back to where it was 2s ago', atk: 'Steady shot', skill: 'REWIND', scool: 9.0, speed: 1.0, turn: 1.05, bSpeed: 1.0, fCool: 0.95 },
-  { id: 'blink', name: 'Blink', desc: 'Plain shot · Skill: Blink (5.5s) · jumps 3 cells ahead at once', atk: 'Plain shot', skill: 'BLINK', scool: 5.5, speed: 1.04, turn: 1.1, bSpeed: 1.04, fCool: 0.95 },
-  { id: 'mirror', name: 'Mirror', desc: 'Steady shot · Skill: Reflect (7s) · shots that hit it go back, its own, for 1.5s', atk: 'Steady shot', skill: 'REFLECT', scool: 7.0, speed: 1.0, turn: 1.04, bSpeed: 1.02, fCool: 1.0 },
-  { id: 'smoker', name: 'Smoker', desc: 'Quick shot · Skill: Smoke (7.5s) · a cloud nobody sees into for 4s', atk: 'Quick shot', skill: 'SMOKE', scool: 7.5, speed: 1.06, turn: 1.08, bSpeed: 1.04, fCool: 0.9 },
-  { id: 'splitter', name: 'Splitter', desc: 'Shots split in two at the first bounce · Skill: Burst (6s) · 8 shots all round', atk: 'Split shot', skill: 'BURST', scool: 6.0, speed: 1.0, turn: 1.05, bSpeed: 1.0, fCool: 1.05, maxB: 3 },
-  { id: 'turret', name: 'Turret', desc: 'Steady shot · Skill: Turret (8s) · a gun that shoots the nearest enemy for 5s', atk: 'Steady shot', skill: 'TURRET', scool: 8.0, speed: 0.94, turn: 1.0, bSpeed: 1.0, fCool: 1.0 },
+  { id: 'blink', name: 'Blink', desc: 'Plain shot · Skill: Blink (4.5s) · jumps 3 cells ahead at once', atk: 'Plain shot', skill: 'BLINK', scool: 4.5, speed: 1.14, turn: 1.1, bSpeed: 1.12, fCool: 0.85 },
+  { id: 'mirror', name: 'Mirror', desc: 'Steady shot · Skill: Reflect (11s) · shots that hit it go back, its own, for 0.9s', atk: 'Steady shot', skill: 'REFLECT', scool: 11.0, speed: 1.0, turn: 1.04, bSpeed: 1.02, fCool: 1.0 },
+  { id: 'smoker', name: 'Smoker', desc: 'Quick shot · Skill: Smoke (6.5s) · a cloud nobody sees into for 4s', atk: 'Quick shot', skill: 'SMOKE', scool: 6.5, speed: 1.06, turn: 1.08, bSpeed: 1.04, fCool: 0.9 },
+  { id: 'splitter', name: 'Splitter', desc: 'Shots split in two at the first bounce · Skill: Burst (5s) · 8 shots all round', atk: 'Split shot', skill: 'BURST', scool: 5.0, speed: 1.05, turn: 1.05, bSpeed: 1.08, fCool: 0.88, maxB: 3 },
+  { id: 'turret', name: 'Turret', desc: 'Steady shot · Skill: Turret (9.5s) · a gun that shoots the nearest enemy for 3.5s', atk: 'Steady shot', skill: 'TURRET', scool: 9.5, speed: 0.94, turn: 1.0, bSpeed: 1.0, fCool: 1.0 },
   { id: 'hook', name: 'Hook', desc: 'Quick shot · Skill: Hook (7s) · pulls the first enemy it catches to you', atk: 'Quick shot', skill: 'HOOK', scool: 7.0, speed: 1.02, turn: 1.08, bSpeed: 1.08, fCool: 0.95 },
-  { id: 'blade', name: 'Blade', desc: 'No gun: slashes what is in front · Skill: Spin (8s) · whirling blades for 1.5s that cut shots in two', atk: 'Blade (no gun)', skill: 'SPIN', scool: 8.0, speed: 1.15, turn: 1.2, bSpeed: 1.0, fCool: 1.0 },
-  { id: 'burner', name: 'Burner', desc: 'Flamethrower: a short burst of fire about 2 cells out · Skill: Firebomb (9s) · thrown over walls, a pool of fire for 3.5s', atk: 'Flamethrower', skill: 'FIREBOMB', scool: 9.0, speed: 1.0, turn: 1.05, bSpeed: 1.0, fCool: 1.0 },
-  { id: 'frost', name: 'Frost', desc: 'Ice shard: fast, one bounce, leaves ice where it breaks · Skates on ice · Skill: Frost Nova (7s) · freezes enemies within 3 cells for 2s', atk: 'Ice shard', skill: 'NOVA', scool: 7.0, speed: 1.0, turn: 1.05, bSpeed: 1.15, fCool: 1.0, maxB: 1 },
-  { id: 'blackhole', name: 'Black Hole', desc: 'Steady shot · Skill: Absorb (9s) · for 2s it swallows the shots and skills fired at it, then lets one loose as its own', atk: 'Steady shot', skill: 'ABSORB', scool: 9.0, speed: 0.98, turn: 1.0, bSpeed: 1.0, fCool: 1.0 },
-  { id: 'railgun', name: 'Railgun', desc: 'Rail: charges 1.1s, goes through a wall and a shield · Skill: Tri-rail (11s)', atk: 'Rail (1.1s charge)', skill: 'TRI-RAIL', scool: 11.0, speed: 0.92, turn: 0.96, bSpeed: 1.0, fCool: 1.6 }
+  { id: 'blade', name: 'Blade', desc: 'No gun: slashes what is in front · Skill: Spin (9s) · whirling blades for 1.2s that cut shots in two', atk: 'Blade (no gun)', skill: 'SPIN', scool: 9.0, speed: 1.15, turn: 1.2, bSpeed: 1.0, fCool: 1.0 },
+  { id: 'burner', name: 'Burner', desc: 'Flamethrower: a short burst of fire about 2 cells out · Skill: Firebomb (7s) · thrown over walls, a pool of fire for 3.5s', atk: 'Flamethrower', skill: 'FIREBOMB', scool: 7.0, speed: 1.12, turn: 1.05, bSpeed: 1.0, fCool: 1.0 },
+  { id: 'frost', name: 'Frost', desc: 'Ice shard: fast, one bounce, leaves ice where it breaks · Skates on ice · Skill: Frost Nova (7s) · freezes enemies within 3 cells for 1.8s', atk: 'Ice shard', skill: 'NOVA', scool: 7.0, speed: 1.0, turn: 1.05, bSpeed: 1.15, fCool: 1.0, maxB: 1 },
+  { id: 'blackhole', name: 'Black Hole', desc: 'Steady shot · Skill: Absorb (12s) · for 1.3s it swallows the shots and skills fired at it, then lets one loose as its own', atk: 'Steady shot', skill: 'ABSORB', scool: 12.0, speed: 0.98, turn: 1.0, bSpeed: 1.0, fCool: 1.0 },
+  { id: 'railgun', name: 'Railgun', desc: 'Rail: charges 0.9s, goes through a wall and a shield · Skill: Tri-rail (9s)', atk: 'Rail (0.9s charge)', skill: 'TRI-RAIL', scool: 9.0, speed: 0.92, turn: 0.96, bSpeed: 1.0, fCool: 1.6 }
 ];
 // one line in Chinese for the skin screen, and who each one is good against / weak to
 const SKIN_ZH = {
   classic:  { d: '均衡全能 · 技能：扇形三连发', good: 'Striker、Recon', bad: 'Heavy' },
   stealth:  { d: '高速狙击 · 技能：隐身 2.5 秒，可穿墙', good: 'Mortar、Titan', bad: 'Cyber、Trapper' },
-  heavy:    { d: '霰弹 + 护甲：第一下只被击退，8 秒后护甲恢复 · 技能：护盾', good: 'Striker、Classic', bad: 'Mortar、Stealth' },
+  heavy:    { d: '霰弹 + 护甲：开局 4 秒后穿上护甲，第一下只被击退，12 秒后护甲恢复 · 技能：护盾', good: 'Striker、Classic', bad: 'Mortar、Stealth' },
   cyber:    { d: '双发等离子，打护盾双倍 · 技能：EMP 定身附近敌人 0.8 秒，清掉子弹、地雷、陷阱', good: 'Heavy、Trapper、Retro', bad: 'Stealth、Mortar' },
   retro:    { d: '子弹能弹 9 次 · 技能：放地雷', good: 'Titan、Mortar', bad: 'Engineer、Cyber' },
   striker:  { d: '最快，速射 · 技能：冲刺', good: 'Mortar、Titan', bad: 'Heavy、Trapper' },
@@ -1230,20 +1231,20 @@ const SKIN_ZH = {
   mortar:   { d: '高爆弹能炸墙 · 技能：迫击炮越墙轰炸', good: 'Heavy、Engineer、Titan', bad: 'Striker、Stealth' },
   engineer: { d: '铆钉弹打墙和建筑双倍，能看见附近地雷 · 技能：架掩体，相邻的合成大护盾', good: 'Retro、Trapper', bad: 'Mortar、Cyber' },
   trapper:  { d: '冰冻弹减速 · 技能：放隐形陷阱，踩中定身 3 秒', good: 'Striker、Stealth', bad: 'Recon、Cyber' },
-  titan:    { d: '重炮打墙和建筑双倍 · 技能：2 秒无敌，期间照样开火', good: 'Classic、Striker', bad: 'Stealth、Trapper' },
+  titan:    { d: '重炮打墙和建筑双倍 · 技能：1.3 秒无敌，期间照样开火', good: 'Classic、Striker', bad: 'Stealth、Trapper' },
   decoy:    { d: '快速射击 · 技能：放出一辆和自己一模一样的假坦克，直线开 3 秒，被打中就消失', good: 'Stealth、Mortar、电脑', bad: 'Recon、Heavy' },
   rewind:   { d: '稳定射击 · 技能：瞬间回到 2 秒前的位置，能挣脱陷阱（被定身时不能用）', good: 'Trapper、Mortar、Retro', bad: 'Cyber、Striker' },
   blink:    { d: '普通射击 · 技能：朝炮口方向瞬移最多 3 格，撞墙就停在墙前，能躲开飞来的子弹（被定身时不能用）', good: 'Heavy、Titan、Mortar', bad: 'Cyber、Trapper' },
-  mirror:   { d: '稳定射击 · 技能：1.5 秒反射盾，打中它的子弹原路弹回、算它的（挡不住爆炸和激光）', good: 'Stealth、Recon、Retro', bad: 'Railgun、Mortar' },
+  mirror:   { d: '稳定射击 · 技能：0.9 秒反射盾，打中它的子弹原路弹回、算它的（挡不住爆炸和激光）', good: 'Stealth、Recon、Retro', bad: 'Railgun、Mortar' },
   smoker:   { d: '快速射击 · 技能：放一团烟 4 秒，烟里的坦克和子弹外面看不见，雷达也扫不到（贴得很近才看得见）', good: 'Recon、Railgun、Stealth', bad: 'Splitter、Mortar' },
   splitter: { d: '子弹第一次反弹时分成两发 · 技能：一圈 8 发短程子弹', good: 'Stealth、Blink、Decoy', bad: 'Mirror、Heavy' },
-  turret:   { d: '稳定射击 · 技能：放一座炮塔 5 秒，自动打最近看得见的敌人，挨 2 下就坏', good: 'Stealth、Striker、Blink', bad: 'Mortar、Titan' },
+  turret:   { d: '稳定射击 · 技能：放一座炮塔 3.5 秒，自动打最近看得见的敌人，挨 2 下就坏', good: 'Stealth、Striker、Blink', bad: 'Mortar、Titan' },
   hook:     { d: '快速射击 · 技能：甩出钩爪，钩住第一个敌人拉到面前，被拉的人会愣一下', good: 'Heavy、Titan、Mortar', bad: 'Turret、Splitter' },
-  blade:    { d: '不能开枪：近身挥刀砍前方 · 技能：旋转切割 1.5 秒，周围一圈都砍，飞来的子弹会被劈成两半，转的时候跑得更快（只能捡护盾道具）', good: 'Mortar、Railgun、Turret', bad: 'Heavy、Cyber、Splitter' },
-  burner:   { d: '喷火器：每按一次喷 0.7 秒火，射程约 2 格，在火里连着待 0.35 秒就会被烧掉，火会被墙挡住；喷火时开得慢一点 · 技能：扔燃烧弹（能越过墙），落地烧出一片火海 3.5 秒', good: 'Blade、Stealth、Engineer', bad: 'Railgun、Recon、Mortar' },
-  frost:    { d: '冰锥：飞得快、能反弹一次，碎掉的地方结一小片冰（4 秒，敌人开上去会打滑） · 被动：在任何冰面上都不打滑、还开得更快 · 技能：冰冻新星，周围 3 格内的敌人被冻住 2 秒（不能动、不能开火、不能放技能），脚下结一大片冰；被冻住的坦克挨一下就碎', good: 'Blade、Burner、Striker', bad: 'Railgun、Mortar、Turret' },
-  blackhole: { d: '稳定射击 · 技能：吞噬 2 秒，打向它的子弹、导弹、钩爪、燃烧弹、轨道炮和激光、喷火、冰冻新星都会被吸进去（它不受伤）；吸到的东西变成一次性技能，再按一次技能键就当成自己的放出去（吸到子弹就一次射出一扇子弹）', good: 'Railgun、Frost、Hook', bad: 'Blade、Mortar、Smoker' },
-  railgun:  { d: '轨道炮：蓄力 1.1 秒，能穿过一堵墙和护盾，打完 1.5 秒才能再打 · 技能：蓄力 1.3 秒后同时打出三道（冷却 11 秒）', good: 'Heavy、Mirror、Engineer', bad: 'Striker、Blink' }
+  blade:    { d: '不能开枪：近身挥刀砍前方 · 技能：旋转切割 1.2 秒，周围一圈都砍，飞来的子弹会被劈成两半，转的时候跑得更快（只能捡护盾道具）', good: 'Mortar、Railgun、Turret', bad: 'Heavy、Cyber、Splitter' },
+  burner:   { d: '喷火器：每按一次喷 0.7 秒火，射程约 2.2 格，在火里连着待 0.18 秒就会被烧掉，火会被墙挡住；喷火时开得慢一点 · 技能：扔燃烧弹（能越过墙），落地烧出一片火海 3.5 秒', good: 'Blade、Stealth、Engineer', bad: 'Railgun、Recon、Mortar' },
+  frost:    { d: '冰锥：飞得快、能反弹一次，碎掉的地方结一小片冰（4 秒，敌人开上去会打滑） · 被动：在任何冰面上都不打滑、还开得更快 · 技能：冰冻新星，周围 3 格内的敌人被冻住 1.8 秒（不能动、不能开火、不能放技能），脚下结一大片冰；被冻住的坦克挨一下就碎', good: 'Blade、Burner、Striker', bad: 'Railgun、Mortar、Turret' },
+  blackhole: { d: '稳定射击 · 技能：吞噬 1.3 秒，打向它的子弹、导弹、钩爪、燃烧弹、轨道炮和激光、喷火、冰冻新星都会被吸进去（它不受伤）；吸到的东西变成一次性技能，再按一次技能键就当成自己的放出去（吸到子弹就一次射出一扇子弹）', good: 'Railgun、Frost、Hook', bad: 'Blade、Mortar、Smoker' },
+  railgun:  { d: '轨道炮：蓄力 0.9 秒，能穿过一堵墙和护盾，打完 1.2 秒才能再打 · 技能：蓄力 1.3 秒后同时打出三道（冷却 9 秒）', good: 'Heavy、Mirror、Engineer', bad: 'Striker、Blink' }
 };
 const SKIN_IDS = SKINS.map(s => s.id);
 const validSkin = id => SKIN_IDS.includes(id) ? id : 'classic';
@@ -4438,7 +4439,7 @@ function stepPhysics(dt, lethal, control) {
     if (wasCloaked && !(t.cloak > 0)) unstickFromWall(t, C.TANK_R);
     // a Heavy's armour: one hit only knocks it back; it grows back C.ARMOR_REGEN later
     if (!isZed(t.id) && classOf(t.id).id === 'heavy') {
-      if (t.armor === undefined) t.armor = 1;
+      if (t.armor === undefined) { t.armor = 0; t.armorCd = C.ARMOR_FIRST; }   // it puts its armour on a few seconds into the round
       t.armorGrace = Math.max(0, (t.armorGrace || 0) - dt);
       if (!t.armor && (t.armorCd = (t.armorCd || 0) - dt) <= 0) { t.armor = 1; t.armorCd = 0; rings.push({ x: t.x, y: t.y, r: 0.62, life: 0.3, max: 0.3, col: ARMOR_COL }); netEv('armor', t.id, r2(t.x), r2(t.y)); }
     } else t.armor = 0;

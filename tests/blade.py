@@ -67,7 +67,7 @@ async def main():
     await fire(); check(await T1('alive') and await T1('armor') == 0, "a Heavy's armour takes the first cut")
     # spin
     await ev(P, LOCAL, ['blade', 'classic', 0]); await ev(P, STEP, 2); await put(4)
-    check(await ev(P, '__tank.useSkill(__tank.tanksNow[0])') is True and await T0('spin') > 1.4, 'the skill spins')
+    check(await ev(P, '__tank.useSkill(__tank.tanksNow[0])') is True and await T0('spin') > 1.0, 'the skill spins')
     check(await fire() is False, 'no slashing while spinning')
     await put(0.9, 3.14159 / 2); await ev(P, STEP, 2)
     check(not await T1('alive'), 'the spin cuts one beside it')

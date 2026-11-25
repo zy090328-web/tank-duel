@@ -47,12 +47,12 @@ async def main():
       r = await ev(P, LOCAL, ['burner', 'classic', gap]); await ev(P, STEP, 2); await ev(P, hold); await ev(P, '__tank.bullets.length = 0'); return r
     run = await setup(); await put(1.5)
     check(await fire() is True and await ev(P, '__tank.bullets.length') == 0 and await T0('flame') > 0.6, 'fire is a flame: no bullet')
-    await ev(P, STEP, int(0.2 * SEC))
-    check(await T1('alive') and await T1('heat') > 0.1, 'a moment in the fire heats a tank up, it is not dead at once')
+    await ev(P, STEP, int(0.1 * SEC))
+    check(await T1('alive') and await T1('heat') > 0.05, 'a moment in the fire heats a tank up, it is not dead at once')
     await ev(P, STEP, int(0.2 * SEC))
     check(not await T1('alive'), '...a third of a second burns it up (1.5 cells in front)')
-    await setup(); await put(2.6); await fire(); await ev(P, STEP, int(0.8 * SEC))
-    check(await T1('alive'), 'one 2.6 cells away is out of reach')
+    await setup(); await put(2.9); await fire(); await ev(P, STEP, int(0.8 * SEC))
+    check(await T1('alive'), 'one 2.9 cells away is out of reach')
     await setup(); await put(1.2, 3.14159); await fire(); await ev(P, STEP, int(0.8 * SEC))
     check(await T1('alive'), 'one behind it does not burn')
     await setup(); await put(1.5, 1.2); await fire(); await ev(P, STEP, int(0.8 * SEC))
@@ -63,8 +63,8 @@ async def main():
     check(await T1('alive'), 'a wall between stops the fire')
     await ev(P, f'__tank.walls[{run[1]}][{run[2]} + 1] = 0')
     # a brush with the fire is not fatal: the heat goes away
-    await setup(); await put(1.5); await fire(); await ev(P, STEP, int(0.2 * SEC))
-    await put(4); await ev(P, '__tank.tanksNow[1].heat = 0.2'); await ev(P, STEP, int(0.6 * SEC))
+    await setup(); await put(1.5); await fire(); await ev(P, STEP, int(0.1 * SEC))
+    await put(4); await ev(P, '__tank.tanksNow[1].heat = 0.12'); await ev(P, STEP, int(0.6 * SEC))
     check(await T1('alive') and await T1('heat') < 0.01, 'out of the fire it cools down')
     # how long it goes, and the wait after
     await setup(); await put(4); await fire()

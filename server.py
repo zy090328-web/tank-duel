@@ -40,6 +40,7 @@ MULT = [1, 2, 3, 4, 6, 8, 10, 15, 20, 30, 40, 60, 80, 100, 150, 200, 300, 400, 6
 ANTE_FROM_LEVEL = 2            # 比赛第 3 级起收前注
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOM_CODE = os.environ.get('ROOM_CODE', '').strip()   # 房间口令，留空表示不需要
+ADMIN_CODE = os.environ.get('ADMIN_CODE', '').strip()  # 控制台口令，留空表示关闭控制台（/admin）
 POLL_WAIT = 20            # 长轮询最多挂起多少秒
 ONLINE_WINDOW = 30        # 多少秒没收到某台设备的请求，就算它掉线了
 SIM_BUDGET = 0.35         # 电脑玩家每次思考最多用几秒 CPU（云平台免费机器 CPU 很少）
@@ -365,6 +366,44 @@ def rig_deal(deck, lucky, others, band=.4):
     return holes, deck + tail
 
 
+def planned_deal(deck, seated, plan):
+    """按控制台指定的牌发：指定了的座位拿指定底牌，指定了的公共牌放到对应位置，其余随机。"""
+    holes_want = {int(k): v for k, v in (plan.get('holes') or {}).items()}
+    board_want = list(plan.get('board') or [None] * 5) + [None] * 5
+    board_want = board_want[:5]
+    used = {c for h in holes_want.values() for c in h} | {c for c in board_want if c is not None}
+    rest = [c for c in deck if c not in used]
+    RNG.shuffle(rest)
+    holes = {}
+    for s in seated:
+        holes[s] = list(holes_want[s]) if s in holes_want else [rest.pop(), rest.pop()]
+    for s, h in holes_want.items():      # 指定了但这手不在牌桌上的人：牌放回去
+        if s not in seated:
+            rest += h
+    board = [c if c is not None else rest.pop() for c in board_want]
+    burns = [rest.pop() for _ in range(3)]
+    RNG.shuffle(rest)
+    tail = [board[4], burns[2], board[3], burns[1], board[2], board[1], board[0], burns[0]]
+    return holes, rest + tail
+
+
+STREET_CN = {'flop': '翻牌', 'turn': '转牌', 'river': '河牌'}
+
+
+def upcoming_slots(g):
+    """这手还没发出来的公共牌，在牌堆里的位置：[(哪条街, 下标)]。牌堆从末尾往前发，每条街先烧一张。"""
+    if not g or g['result'] or g['board2']:
+        return []
+    seq = {0: ['burn', 'flop', 'flop', 'flop', 'burn', 'turn', 'burn', 'river'],
+           3: ['burn', 'turn', 'burn', 'river'], 4: ['burn', 'river']}.get(len(g['board']), [])
+    n = len(g['deck'])
+    return [(k, n - 1 - j) for j, k in enumerate(seq) if k != 'burn']
+
+
+def valid_card(c):
+    return isinstance(c, int) and not isinstance(c, bool) and 8 <= c <= 59
+
+
 def in_hand(p):
     return p is not None and p['inHand']
 
@@ -413,6 +452,10 @@ class Table:
         self.join_seq = 0
         self.eq_cache = (None, None)
         self.urls = []
+        self.lucky_names = list(LUCKY_NAMES)   # 控制台可以改：这些名字的真人每手都被安排成牌最好
+        self.lucky_on = True
+        self.plan = None                       # 控制台给下一手的安排：{'win': 座位} 或 {'holes': {座位: [牌, 牌]}, 'board': [5 个，没指定的是 None]}
+        self.stack_queue = {}                  # 牌局进行中改筹码，等这手结束再生效
 
     @staticmethod
     def now():
@@ -535,6 +578,10 @@ class Table:
             return False
         if g['hand'] > 0 and g['log']:
             g['prev'] = {'hand': g['hand'], 'log': g['log']}
+        for i, v in list(self.stack_queue.items()):
+            if S[i] is not None:
+                S[i]['stack'] = v
+        self.stack_queue = {}
         g['hand'] += 1
         for p in S:
             if p is not None:
@@ -575,10 +622,17 @@ class Table:
         for _ in range(n_in):
             seated.append(s)
             s = self.next_seat(s, in_hand)
-        lucky = [i for i in seated if not S[i]['bot'] and S[i]['name'].strip().lower() in LUCKY_NAMES]
+        names = {n.strip().lower() for n in self.lucky_names} if self.lucky_on else set()
+        lucky = [i for i in seated if not S[i]['bot'] and S[i]['name'].strip().lower() in names]
+        RNG.shuffle(lucky)           # 两人同时在场时，谁排第一每手随机
+        plan, self.plan = self.plan, None
         rigged = None
-        if lucky and n_in >= 2:
-            RNG.shuffle(lucky)       # 两人同时在场时，谁排第一每手随机
+        if plan and (plan.get('holes') or any(c is not None for c in plan.get('board') or [])):
+            rigged = planned_deal(g['deck'], seated, plan)
+        elif plan and plan.get('win') in seated:
+            w = plan['win']
+            rigged = rig_deal(g['deck'], [w] + [i for i in lucky if i != w], [i for i in seated if i != w and i not in lucky])
+        elif lucky and n_in >= 2:
             rigged = rig_deal(g['deck'], lucky, [i for i in seated if i not in lucky])
         if rigged:
             holes, g['deck'] = rigged
@@ -1363,6 +1417,160 @@ class Table:
             out['game'] = gv
         return out
 
+    # ---------- 控制台（/admin）：只有知道 ADMIN_CODE 的人能用 ----------
+    def admin_view(self):
+        g, S = self.g, self.seats
+        out = {'v': self.version, 'lucky': {'on': self.lucky_on, 'names': self.lucky_names},
+               'plan': self.plan, 'queue': {str(k): v for k, v in self.stack_queue.items()}, 'game': None, 'seats': []}
+        slots = upcoming_slots(g)
+        final = (g['board'] + [g['deck'][i] for _, i in slots]) if g else []
+        live_vals = {}
+        for i, p in enumerate(S):
+            if p is None:
+                out['seats'].append(None)
+                continue
+            d = {'name': p['name'], 'bot': p['bot'], 'stack': p['stack'], 'online': self.is_online(p)}
+            if g:
+                d.update(inHand=p['inHand'], folded=p['folded'], allIn=p['allIn'], bet=p['bet'], total=p['total'],
+                         hole=p['hole'], last=p['last'])
+                if p['inHand'] and p['hole']:
+                    d['now'] = describe(p['hole'], g['board'])
+                    if len(final) == 5:
+                        d['final'] = best(p['hole'] + final)[2]
+                        if not p['folded']:
+                            live_vals[i] = eval7(p['hole'] + final)
+            out['seats'].append(d)
+        if g:
+            top = max(live_vals.values()) if live_vals else None
+            active = not g['result'] and not g['runout'] and not g['rit']
+            out['game'] = {'hand': g['hand'], 'street': g['street'], 'board': g['board'], 'pot': self.pot_total(),
+                           'toAct': g['toAct'] if active else None, 'result': bool(g['result']), 'runout': g['runout'],
+                           'upcoming': [{'street': k, 'card': g['deck'][i]} for k, i in slots],
+                           'deck': sorted(g['deck']),
+                           'winners': [i for i, v in live_vals.items() if v == top] if slots or not g['result'] else [],
+                           'log': g['log'][-12:]}
+        return out
+
+    def admin_poll(self, since):
+        with self.cond:
+            stop = time.monotonic() + POLL_WAIT
+            while self.version <= since:
+                left = stop - time.monotonic()
+                if left <= 0:
+                    break
+                self.cond.wait(left)
+            return self.admin_view()
+
+    def admin(self, body):
+        op = body.get('op')
+        with self.lock:
+            g, S = self.g, self.seats
+            msg = ''
+            if op == 'set_card':          # 换掉这手还没发出的某一张公共牌
+                slots = upcoming_slots(g)
+                k, c = body.get('slot'), body.get('card')
+                if not isinstance(k, int) or not 0 <= k < len(slots):
+                    raise GameError('这张公共牌已经发出去了')
+                if not valid_card(c) or c not in g['deck']:
+                    raise GameError('这张牌已经在别人手里或已经发出')
+                d, i = g['deck'], slots[k][1]
+                j = d.index(c)
+                d[i], d[j] = d[j], d[i]
+                msg = '已换好'
+            elif op == 'make_win':        # 重排这手剩下的公共牌，让某人最终牌最大
+                seat = body.get('seat')
+                msg = self.admin_make_win(seat)
+            elif op == 'plan_win':        # 下一手让某人赢
+                seat = body.get('seat')
+                if not isinstance(seat, int) or not 0 <= seat < len(S) or S[seat] is None:
+                    raise GameError('没有这个座位')
+                self.plan = {'win': seat}
+                msg = '下一手会让 {} 牌最大'.format(S[seat]['name'])
+            elif op == 'plan_cards':      # 下一手指定底牌 / 公共牌
+                holes = body.get('holes') or {}
+                board = body.get('board') or [None] * 5
+                seen = []
+                clean = {}
+                for k, h in holes.items():
+                    s_ = int(k)
+                    if not 0 <= s_ < len(S) or S[s_] is None or not isinstance(h, list) or len(h) != 2 or not all(valid_card(c) for c in h):
+                        raise GameError('底牌要选两张')
+                    clean[str(s_)] = h
+                    seen += h
+                if not isinstance(board, list) or len(board) > 5 or not all(c is None or valid_card(c) for c in board):
+                    raise GameError('公共牌最多 5 张')
+                seen += [c for c in board if c is not None]
+                if len(seen) != len(set(seen)):
+                    raise GameError('同一张牌选了两次')
+                self.plan = {'holes': clean, 'board': (board + [None] * 5)[:5]} if seen else None
+                msg = '下一手按这个发' if seen else '已清除'
+            elif op == 'clear_plan':
+                self.plan = None
+                msg = '已清除下一手的安排'
+            elif op == 'lucky':
+                names = body.get('names')
+                if isinstance(names, list):
+                    self.lucky_names = [str(n).strip()[:12] for n in names if str(n).strip()][:6]
+                if 'on' in body:
+                    self.lucky_on = bool(body['on'])
+                msg = '已保存，从下一手开始生效'
+            elif op == 'stack':
+                seat, v = body.get('seat'), body.get('stack')
+                if not isinstance(seat, int) or not 0 <= seat < len(S) or S[seat] is None:
+                    raise GameError('没有这个座位')
+                if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 100000000:
+                    raise GameError('筹码要是 0 到 1 亿之间的整数')
+                p = S[seat]
+                if g and p['inHand'] and not g['result']:
+                    self.stack_queue[seat] = v
+                    msg = '这手结束后改成 {}'.format(fmt(v))
+                else:
+                    p['stack'] = v
+                    if g:
+                        self.check_over()
+                    msg = '已改成 {}'.format(fmt(v))
+            else:
+                raise GameError('不认识这个操作')
+            self.changed()
+        return {'ok': True, 'msg': msg}
+
+    def admin_make_win(self, seat):
+        g, S = self.g, self.seats
+        if not g or g['result']:
+            raise GameError('现在没有进行中的一手牌')
+        if not isinstance(seat, int) or not 0 <= seat < len(S) or S[seat] is None or not S[seat]['inHand'] or S[seat]['folded']:
+            raise GameError('这个人已经不在这手牌里了')
+        slots = upcoming_slots(g)
+        if not slots:
+            raise GameError('公共牌已经发完，改不了了')
+        live_ = [i for i, p in enumerate(S) if p is not None and p['inHand'] and not p['folded']]
+        others = [i for i in live_ if i != seat]
+        d, k = g['deck'], len(slots)
+
+        def wins(cards):
+            b = g['board'] + list(cards)
+            me = eval7(S[seat]['hole'] + b)
+            return all(eval7(S[o]['hole'] + b) < me for o in others)
+
+        pick = None
+        if k <= 2:
+            ok = [c for c in itertools.combinations(d, k) if wins(c)]
+            if ok:
+                pick = list(MC.choice(ok))
+                MC.shuffle(pick)
+        else:
+            for _ in range(20000):
+                c = MC.sample(d, k)
+                if wins(c):
+                    pick = c
+                    break
+        if pick is None:
+            raise GameError('剩下的牌怎么排 {} 都赢不了'.format(S[seat]['name']))
+        for (_, i), c in zip(slots, pick):
+            j = d.index(c)
+            d[i], d[j] = d[j], d[i]
+        return '已排好：{} 这手会赢'.format(S[seat]['name'])
+
     # ---------- 长轮询：浏览器带着自己看到的版本号来问，有新变化就立刻返回，否则最多等 POLL_WAIT 秒 ----------
     def poll(self, token, since, code):
         with self.cond:
@@ -1602,12 +1810,51 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_body(500, b'error', 'text/plain')
                 return
             self.send_body(200, body, 'application/json; charset=utf-8')
+        elif u.path in ('/admin', '/admin/'):
+            if not ADMIN_CODE:
+                self.send_body(404, b'not found', 'text/plain')
+                return
+            try:
+                with open(os.path.join(HERE, 'admin.html'), 'rb') as f:
+                    self.send_body(200, f.read(), 'text/html; charset=utf-8')
+            except OSError:
+                self.send_body(500, b'admin.html missing', 'text/plain')
+        elif u.path == '/admin/poll':
+            q = parse_qs(u.query)
+            if not ADMIN_CODE or not secrets.compare_digest(q.get('code', [''])[0].strip().encode(), ADMIN_CODE.encode()):
+                self.send_body(403, b'{"denied":true}', 'application/json')
+                return
+            try:
+                since = int(q.get('v', ['-1'])[0])
+            except ValueError:
+                since = -1
+            body = json.dumps(TABLE.admin_poll(since), ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            self.send_body(200, body, 'application/json; charset=utf-8')
         elif u.path == '/healthz':
             self.send_body(200, b'ok', 'text/plain')
         else:
             self.send_body(404, b'not found', 'text/plain')
 
     def do_POST(self):
+        if urlparse(self.path).path == '/admin/api':
+            try:
+                n = int(self.headers.get('Content-Length') or 0)
+                body = json.loads(self.rfile.read(min(n, 20000)).decode('utf-8') or '{}') if n else {}
+                if not isinstance(body, dict):
+                    raise ValueError
+                if not ADMIN_CODE or not secrets.compare_digest(str(body.get('code') or '').strip().encode(), ADMIN_CODE.encode()):
+                    res = {'ok': False, 'error': '控制台口令不对', 'denied': True}
+                else:
+                    res = TABLE.admin(body)
+            except GameError as e:
+                res = {'ok': False, 'error': str(e)}
+            except (ValueError, UnicodeDecodeError):
+                res = {'ok': False, 'error': '请求格式不对'}
+            except Exception:
+                traceback.print_exc()
+                res = {'ok': False, 'error': '服务器出错了'}
+            self.send_body(200, json.dumps(res, ensure_ascii=False).encode('utf-8'), 'application/json; charset=utf-8')
+            return
         if urlparse(self.path).path != '/api':
             self.send_body(404, b'not found', 'text/plain')
             return

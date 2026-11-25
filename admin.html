@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>牌桌控制台</title>
+<style>
+:root{
+  --bg:#14100c; --panel:#1f1813; --panel2:#2a2019; --line:rgba(242,234,216,.14);
+  --ink:#f2ead8; --muted:rgba(242,234,216,.6); --brass:#cfa451; --red:#c0392b; --green:#3c8b65; --warn:#eaa59c;
+  --card:#f2ead8; --card-ink:#17130f; --card-red:#ad2a21;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",sans-serif;-webkit-tap-highlight-color:transparent}
+main{max-width:720px;margin:0 auto;padding:12px max(12px,env(safe-area-inset-right)) 40px max(12px,env(safe-area-inset-left))}
+h1{font-size:20px;margin:6px 0 10px;display:flex;align-items:center;gap:8px}
+h2{font-size:15px;margin:0 0 8px;color:var(--brass);letter-spacing:.04em}
+.dot{width:9px;height:9px;border-radius:50%;background:#666}
+.dot.on{background:#4caf50}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+.muted{color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:inherit;color:inherit;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px 11px;cursor:pointer}
+button.pri{background:var(--brass);color:#241a08;border-color:var(--brass);font-weight:600}
+button.sm{padding:5px 9px;font-size:13px}
+button:disabled{opacity:.35}
+input[type=text],input[type=number],input[type=password]{font:inherit;color:inherit;background:#0e0b08;border:1px solid var(--line);border-radius:9px;padding:8px 10px;min-width:0}
+.cards{display:flex;gap:5px;flex-wrap:wrap}
+.c{display:inline-flex;align-items:center;justify-content:center;gap:1px;min-width:38px;height:50px;padding:0 4px;border-radius:6px;background:var(--card);color:var(--card-ink);font:700 17px/1 Georgia,serif}
+.c.r{color:var(--card-red)}
+.c.up{outline:2px dashed var(--brass);outline-offset:2px;cursor:pointer}
+.c.blank{background:transparent;border:1.5px dashed var(--line);color:var(--muted);font:500 12px/1 sans-serif;cursor:pointer}
+.c.sm{min-width:30px;height:40px;font-size:14px}
+.lab{font-size:11px;color:var(--muted);text-align:center;margin-top:3px}
+.slot{display:flex;flex-direction:column;align-items:center}
+.seat{border-top:1px solid var(--line);padding:10px 0;display:grid;grid-template-columns:1fr auto;gap:6px 10px}
+.seat:first-of-type{border-top:0;padding-top:0}
+.nm{font-weight:600;font-size:16px}
+.tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:5px;padding:0 5px;margin-left:4px;color:var(--muted)}
+.tag.turn{color:var(--brass);border-color:var(--brass)}
+.tag.win{color:#7bd88f;border-color:#7bd88f}
+.tag.lose{color:var(--warn);border-color:rgba(234,165,156,.5)}
+.folded{opacity:.45}
+.acts{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px}
+.result{margin-top:10px;padding:8px 10px;border-radius:9px;background:rgba(207,164,81,.1);border:1px solid rgba(207,164,81,.3)}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#000;border:1px solid var(--line);padding:9px 14px;border-radius:10px;z-index:50;max-width:90vw;text-align:center}
+.toast.err{border-color:var(--warn);color:var(--warn)}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:flex-end;justify-content:center;z-index:40}
+.sheet{background:var(--panel);width:min(720px,100%);max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;padding:14px max(14px,env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))}
+.grid{display:grid;grid-template-columns:repeat(13,minmax(0,1fr));gap:4px;margin:10px 0}
+.grid button{padding:0;height:42px;border-radius:6px;background:var(--card);color:var(--card-ink);font:700 14px/1 Georgia,serif;border:2px solid transparent}
+.grid button.r{color:var(--card-red)}
+.grid button.sel{border-color:var(--brass);box-shadow:0 0 0 2px var(--brass)}
+.grid button:disabled{opacity:.18}
+.log{font-size:13px;color:var(--muted);margin:0;padding-left:18px}
+.login{max-width:360px;margin:20vh auto 0;display:flex;flex-direction:column;gap:10px}
+@media (max-width:420px){.grid button{height:36px;font-size:12px}.c{min-width:34px;height:46px;font-size:15px}}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+(() => {
+'use strict';
+const KEY = 'holdem-admin-code';
+const app = document.getElementById('app');
+const SUIT = ['♠', '♥', '♦', '♣'];
+const RN = {10:'10', 11:'J', 12:'Q', 13:'K', 14:'A'};
+const ST = {preflop:'翻牌前', flop:'翻牌', turn:'转牌', river:'河牌'};
+const rank = c => c >> 2, suit = c => c & 3;
+const cs = c => (RN[rank(c)] || rank(c)) + SUIT[suit(c)];
+const red = c => suit(c) === 1 || suit(c) === 2;
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const fmt = n => Number(n).toLocaleString('en-US');
+let code = '';
+try { code = localStorage.getItem(KEY) || ''; } catch (e) {}
+let st = null, ver = -1, online = false, picker = null, draft = null, toastT = 0, held = false;
+
+function card(c, cls = ''){ return `<span class="c ${red(c) ? 'r' : ''} ${cls}">${cs(c)}</span>`; }
+function toast(msg, err){
+  let t = document.querySelector('.toast');
+  if (!t){ t = document.createElement('div'); document.body.appendChild(t); }
+  t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg;
+  clearTimeout(toastT); toastT = setTimeout(() => t.remove(), 2600);
+}
+async function api(body){
+  try {
+    const r = await fetch('admin/api', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(Object.assign({code}, body))});
+    const j = await r.json();
+    if (j.denied){ logout(); return null; }
+    if (!j.ok) toast(j.error || '没成功', true); else if (j.msg) toast(j.msg);
+    return j;
+  } catch (e){ toast('连不上服务器', true); return null; }
+}
+function logout(){ code = ''; try { localStorage.removeItem(KEY); } catch (e) {} st = null; render(); }
+
+async function loop(){
+  while (code){
+    try {
+      const r = await fetch(`admin/poll?code=${encodeURIComponent(code)}&v=${ver}`, {cache:'no-store'});
+      if (r.status === 403){ toast('控制台口令不对', true); logout(); return; }
+      const j = await r.json();
+      online = true; st = j; ver = j.v;
+      if (document.activeElement && document.activeElement.id === 'names') held = true; else render();
+    } catch (e){ online = false; render(); await new Promise(res => setTimeout(res, 2000)); }
+  }
+}
+
+function loginHTML(){
+  return `<div class="login"><h1>牌桌控制台</h1><p class="muted">输入控制台口令（不是房间口令）。</p>
+    <input id="code" type="password" placeholder="控制台口令" autocomplete="current-password">
+    <button class="pri" data-a="login">进入</button></div>`;
+}
+
+function seatsHTML(){
+  const g = st.game;
+  return st.seats.map((p, i) => {
+    if (!p) return '';
+    const inHand = g && p.inHand;
+    const tags = [];
+    if (p.bot) tags.push('<span class="tag">电脑</span>');
+    if (!p.online) tags.push('<span class="tag">离线</span>');
+    if (g && g.toAct === i) tags.push('<span class="tag turn">轮到他</span>');
+    if (inHand && p.folded) tags.push('<span class="tag">已弃牌</span>');
+    if (inHand && p.allIn) tags.push('<span class="tag">全下</span>');
+    if (g && !g.result && inHand && !p.folded && g.winners.length){
+      tags.push(g.winners.includes(i) ? `<span class="tag win">${g.winners.length > 1 ? '会平分' : '最终会赢'}</span>` : '<span class="tag lose">最终会输</span>');
+    }
+    const q = st.queue[String(i)];
+    const lucky = st.lucky.on && st.lucky.names.some(n => n.toLowerCase() === p.name.trim().toLowerCase()) && !p.bot;
+    return `<div class="seat ${inHand && p.folded ? 'folded' : ''}">
+      <div>
+        <div class="nm">${esc(p.name)}${lucky ? ' <span class="tag win">长期偏向</span>' : ''}${tags.join('')}</div>
+        <div class="muted">筹码 ${fmt(p.stack)}${q != null ? `（这手后改成 ${fmt(q)}）` : ''}${inHand && p.total ? ` · 本手已投 ${fmt(p.total)}` : ''}${p.last ? ` · ${esc(p.last)}` : ''}</div>
+        ${inHand && p.now ? `<div class="muted">现在：${esc(p.now)}${p.final && !p.folded ? ` · 到河牌：<b style="color:var(--ink)">${esc(p.final)}</b>` : ''}</div>` : ''}
+      </div>
+      <div class="cards">${inHand && p.hole && p.hole.length ? p.hole.map(c => card(c, 'sm')).join('') : ''}</div>
+      <div class="acts">
+        ${g && !g.result && inHand && !p.folded && g.upcoming.length ? `<button class="sm pri" data-a="win" data-s="${i}">这手让他赢</button>` : ''}
+        <button class="sm" data-a="planwin" data-s="${i}">下一手让他赢</button>
+        <button class="sm" data-a="stack" data-s="${i}">改筹码</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function boardHTML(){
+  const g = st.game;
+  if (!g) return '<p class="muted">牌局还没开始。</p>';
+  const dealt = g.board.map(c => `<div class="slot">${card(c)}<div class="lab">已发</div></div>`);
+  const up = g.upcoming.map((u, k) => `<div class="slot">${card(u.card, 'up" data-a="slot" data-k="' + k)}<div class="lab">${ST[u.street]}</div></div>`);
+  const ws = g.winners.map(i => st.seats[i] && st.seats[i].name).filter(Boolean);
+  return `<div class="row muted" style="margin-bottom:8px">第 ${g.hand} 手 · ${g.result ? '本手已结束' : ST[g.street] || ''} · 底池 ${fmt(g.pot)}${g.toAct != null && st.seats[g.toAct] ? ` · 轮到 ${esc(st.seats[g.toAct].name)}` : ''}</div>
+    <div class="cards">${dealt.concat(up).join('')}</div>
+    ${!g.result && ws.length ? `<div class="result">按现在排好的牌，到河牌：<b>${ws.map(esc).join('、')}</b> ${ws.length > 1 ? '平分' : '赢'}</div>` : ''}
+    ${g.upcoming.length ? '<p class="muted" style="margin:8px 0 0">虚线框是还没发出来的公共牌，别人看不到，可以随时换。</p>' : ''}`;
+}
+
+function planHTML(){
+  const p = st.plan;
+  let desc = '没有安排，按正常规则发（含长期偏向）。';
+  if (p && p.win != null && st.seats[p.win]) desc = `让 <b>${esc(st.seats[p.win].name)}</b> 牌最大。`;
+  if (p && (p.holes || p.board)){
+    const hs = Object.entries(p.holes || {}).map(([s, h]) => `${esc(st.seats[s] ? st.seats[s].name : '座位' + s)}：${h.map(c => card(c, 'sm')).join('')}`);
+    const b = (p.board || []).map(c => c == null ? '<span class="c sm blank">随机</span>' : card(c, 'sm')).join('');
+    desc = `${hs.length ? hs.join('<br>') + '<br>' : ''}公共牌：<span class="cards" style="display:inline-flex">${b}</span>`;
+  }
+  return `<div class="muted" style="margin-bottom:10px">${desc}</div>
+    <div class="row">
+      <button data-a="plancards">指定下一手的牌</button>
+      ${p ? '<button data-a="clearplan">清除安排</button>' : ''}
+    </div>`;
+}
+
+function luckyHTML(){
+  return `<div class="row" style="margin-bottom:8px">
+      <input id="names" type="text" value="${esc(st.lucky.names.join(', '))}" style="flex:1 1 200px" placeholder="名字，用逗号隔开">
+      <button data-a="savenames">保存</button>
+      <button data-a="togglelucky" class="${st.lucky.on ? 'pri' : ''}">${st.lucky.on ? '已开启' : '已关闭'}</button>
+    </div>
+    <p class="muted" style="margin:0">名单里的真人（不分大小写）每手到河牌都是全场最大。下一手的安排优先于这里。</p>`;
+}
+
+function render(){
+  if (!code){ app.innerHTML = loginHTML(); return; }
+  if (!st){ app.innerHTML = '<p class="muted">连接中…</p>'; return; }
+  app.innerHTML = `<h1><span class="dot ${online ? 'on' : ''}"></span>牌桌控制台</h1>
+    <div class="box"><h2>这一手</h2>${boardHTML()}</div>
+    <div class="box"><h2>玩家</h2>${seatsHTML() || '<p class="muted">还没有人入座。</p>'}</div>
+    <div class="box"><h2>下一手安排（只生效一手）</h2>${planHTML()}</div>
+    <div class="box"><h2>长期偏向</h2>${luckyHTML()}</div>
+    ${st.game && st.game.log.length ? `<div class="box"><h2>最近记录</h2><ul class="log">${st.game.log.map(e => `<li>${esc(e.n ? e.n + ' ' : '')}${esc(e.text || (e.cards ? e.cards.map(cs).join(' ') : ''))}${e.hn ? ' · ' + esc(e.hn) : ''}</li>`).join('')}</ul></div>` : ''}
+    <div class="row"><button class="sm" data-a="logout">退出控制台</button></div>
+    ${picker ? pickerHTML() : ''}`;
+}
+
+/* ---------- card picker ----------
+   kind 'slot': choose 1 card from the remaining deck for an upcoming board slot
+   kind 'plan': build next-hand holes per seat + board */
+function pickerHTML(){
+  const P = picker;
+  let avail, title, sel = P.sel, need = P.need;
+  if (P.kind === 'slot'){
+    avail = new Set(st.game.deck.concat([P.cur]));
+    title = `换${ST[st.game.upcoming[P.k].street]}：选一张`;
+  } else {
+    const taken = new Set();
+    Object.entries(draft.holes).forEach(([s, h]) => { if (!(P.target === 'h' + s)) h.forEach(c => taken.add(c)); });
+    draft.board.forEach((c, i) => { if (c != null && P.target !== 'b') taken.add(c); });
+    avail = new Set(); for (let c = 8; c <= 59; c++) if (!taken.has(c)) avail.add(c);
+    title = !P.target ? '' : P.target === 'b' ? '下一手公共牌：最多选 5 张，按翻牌、转牌、河牌的顺序' : `下一手 ${esc(st.seats[+P.target.slice(1)].name)} 的底牌：选 2 张`;
+  }
+  const cells = [];
+  for (let s = 0; s < 4; s++) for (let r = 14; r >= 2; r--){
+    const c = r * 4 + s, on = sel.includes(c);
+    cells.push(`<button type="button" class="${red(c) ? 'r' : ''} ${on ? 'sel' : ''}" data-a="pick" data-c="${c}" ${avail.has(c) || on ? '' : 'disabled'}>${cs(c)}</button>`);
+  }
+  let planUI = '';
+  if (P.kind === 'plan' && !P.target){
+    const seats = st.seats.map((p, i) => p ? `<div class="row" style="margin:6px 0"><span style="min-width:6em">${esc(p.name)}</span>
+      <span class="cards">${(draft.holes[i] || []).map(c => card(c, 'sm')).join('') || '<span class="muted">随机</span>'}</span>
+      <button class="sm" data-a="ptarget" data-t="h${i}">选底牌</button>${draft.holes[i] ? `<button class="sm" data-a="pclear" data-t="h${i}">随机</button>` : ''}</div>` : '').join('');
+    const b = draft.board.map(c => c == null ? '<span class="c sm blank">随机</span>' : card(c, 'sm')).join('');
+    return `<div class="modal" data-a="close"><div class="sheet" data-stop="1">
+      <h2>指定下一手的牌</h2>
+      <p class="muted" style="margin:0 0 6px">没指定的都随机。下一手不在牌桌上的人，指定的底牌不生效。</p>
+      ${seats}
+      <div class="row" style="margin:10px 0"><span style="min-width:6em">公共牌</span><span class="cards">${b}</span>
+        <button class="sm" data-a="ptarget" data-t="b">选公共牌</button>${draft.board.some(c => c != null) ? '<button class="sm" data-a="pclear" data-t="b">随机</button>' : ''}</div>
+      <div class="row"><button class="pri" data-a="plansave">保存安排</button><button data-a="close">取消</button></div>
+    </div></div>`;
+  }
+  return `<div class="modal" data-a="close"><div class="sheet" data-stop="1">
+    <h2>${title}</h2>
+    <div class="grid">${cells.join('')}</div>
+    <div class="row"><button class="pri" data-a="pickok" ${need === 1 ? (sel.length === 1 ? '' : 'disabled') : need === 2 ? (sel.length === 2 ? '' : 'disabled') : ''}>确定</button><button data-a="pickcancel">取消</button>
+    <span class="muted">${need === 5 ? `已选 ${sel.length}/5` : ''}</span></div>
+  </div></div>`;
+}
+
+app.addEventListener('click', async e => {
+  const el = e.target.closest('[data-a]');
+  if (!el) return;
+  if (el.classList.contains('modal') && e.target !== el) return;   // clicks inside the sheet don't close it
+  const a = el.dataset.a, s = el.dataset.s != null ? +el.dataset.s : null;
+  switch (a){
+    case 'login': {
+      const v = (document.getElementById('code').value || '').trim();
+      if (!v) return;
+      code = v; try { localStorage.setItem(KEY, v); } catch (er) {}
+      ver = -1; render(); loop(); break;
+    }
+    case 'logout': logout(); break;
+    case 'win': {
+      const n = st.seats[s].name;
+      if (confirm(`重排这手剩下的公共牌，让 ${n} 赢？`)) await api({op:'make_win', seat:s});
+      break;
+    }
+    case 'planwin': await api({op:'plan_win', seat:s}); break;
+    case 'stack': {
+      const v = prompt(`把 ${st.seats[s].name} 的筹码改成多少？`, st.seats[s].stack);
+      if (v == null) return;
+      const n = parseInt(v.replace(/[, ]/g, ''), 10);
+      if (!Number.isFinite(n)) return toast('要填整数', true);
+      await api({op:'stack', seat:s, stack:n}); break;
+    }
+    case 'slot': {
+      const k = +el.dataset.k, cur = st.game.upcoming[k].card;
+      picker = {kind:'slot', k, cur, sel:[cur], need:1}; render(); break;
+    }
+    case 'pick': {
+      const c = +el.dataset.c, P = picker;
+      if (P.sel.includes(c)) P.sel = P.sel.filter(x => x !== c);
+      else if (P.need === 1) P.sel = [c];
+      else if (P.sel.length < P.need) P.sel.push(c);
+      render(); break;
+    }
+    case 'pickok': {
+      const P = picker;
+      if (P.kind === 'slot'){ picker = null; render(); await api({op:'set_card', slot:P.k, card:P.sel[0]}); }
+      else {
+        if (P.target === 'b') draft.board = P.sel.concat([null, null, null, null, null]).slice(0, 5);
+        else draft.holes[+P.target.slice(1)] = P.sel.slice();
+        picker = {kind:'plan', sel:[], need:0}; render();
+      }
+      break;
+    }
+    case 'pickcancel':
+      picker = picker && picker.kind === 'plan' ? {kind:'plan', sel:[], need:0} : null; render(); break;
+    case 'plancards': {
+      const p = st.plan || {};
+      draft = {holes:Object.fromEntries(Object.entries(p.holes || {}).map(([k, v]) => [+k, v.slice()])), board:(p.board || [null, null, null, null, null]).slice()};
+      picker = {kind:'plan', sel:[], need:0}; render(); break;
+    }
+    case 'ptarget': {
+      const t = el.dataset.t;
+      const sel = t === 'b' ? draft.board.filter(c => c != null) : (draft.holes[+t.slice(1)] || []).slice();
+      picker = {kind:'plan', target:t, sel, need:t === 'b' ? 5 : 2}; render(); break;
+    }
+    case 'pclear': {
+      const t = el.dataset.t;
+      if (t === 'b') draft.board = [null, null, null, null, null]; else delete draft.holes[+t.slice(1)];
+      render(); break;
+    }
+    case 'plansave': {
+      const holes = {}; Object.entries(draft.holes).forEach(([k, v]) => { if (v && v.length === 2) holes[k] = v; });
+      picker = null; render();
+      await api({op:'plan_cards', holes, board:draft.board}); break;
+    }
+    case 'clearplan': await api({op:'clear_plan'}); break;
+    case 'close': picker = null; render(); break;
+    case 'savenames': {
+      const names = document.getElementById('names').value.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean);
+      await api({op:'lucky', names}); break;
+    }
+    case 'togglelucky': await api({op:'lucky', on:!st.lucky.on}); break;
+  }
+});
+app.addEventListener('focusout', e => { if (e.target.id === 'names' && held){ held = false; setTimeout(render, 0); } });
+app.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'code') app.querySelector('[data-a="login"]').click(); });
+
+render();
+if (code) loop();
+})();
+</script>
+</body>
+</html>

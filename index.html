@@ -277,6 +277,8 @@ const C = {
   FROST_TIME: 4.0,       // the ice it leaves on the floor lasts this long (and is slippery)
   NOVA_ICE_R: 1.8,       // ice round a nova
   SHARD_ICE_R: 0.55,     // ice where an ice shard breaks on a wall
+  ABSORB_TIME: 2.0,      // a Black Hole swallows for this long...
+  ABSORB_R: 1.7,         // ...pulling in enemy shots this close
   RAIL_FAN: 0.22,        // the angle between the three rails of its skill
   INVULN_TIME: 2.0,      // seconds Titan's invulnerability lasts (can still attack)
   MINI_BLAST: 0.68,      // splash radius of Mortar primary HE shell on wall impact
@@ -1213,6 +1215,7 @@ const SKINS = [
   { id: 'blade', name: 'Blade', desc: 'No gun: slashes what is in front · Skill: Spin (8s) · whirling blades for 1.5s that cut shots in two', atk: 'Blade (no gun)', skill: 'SPIN', scool: 8.0, speed: 1.15, turn: 1.2, bSpeed: 1.0, fCool: 1.0 },
   { id: 'burner', name: 'Burner', desc: 'Flamethrower: a short burst of fire about 2 cells out · Skill: Firebomb (9s) · thrown over walls, a pool of fire for 3.5s', atk: 'Flamethrower', skill: 'FIREBOMB', scool: 9.0, speed: 1.0, turn: 1.05, bSpeed: 1.0, fCool: 1.0 },
   { id: 'frost', name: 'Frost', desc: 'Ice shard: fast, one bounce, leaves ice where it breaks · Skates on ice · Skill: Frost Nova (7s) · freezes enemies within 3 cells for 2s', atk: 'Ice shard', skill: 'NOVA', scool: 7.0, speed: 1.0, turn: 1.05, bSpeed: 1.15, fCool: 1.0, maxB: 1 },
+  { id: 'blackhole', name: 'Black Hole', desc: 'Steady shot · Skill: Absorb (9s) · for 2s it swallows the shots and skills fired at it, then lets one loose as its own', atk: 'Steady shot', skill: 'ABSORB', scool: 9.0, speed: 0.98, turn: 1.0, bSpeed: 1.0, fCool: 1.0 },
   { id: 'railgun', name: 'Railgun', desc: 'Rail: charges 1.1s, goes through a wall and a shield · Skill: Tri-rail (11s)', atk: 'Rail (1.1s charge)', skill: 'TRI-RAIL', scool: 11.0, speed: 0.92, turn: 0.96, bSpeed: 1.0, fCool: 1.6 }
 ];
 // one line in Chinese for the skin screen, and who each one is good against / weak to
@@ -1239,6 +1242,7 @@ const SKIN_ZH = {
   blade:    { d: '不能开枪：近身挥刀砍前方 · 技能：旋转切割 1.5 秒，周围一圈都砍，飞来的子弹会被劈成两半，转的时候跑得更快（只能捡护盾道具）', good: 'Mortar、Railgun、Turret', bad: 'Heavy、Cyber、Splitter' },
   burner:   { d: '喷火器：每按一次喷 0.7 秒火，射程约 2 格，在火里连着待 0.35 秒就会被烧掉，火会被墙挡住；喷火时开得慢一点 · 技能：扔燃烧弹（能越过墙），落地烧出一片火海 3.5 秒', good: 'Blade、Stealth、Engineer', bad: 'Railgun、Recon、Mortar' },
   frost:    { d: '冰锥：飞得快、能反弹一次，碎掉的地方结一小片冰（4 秒，敌人开上去会打滑） · 被动：在任何冰面上都不打滑、还开得更快 · 技能：冰冻新星，周围 3 格内的敌人被冻住 2 秒（不能动、不能开火、不能放技能），脚下结一大片冰；被冻住的坦克挨一下就碎', good: 'Blade、Burner、Striker', bad: 'Railgun、Mortar、Turret' },
+  blackhole: { d: '稳定射击 · 技能：吞噬 2 秒，打向它的子弹、导弹、钩爪、燃烧弹、轨道炮和激光、喷火、冰冻新星都会被吸进去（它不受伤）；吸到的东西变成一次性技能，再按一次技能键就当成自己的放出去（吸到子弹就一次射出一扇子弹）', good: 'Railgun、Frost、Hook', bad: 'Blade、Mortar、Smoker' },
   railgun:  { d: '轨道炮：蓄力 1.1 秒，能穿过一堵墙和护盾，打完 1.5 秒才能再打 · 技能：蓄力 1.3 秒后同时打出三道（冷却 11 秒）', good: 'Heavy、Mirror、Engineer', bad: 'Striker、Blink' }
 };
 const SKIN_IDS = SKINS.map(s => s.id);
@@ -2040,7 +2044,7 @@ function resetEntities() {
     // two tanks face each other as before; with more, each one faces the middle
     t.angle = NP === 2 ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : Math.atan2(ROWS / 2 - s.y, COLS / 2 - s.x);
     t.alive = !t.gone; t.cool = 0; t.recoil = 0;
-    t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.rail = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0; t.skillQ = 0; t.reflect = 0; t.spin = 0; t.flame = 0; t.heat = 0; t.frozen = 0;
+    t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.rail = 0; t.laserPath = null; t.guided = null; t.shield = 0; t.fireQ = 0; t.skillQ = 0; t.reflect = 0; t.spin = 0; t.flame = 0; t.heat = 0; t.frozen = 0; t.absorb = 0; t.held = null;
     t.respawn = 0; t.ai = null; t.reveal = 0; t.inv = 0; t.invuln = 0; t.hp = 0; t.stun = 0; t.stunImm = 0; t.snare = 0; t.chill = 0; t.gat = 0; t.gatT = 0; t.portLock = -1; t.vx = 0; t.vy = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0; t.armor = undefined; t.armorCd = 0; t.armorGrace = 0; t.past = []; t.pastT = 0;
   });
   ball = null; goalBy = -1;
@@ -2182,7 +2186,7 @@ function respawnTank(t) {
   }
   if (!best) best = spawn[t.id] || spawn[0];
   t.x = best.x; t.y = best.y; t.angle = Math.atan2(cy - t.y, cx - t.x);
-  t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.rail = 0; t.laserPath = null; t.guided = null; t.fireQ = 0; t.skillQ = 0; t.reflect = 0; t.spin = 0; t.flame = 0; t.heat = 0; t.frozen = 0;
+  t.alive = true; t.cool = 0; t.recoil = 0; t.ammo = clipSize(); t.reload = 0; t.power = null; t.charge = 0; t.rail = 0; t.laserPath = null; t.guided = null; t.fireQ = 0; t.skillQ = 0; t.reflect = 0; t.spin = 0; t.flame = 0; t.heat = 0; t.frozen = 0; t.absorb = 0; t.held = null;
   t.respawn = 0; t.shield = 0; t.inv = C.SPAWN_INV; t.invuln = 0; t.ai = null; t.portLock = -1; t.snare = 0; t.chill = 0; t.svx = 0; t.svy = 0; t.boost = 0; t.boostDir = 0; t.dash = 0; t.dcool = 0; t.scool = 0; t.cloak = 0; t.scan = 0; t.armor = undefined; t.armorCd = 0; t.armorGrace = 0; t.past = []; t.pastT = 0;
   if (isZed(t.id)) { t.inv = 0; t.hp = C.ZED_HP; t.stun = 0.3; t.dash = 0; t.dcool = 0; }
   rings.push({ x: t.x, y: t.y, r: 0.8, life: 0.4, max: 0.4, col: penOf(t.id) });
@@ -2478,11 +2482,22 @@ function fire(t) {
 }
 
 function useSkill(t) {
+  if (t.held && t.alive && !isZed(t.id) && !(t.stun > 0) && !(t.charge > 0) && classOf(t.id).id === 'blackhole') return releaseHeld(t);
   if (!t.alive || isZed(t.id) || t.stun > 0 || t.scool > 0 || t.charge > 0) return false;
   const cls = classOf(t.id), sk = cls.id, col = penOf(t.id);
   if ((sk === 'striker' || sk === 'blink') && t.snare > 0) return false;
   if (sk === 'railgun' && (t.guided || t.gat > 0)) return false;
   t.scool = cls.scool || 5.0;
+  if (sk === 'blackhole') {
+    // Absorb: for C.ABSORB_TIME what the enemy fires at it is swallowed
+    t.absorb = C.ABSORB_TIME;
+    if (t.cloak > 0) { t.cloak = 0; unstickFromWall(t, C.TANK_R); }
+    sfx.hole(); netEv('sfx', 'hole', t.id);
+    return true;
+  }
+  return castSkill(t, sk, col, cls);
+}
+function castSkill(t, sk, col, cls = classOf(t.id)) {
   if (sk === 'classic') {
     // Spread Volley: 3 wide fan shots (free of ammo)
     const s = muzzle(t, C.BULLET_R);
@@ -2721,6 +2736,7 @@ function useSkill(t) {
     for (const o of tanks) {
       if (o === t || !o.alive || o.gone || !canHurt(t.id, o) || isInvuln(o) || Math.hypot(o.x - t.x, o.y - t.y) > C.NOVA_R + C.TANK_R * 0.5) continue;
       if (!lineClear(t.x, t.y, o.x, o.y, 0.04)) continue;
+      if (swallows(o, t.id)) { gulp(o, 'nova', t.x, t.y); continue; }
       if (o.shield > 0) { o.shield = 0; rings.push({ x: o.x, y: o.y, r: 0.75, life: 0.3, max: 0.3, col: penOf(o.id) }); netEv('block', o.id, r2(o.x), r2(o.y)); continue; }
       freeze(o);
     }
@@ -2752,12 +2768,106 @@ function useSkill(t) {
   return true;
 }
 const MIRROR_COL = '#bfe6ff';
+// ---- Black Hole: what it swallows, and letting it loose again
+const HELD_KINDS = ['shots', 'rail', 'laser', 'missile', 'hook', 'firebomb', 'flame', 'nova'];
+const HELD_LABEL = { shots: 'SHOTS', rail: 'RAIL', laser: 'LASER', missile: 'MISSILE', hook: 'HOOK', firebomb: 'FIREBOMB', flame: 'FLAME', nova: 'NOVA' };
+const HELD_COL = { shots: '#ffffff', rail: '#6eefd2', laser: '#ff5fa2', missile: '#ffb347', hook: '#c98b5a', firebomb: '#ff8a3d', flame: '#ffd166', nova: '#a3e6ff' };
+const HOLE_COL = '#a77dff';
+// is h swallowing what `owner` fires
+const swallows = (h, owner) => h && h.alive && (h.absorb || 0) > 0 && h.id !== owner && !friendOf(owner, h.id) && !isZed(h.id);
+function holeNear(x, y, owner, r = C.ABSORB_R) {
+  for (const h of tanks) if (swallows(h, owner) && Math.hypot(h.x - x, h.y - y) < r) return h;
+  return null;
+}
+// h takes in one more thing: shots pile up; a skill takes the place of what it held
+function gulp(h, kind, x, y) {
+  if (kind === 'shots') { if (!h.held) h.held = { kind: 'shots', n: 0 }; if (h.held.kind === 'shots') h.held.n = Math.min(12, h.held.n + 1); }
+  else h.held = { kind, n: h.held ? h.held.n : 0 };
+  gulpFx(h.x, h.y, x, y, HELD_COL[kind]);
+  netEv('gulp', h.id, r2(x), r2(y), HELD_KINDS.indexOf(kind));
+}
+function gulpFx(hx, hy, x, y, col) {
+  sfx.gulp();
+  if (HEADLESS) return;
+  for (let i = 0; i < 8; i++) { const k = 0.3 + Math.random() * 0.7, sx = hx + (x - hx) * k + (Math.random() - 0.5) * 0.3, sy = hy + (y - hy) * k + (Math.random() - 0.5) * 0.3, tt = 0.25;
+    particles.push({ x: sx, y: sy, vx: (hx - sx) / tt, vy: (hy - sy) / tt, life: tt, max: tt, col: i % 2 ? col : HOLE_COL, size: 0.035 }); }
+}
+// let loose what it swallowed, as its own
+function releaseHeld(t) {
+  const h = t.held; t.held = null;
+  if (t.cloak > 0) { t.cloak = 0; unstickFromWall(t, C.TANK_R); }
+  netEv('sfx', 'unhole', t.id); sfx.unhole();
+  if (h.kind === 'shots') {
+    const n = Math.max(1, h.n), s = muzzle(t, C.BULLET_R), fan = Math.min(0.9, 0.12 * (n - 1));
+    for (let i = 0; i < n; i++) {
+      const a = t.angle + (n > 1 ? -fan / 2 + fan * i / (n - 1) : 0);
+      bullets.push({ id: ++entId, x: s.x, y: s.y, vx: Math.cos(a) * C.BULLET_SPEED, vy: Math.sin(a) * C.BULLET_SPEED, owner: t.id, age: 0, bounces: 0, trail: [], tick: 0, extra: true });
+    }
+    t.recoil = 1; t.reveal = C.GRASS_REVEAL; t.inv = 0;
+    sfx.shoot(t.id); netEv('shot', t.id, r2(s.x), r2(s.y), r2(t.angle));
+  } else if (h.kind === 'rail') { t.rail = 1; fireRail(t); t.rail = 0; t.cool = Math.min(t.cool, 0.3); }
+  else if (h.kind === 'laser') fireLaser(t);
+  else if (h.kind === 'missile') {
+    const s = muzzle(t, C.MISSILE_R);
+    missiles.push({ id: ++entId, target: nearestEnemy(t.id, s.x, s.y), type: 'homing', x: s.x, y: s.y, angle: t.angle, owner: t.id, age: 0, replan: 0, wp: null, tick: 0, detonate: false });
+    t.recoil = 1; sfx.launch();
+  }
+  else if (h.kind === 'hook') castSkill(t, 'hook', penOf(t.id));
+  else if (h.kind === 'firebomb') castSkill(t, 'burner', penOf(t.id));
+  else if (h.kind === 'nova') castSkill(t, 'frost', penOf(t.id));
+  else if (h.kind === 'flame') { t.flame = 0; t.cool = 0; flameOn(t); }
+  return true;
+}
+// the swirl round a swallowing Black Hole, and what it holds circling it
+function drawHoleFx(t) {
+  const x = t.x * P, y = t.y * P, now = REDUCED ? 0 : performance.now() / 1000;
+  if ((t.absorb || 0) > 0) {
+    const R = C.ABSORB_R * P;
+    ctx.save(); ctx.translate(x, y);
+    const g = ctx.createRadialGradient(0, 0, P * 0.2, 0, 0, R);
+    g.addColorStop(0, 'rgba(5,2,12,0.85)'); g.addColorStop(0.55, 'rgba(40,16,80,0.45)'); g.addColorStop(1, 'rgba(60,30,120,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 5; i++) {                            // spiral arms turning inward
+      const a0 = now * 3.2 + i * Math.PI * 2 / 5;
+      ctx.beginPath();
+      for (let k = 0; k <= 16; k++) { const f = k / 16, rr = R * (1 - f * 0.78), a = a0 + f * 2.4; ctx[k ? 'lineTo' : 'moveTo'](Math.cos(a) * rr, Math.sin(a) * rr); }
+      ctx.strokeStyle = i % 2 ? HOLE_COL : '#e2d4ff'; ctx.globalAlpha = 0.55; ctx.lineWidth = Math.max(1, P * 0.025); ctx.stroke();
+    }
+    ctx.globalAlpha = 0.9; ctx.strokeStyle = HOLE_COL; ctx.lineWidth = Math.max(1.5, P * 0.04);
+    ctx.beginPath(); ctx.arc(0, 0, P * 0.52, now * 4, now * 4 + Math.PI * 1.5); ctx.stroke();
+    ctx.restore(); ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+  }
+  if (t.held) {                                             // what it holds, circling it
+    const n = t.held.kind === 'shots' ? Math.min(6, Math.max(1, t.held.n || 1)) : 1, col = HELD_COL[t.held.kind];
+    for (let i = 0; i < n; i++) {
+      const a = now * 2.6 + i * Math.PI * 2 / n, ox = x + Math.cos(a) * P * 0.58, oy = y + Math.sin(a) * P * 0.58;
+      glow(ox, oy, P * (n > 1 ? 0.2 : 0.3), col, 0.9);
+      ctx.fillStyle = COL.white; ctx.beginPath(); ctx.arc(ox, oy, Math.max(1.5, P * (n > 1 ? 0.035 : 0.05)), 0, Math.PI * 2); ctx.fill();
+    }
+  }
+}
+// a beam that runs into a swallowing Black Hole ends there, in it
+function cutAtHole(path, owner) {
+  let best = null;
+  for (let i = 0; i + 1 < path.length; i++) {
+    const a = path[i], b = path[i + 1], dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1;
+    for (const h of tanks) {
+      if (!swallows(h, owner)) continue;
+      const u = clamp(((h.x - a.x) * dx + (h.y - a.y) * dy) / L2, 0, 1), px = a.x + dx * u, py = a.y + dy * u;
+      if (Math.hypot(h.x - px, h.y - py) < C.ABSORB_R * 0.7) { best = { i, h, x: px, y: py }; break; }
+    }
+    if (best) break;
+  }
+  if (!best) return { path, hole: null };
+  return { path: path.slice(0, best.i + 1).concat([{ x: best.h.x, y: best.h.y }]), hole: best.h };
+}
 // each hero's own body colour (Classic keeps the player's colour all over)
 const HERO_COL = {
   heavy: '#8f9d5e', stealth: '#69727f', cyber: '#3fcfe0', retro: '#d9a441', striker: '#c3dd4c', mortar: '#c4a978',
   engineer: '#f0c33c', trapper: '#4fb7a0', titan: '#d6b45c', recon: '#a7ad70', decoy: '#b7a2de', rewind: '#c98b5a',
   blink: '#7fa8ff', mirror: '#cdd9e6', smoker: '#8f8f96', splitter: '#e06cc4', turret: '#7f8d9b', hook: '#b8683d',
-  blade: '#aeb8c4', burner: '#d2582f', frost: '#a3e6ff', railgun: '#6eefd2'
+  blade: '#aeb8c4', burner: '#d2582f', frost: '#a3e6ff', railgun: '#6eefd2', blackhole: '#8a5cf0'
 };
 // a Blade's slash: everything in reach in front is cut
 function slash(t) {
@@ -2857,8 +2967,13 @@ function inFlame(t, o) {
 function stepFire(dt) {
   for (let i = firebombs.length - 1; i >= 0; i--) {
     const f = firebombs[i];
-    if ((f.age += dt) < C.FIREBOMB_FLIGHT) continue;
+    if ((f.age += dt) < C.FIREBOMB_FLIGHT) {
+      const k = f.age / C.FIREBOMB_FLIGHT, bh = holeNear(f.sx + (f.tx - f.sx) * k, f.sy + (f.ty - f.sy) * k, f.owner, C.ABSORB_R * 0.75);
+      if (bh) { gulp(bh, 'firebomb', f.sx + (f.tx - f.sx) * k, f.sy + (f.ty - f.sy) * k); firebombs.splice(i, 1); }
+      continue;
+    }
     firebombs.splice(i, 1);
+    { const bh = holeNear(f.tx, f.ty, f.owner, C.ABSORB_R); if (bh) { gulp(bh, 'firebomb', f.tx, f.ty); continue; } }
     pools.push({ id: ++entId, x: f.tx, y: f.ty, owner: f.owner, age: 0, life: C.POOL_TIME });
     popDecoysNear(f.tx, f.ty, C.POOL_R);
     ignite(f.tx, f.ty, f.owner); netEv('ignite', f.owner, r2(f.tx), r2(f.ty));
@@ -2868,7 +2983,11 @@ function stepFire(dt) {
     if (!o.alive || o.gone) { o.heat = 0; continue; }
     let by = -1;
     if (LETHAL && !isInvuln(o)) {
-      for (const t of tanks) if (t !== o && t.alive && (t.flame || 0) > 0 && canHurt(t.id, o) && inFlame(t, o)) { by = t.id; break; }
+      for (const t of tanks) if (t !== o && t.alive && (t.flame || 0) > 0 && canHurt(t.id, o) && inFlame(t, o)) {
+        if (swallows(o, t.id)) { if (!o.held || o.held.kind !== 'flame') gulp(o, 'flame', t.x, t.y); continue; }   // a Black Hole drinks the fire
+        by = t.id; break;
+      }
+      if (by < 0 && (o.absorb || 0) > 0) { o.heat = 0; continue; }
       if (by < 0) for (const p of pools) if (p.owner !== o.id && canHurt(p.owner, o) && Math.hypot(o.x - p.x, o.y - p.y) < C.POOL_R + C.TANK_R * 0.5) { by = p.owner; break; }
     }
     if (by >= 0) {
@@ -3096,6 +3215,7 @@ function stepHooks(dt) {
       if (circleHitsWall(nx, ny, C.HOOK_R, false, true)) { h.phase = 2; wallSparks(h.x, h.y, penOf(h.owner)); sfx.bounce(); netEv('hookWall', h.owner, r2(h.x), r2(h.y)); continue; }
       if (h.d >= C.HOOK_RANGE) { h.phase = 2; continue; }
       h.x = nx; h.y = ny;
+      { const bh = holeNear(h.x, h.y, h.owner, C.ABSORB_R * 0.75); if (bh) { gulp(bh, 'hook', h.x, h.y); hooks.splice(i, 1); continue; } }
       const j = decoys.findIndex(d => !friendOf(h.owner, d.owner) && Math.hypot(d.x - h.x, d.y - h.y) < C.TANK_R + C.HOOK_R);
       if (j >= 0) { popDecoy(j); h.phase = 2; continue; }
       for (const t of tanks) {
@@ -3425,11 +3545,12 @@ function hit(t, by = -1) {
 }
 
 function fireLaser(t) {
-  const path = t.laserPath = tracePath(t.x, t.y, t.angle);
+  const cut = cutAtHole(t.laserPath = tracePath(t.x, t.y, t.angle), t.id), path = cut.path;
   beams.push({ path, owner: t.id, life: 0.32, max: 0.32 });
   sfx.zap();
   netEv('laser', t.id, r2(t.x), r2(t.y), r2(t.angle));
   if (!REDUCED) shake = Math.max(shake, 0.12);
+  if (cut.hole) gulp(cut.hole, 'laser', cut.hole.x, cut.hole.y);
   beamHits(t, path);
 }
 // a Railgun's rail (three for its skill): straight on through the first wall it meets, and through a shield
@@ -3441,8 +3562,9 @@ function fireRail(t) {
   sfx.rail(); netEv('rail', t.id, r2(t.x), r2(t.y), r2(t.angle), fan.length);
   if (!REDUCED) shake = Math.max(shake, 0.16);
   for (const da of fan) {
-    const path = railPath(t.x, t.y, t.angle + da);
+    const cut = cutAtHole(railPath(t.x, t.y, t.angle + da), t.id), path = cut.path;
     beams.push({ path, owner: t.id, life: 0.36, max: 0.36 });
+    if (cut.hole) gulp(cut.hole, 'rail', cut.hole.x, cut.hole.y);
     railNow = true;
     try { beamHits(t, path); } finally { railNow = false; }
   }
@@ -3503,7 +3625,7 @@ function beamHits(t, path) {
     for (let j = minions.length - 1; j >= 0; j--) if (minions[j].team !== ot && pathDist(path, minions[j].x, minions[j].y) < C.MINION_R + 0.05) killMinion(j);
   }
   shotNow = { age: C.LASER_CHARGE, id: -1, n: path.length - 2 };
-  for (const o of tanks) if (o !== t && o.alive && canHurt(t.id, o) && pathDist(path, o.x, o.y) < C.TANK_R * 0.92 + 0.04) hit(o, t.id);
+  for (const o of tanks) if (o !== t && o.alive && canHurt(t.id, o) && !swallows(o, t.id) && pathDist(path, o.x, o.y) < C.TANK_R * 0.92 + 0.04) hit(o, t.id);
   shotNow = null;
 }
 
@@ -3619,7 +3741,7 @@ function miniBlast(b, R = C.MINI_BLAST, skipId = -1) {
 function kill(t, by = -1) {
   if (state === 'play' || state === 'ending') noteKill(t.id, by);
   if ((t.frozen || 0) > 0) { shatterFx(t.x, t.y); netEv('shatter', r2(t.x), r2(t.y)); t.frozen = 0; }
-  t.alive = false; t.charge = 0; t.rail = 0; t.reflect = 0; t.spin = 0; t.flame = 0; t.heat = 0; t.gat = 0; t.snare = 0; t.chill = 0; t.cloak = 0; t.scan = 0; t.inv = 0; t.invuln = 0;
+  t.alive = false; t.charge = 0; t.rail = 0; t.reflect = 0; t.spin = 0; t.flame = 0; t.heat = 0; t.absorb = 0; t.held = null; t.gat = 0; t.snare = 0; t.chill = 0; t.cloak = 0; t.scan = 0; t.inv = 0; t.invuln = 0;
   const seed = (Math.random() * 1e9) | 0;
   marks.push({ x: t.x, y: t.y, col: penOf(t.id), seed });
   netEv('kill', t.id, r2(t.x), r2(t.y), seed);
@@ -4007,7 +4129,7 @@ function botInput(seat) {
     ai.da = Math.atan2(-b.vx * side, b.vy * side); ai.dodge = 0.3;
     if (classOf(seat).id === 'rewind' && t.scool <= 0 && t.past && t.past.length > 10) pressSkill(seat);   // a rewind steps out of a shot's way
     if (t.power === 'shield') pressFire(seat);
-    else if (t.scool <= 0 && ['heavy', 'striker', 'stealth', 'engineer', 'titan', 'mirror', 'blink', 'blade'].includes(classOf(seat).id)) pressSkill(seat);
+    else if (t.scool <= 0 && (['heavy', 'striker', 'stealth', 'engineer', 'titan', 'mirror', 'blink', 'blade'].includes(classOf(seat).id) || (classOf(seat).id === 'blackhole' && !t.held))) pressSkill(seat);
     return { x: Math.cos(ai.da), y: Math.sin(ai.da), mag: 1 };
   }
   if (ai.wander > 0) { ai.wander -= dt; return { x: Math.cos(ai.wa), y: Math.sin(ai.wa), mag: 1 }; }
@@ -4064,6 +4186,7 @@ function botInput(seat) {
     else if (sk === 'titan' && hasFoe && !(t.invuln > 0) && dFoe < 4.8) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'decoy' && hasFoe && !foe.decoy && los && dFoe < 5) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'rewind' && t.snare > 0 && t.past && t.past.length > 5) { pressSkill(seat); ai.react = 0.3; }
+    else if (sk === 'blackhole' && t.held && hasFoe && los && (t.held.kind === 'nova' ? dFoe < C.NOVA_R - 0.3 : Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle)) < 0.18)) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'frost' && hasFoe && dFoe < C.NOVA_R - 0.2 && los) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'burner' && hasFoe && dFoe > 2.2 && dFoe < C.FIREBOMB_DIST + 0.8 && Math.abs(wrapAngle(Math.atan2(foe.y - t.y, foe.x - t.x) - t.angle)) < 0.25) { pressSkill(seat); ai.react = 0.4; }
     else if (sk === 'blade' && hasFoe && dFoe < 1.9) { pressSkill(seat); ai.react = 0.4; }
@@ -4308,6 +4431,7 @@ function stepPhysics(dt, lethal, control) {
     t.reflect = Math.max(0, (t.reflect || 0) - dt);
     if (t.flame > 0) t.flame = Math.max(0, t.flame - dt);
     if (t.frozen > 0) t.frozen = Math.max(0, t.frozen - dt);
+    if (t.absorb > 0) t.absorb = Math.max(0, t.absorb - dt);
     if (t.spin > 0) { t.spin = Math.max(0, t.spin - dt); if (t.alive && control) cutAround(t, C.SPIN_R, Math.PI); }
     if (t.gat > 0) gatStep(t, dt, control);
     t.stun = Math.max(0, t.stun - dt); t.stunImm = Math.max(0, t.stunImm - dt); t.snare = Math.max(0, t.snare - dt); t.chill = Math.max(0, (t.chill || 0) - dt); t.boost = Math.max(0, (t.boost || 0) - dt); if (t.snare > 0) t.dash = 0; t.dash = Math.max(0, t.dash - dt); t.dcool = Math.max(0, t.dcool - dt); t.scool = Math.max(0, t.scool - dt); t.cloak = Math.max(0, t.cloak - dt); t.scan = Math.max(0, t.scan - dt);
@@ -4448,6 +4572,7 @@ function stepPhysics(dt, lethal, control) {
 
   // bullets
   const hitR = C.TANK_R * 0.92 + C.BULLET_R;
+  const holes = tanks.some(h => h.alive && (h.absorb || 0) > 0);
   bulletLoop:
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
@@ -4565,6 +4690,15 @@ function stepPhysics(dt, lethal, control) {
       const m = minions[j];
       if (teamOf[b.owner] !== m.team && Math.hypot(b.x - m.x, b.y - m.y) < C.MINION_R + C.BULLET_R) { hurtMinion(j, (b.heavy || b.rivet) ? 2 : 1); if (b.he) miniBlast(b); bullets.splice(i, 1); continue bulletLoop; }
     }
+    if (holes) {                                            // a swallowing Black Hole pulls an enemy shot in, curling, and swallows it
+      const h = holeNear(b.x, b.y, b.owner);
+      if (h) {
+        const dx = h.x - b.x, dy = h.y - b.y, d = Math.hypot(dx, dy) || 1e-3, sp = Math.hypot(b.vx, b.vy);
+        if (d < C.TANK_R + C.BULLET_R + 0.12) { gulp(h, 'shots', b.x, b.y); bullets.splice(i, 1); continue; }
+        const wx = (dx * 0.8 - dy * 0.55) / d, wy = (dy * 0.8 + dx * 0.55) / d, k = Math.min(1, 9 * dt);
+        b.vx += (wx * sp - b.vx) * k; b.vy += (wy * sp - b.vy) * k;
+      }
+    }
     for (const t of tanks) {
       if (!t.alive) continue;
       if (b.owner === t.id && (b.age < C.SELF_SAFE_TIME || b.tur)) continue;   // (a Turret's shots never hurt its owner)
@@ -4573,6 +4707,7 @@ function stepPhysics(dt, lethal, control) {
       const dx = b.x - t.x, dy = b.y - t.y, d2 = dx * dx + dy * dy;
       if (d2 < hitR * hitR) {
         if ((t.reflect || 0) > 0 && b.owner !== t.id && !isZed(t.id)) { reflectShot(b, t); break; }
+        if (swallows(t, b.owner)) { gulp(t, 'shots', b.x, b.y); bullets.splice(i, 1); continue bulletLoop; }
         if (b.owner !== t.id && !b.extra && stats[b.owner]) stats[b.owner].h++;
         shotNow = { age: b.age, id: b.id, n: b.bounces };
         const died = hit(t, b.owner); shotNow = null;
@@ -4623,6 +4758,7 @@ function stepPhysics(dt, lethal, control) {
     }
     m.x += Math.cos(m.angle) * speed * dt; m.y += Math.sin(m.angle) * speed * dt;
     resolveCircle(m, C.MISSILE_R);
+    { const h = holeNear(m.x, m.y, m.owner, C.ABSORB_R * 0.75); if (h) { gulp(h, 'missile', m.x, m.y); removeMissile(i); continue; } }
     if (++m.tick % 4 === 0 && m.type !== 'bomb') particles.push({ x: m.x - Math.cos(m.angle) * 0.18, y: m.y - Math.sin(m.angle) * 0.18, vx: (Math.random() - 0.5) * 0.5, vy: (Math.random() - 0.5) * 0.5, life: 0.35, max: 0.35, col: COL.graphite, size: 0.035 });
 
     if (m.type === 'guided' && (m.detonate || m.age > C.GUIDED_LIFE)) { removeMissile(i); blast(m); continue; }
@@ -4801,7 +4937,7 @@ function noteKill(v, by, touch) {
 }
 function recFrame() {
   rec.frames.push({ t: rec.t,
-    T: tanks.map(o => [o.x, o.y, o.angle, (o.alive ? 1 : 0) | (o.shield > 0 ? 2 : 0) | (o.power ? 4 : 0) | (o.gone ? 8 : 0) | (o.snare > 0 ? 16 : 0) | (o.invuln > 0 ? 32 : 0) | (o.cloak > 0 ? 64 : 0) | ((o.chill || 0) > 0 ? 128 : 0) | ((o.reflect || 0) > 0 ? 256 : 0) | ((o.spin || 0) > 0 ? 512 : 0) | ((o.flame || 0) > 0 ? 1024 : 0) | ((o.heat || 0) > 0.02 ? 2048 : 0) | ((o.frozen || 0) > 0 ? 4096 : 0), penOf(o.id)]),
+    T: tanks.map(o => [o.x, o.y, o.angle, (o.alive ? 1 : 0) | (o.shield > 0 ? 2 : 0) | (o.power ? 4 : 0) | (o.gone ? 8 : 0) | (o.snare > 0 ? 16 : 0) | (o.invuln > 0 ? 32 : 0) | (o.cloak > 0 ? 64 : 0) | ((o.chill || 0) > 0 ? 128 : 0) | ((o.reflect || 0) > 0 ? 256 : 0) | ((o.spin || 0) > 0 ? 512 : 0) | ((o.flame || 0) > 0 ? 1024 : 0) | ((o.heat || 0) > 0.02 ? 2048 : 0) | ((o.frozen || 0) > 0 ? 4096 : 0) | ((o.absorb || 0) > 0 ? 8192 : 0), penOf(o.id)]),
     B: bullets.map(b => [b.id, b.x, b.y, penOf(b.owner), b.pierce ? 1 : b.he ? 2 : b.heavy ? 3 : b.rivet ? 4 : b.chill ? 5 : b.shard ? 6 : 0]),
     M: missiles.map(m => [m.id, m.x, m.y, m.angle, m.owner, m.type]),
     N: mines.map(n => [n.id, n.x, n.y, n.owner, n.armed ? 1 : 0]),
@@ -4931,7 +5067,7 @@ function enterReplayWorld() {
   tanks = a.T.map((q, i) => {
     const r = b.T[i] || q, o = makeTank(i);
     o.x = lerp(q[0], r[0]); o.y = lerp(q[1], r[1]); o.angle = lerpA(q[2], r[2]);
-    o.alive = !!(q[3] & 1) && !(q[3] & 8); o.shield = q[3] & 2 ? 1 : 0; o.power = q[3] & 4 ? 'laser' : null; o.snare = q[3] & 16 ? 1 : 0; o.invuln = q[3] & 32 ? 1 : 0; o.cloak = q[3] & 64 ? 1 : 0; o.chill = q[3] & 128 ? 1 : 0; o.reflect = q[3] & 256 ? 1 : 0; o.spin = q[3] & 512 ? 1 : 0; o.flame = q[3] & 1024 ? 1 : 0; o.heat = q[3] & 2048 ? 1 : 0; o.frozen = q[3] & 4096 ? 1 : 0; o.pen = q[4];
+    o.alive = !!(q[3] & 1) && !(q[3] & 8); o.shield = q[3] & 2 ? 1 : 0; o.power = q[3] & 4 ? 'laser' : null; o.snare = q[3] & 16 ? 1 : 0; o.invuln = q[3] & 32 ? 1 : 0; o.cloak = q[3] & 64 ? 1 : 0; o.chill = q[3] & 128 ? 1 : 0; o.reflect = q[3] & 256 ? 1 : 0; o.spin = q[3] & 512 ? 1 : 0; o.flame = q[3] & 1024 ? 1 : 0; o.heat = q[3] & 2048 ? 1 : 0; o.frozen = q[3] & 4096 ? 1 : 0; o.absorb = q[3] & 8192 ? 1 : 0; o.pen = q[4];
     return o;
   });
   // bullets, with trails from the frames before
@@ -5422,7 +5558,7 @@ function buildSnap() {
     hl: hl ? [r2(hl.t), r2(hl.age), hl.v, hl.k, hl.b, hl.n, hl.touch ? 1 : 0, hl.goal] : null,
     pt: play && potatoOn() ? [pot.holder, r1(pot.fuse)] : null, bl: play && ball ? [r2(ball.x), r2(ball.y)] : null, gb: goalBy,
     rp: state === 'replay' && rp ? [rp.from, rp.to, rp.dur] : null,
-    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0) | (t.cloak > 0 ? 128 : 0) | ((t.chill || 0) > 0 ? 256 : 0) | (t.armor > 0 ? 512 : 0) | ((t.reflect || 0) > 0 ? 1024 : 0) | (t.charge > 0 && t.rail === 1 ? 2048 : 0) | (t.charge > 0 && t.rail === 3 ? 4096 : 0) | ((t.spin || 0) > 0 ? 8192 : 0) | ((t.flame || 0) > 0 ? 16384 : 0) | ((t.heat || 0) > 0.02 ? 32768 : 0) | ((t.frozen || 0) > 0 ? 65536 : 0),
+    T: play ? tanks.map(t => [r2(t.x), r2(t.y), r2(t.angle), (t.alive ? 1 : 0) | (t.guided ? 2 : 0) | (t.gone ? 4 : 0) | (t.stun > 0 ? 8 : 0) | (t.dash > 0 ? 16 : 0) | (t.hp === 1 ? 32 : 0) | (t.gat > 0 ? 64 : 0) | (t.cloak > 0 ? 128 : 0) | ((t.chill || 0) > 0 ? 256 : 0) | (t.armor > 0 ? 512 : 0) | ((t.reflect || 0) > 0 ? 1024 : 0) | (t.charge > 0 && t.rail === 1 ? 2048 : 0) | (t.charge > 0 && t.rail === 3 ? 4096 : 0) | ((t.spin || 0) > 0 ? 8192 : 0) | ((t.flame || 0) > 0 ? 16384 : 0) | ((t.heat || 0) > 0.02 ? 32768 : 0) | ((t.frozen || 0) > 0 ? 65536 : 0) | ((t.absorb || 0) > 0 ? 131072 : 0) | (t.held ? (HELD_KINDS.indexOf(t.held.kind) + 1) << 18 : 0),
       shotsLeft(t), t.power ? POWER_TYPES.indexOf(t.power) : -1, r2(t.shield), r2(t.reload), r2(t.charge), t.respawn > 0 ? r1(t.respawn) : 0, t.reveal > 0 ? r1(t.reveal) : 0, t.inv > 0 ? r1(t.inv) : 0, t.dcool > 0 ? r1(t.dcool) : 0, t.scool > 0 ? r1(t.scool) : 0, t.scan > 0 ? r1(t.scan) : 0, t.snare > 0 ? r1(t.snare) : 0, t.invuln > 0 ? r1(t.invuln) : 0]) : [],
     B: play ? bullets.map(b => [b.id, r2(b.x), r2(b.y), b.owner, b.pierce ? 2 : b.he ? 3 : b.heavy ? 4 : b.rivet ? 5 : b.chill ? 6 : b.shard ? 7 : b.extra ? 1 : 0, b.life || 0]) : [],
     M: play ? missiles.map(m => [m.id, r2(m.x), r2(m.y), r2(m.angle), m.owner, Math.max(0, MISSILE_TYPES.indexOf(m.type)), m.target]) : [],
@@ -6016,7 +6152,7 @@ function playEvent(e) {
   } else if (kind === 'block') {
     rings.push({ x: e[3], y: e[4], r: 0.75, life: 0.3, max: 0.3, col: pen(e[2]) }); sfx.block();
   } else if (kind === 'laser') {
-    beams.push({ path: tracePath(e[3], e[4], e[5]), owner: e[2], life: 0.32, max: 0.32 });
+    beams.push({ path: cutAtHole(tracePath(e[3], e[4], e[5]), e[2]).path, owner: e[2], life: 0.32, max: 0.32 });
     sfx.zap(); if (!REDUCED) shake = Math.max(shake, 0.12);
   } else if (kind === 'emp') {
     const col = pen(e[2]);
@@ -6028,6 +6164,8 @@ function playEvent(e) {
     boltFx(e[2]);
   } else if (kind === 'decoyPop') {
     decoyFx(e[2], e[3], e[4]);
+  } else if (kind === 'gulp') {
+    const h = tanks[e[2]]; if (h) gulpFx(h.x, h.y, e[3], e[4], HELD_COL[HELD_KINDS[e[5]]] || HOLE_COL);
   } else if (kind === 'nova') {
     novaFx(e[3], e[4]);
   } else if (kind === 'shatter') {
@@ -6056,7 +6194,7 @@ function playEvent(e) {
     for (let i = 0; i < 3; i++) { const d = e[5] + (Math.random() - 0.5) * 0.9, sp = 1 + Math.random() * 2; particles.push({ x: e[3], y: e[4], vx: Math.cos(d) * sp, vy: Math.sin(d) * sp, life: 0.18, max: 0.18, col: COL.graphite, size: 0.035 }); }
     sfx.shoot(e[2] | 0);
   } else if (kind === 'rail') {
-    for (const da of railFan(e[6])) beams.push({ path: railPath(e[3], e[4], e[5] + da), owner: e[2], life: 0.36, max: 0.36 });
+    for (const da of railFan(e[6])) beams.push({ path: cutAtHole(railPath(e[3], e[4], e[5] + da), e[2]).path, owner: e[2], life: 0.36, max: 0.36 });
     if (tanks[e[2]]) tanks[e[2]].recoil = 1;
     sfx.rail(); if (!REDUCED) shake = Math.max(shake, 0.16);
   } else if (kind === 'rewind') {
@@ -6144,7 +6282,7 @@ function applyEntities(a, b, k, dt) {
     t.alive = !!(q[3] & 1); t.guided = q[3] & 2 ? true : null; t.gone = !!(q[3] & 4);
     t.left = q[4] | 0; t.power = POWER_TYPES[q[5]] || null;
     t.shield = +q[6] || 0; t.reload = +q[7] || 0; t.charge = +q[8] || 0; t.respawn = +q[9] || 0; t.reveal = +q[10] || 0; t.inv = +q[11] || 0;
-    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.chill = q[3] & 256 ? 1 : 0; t.armor = q[3] & 512 ? 1 : 0; t.reflect = q[3] & 1024 ? 1 : 0; t.spin = q[3] & 8192 ? 1 : 0; t.flame = q[3] & 16384 ? 1 : 0; t.heat = q[3] & 32768 ? 1 : 0; t.frozen = q[3] & 65536 ? C.FREEZE_TIME * 0.6 : 0; t.rail = q[3] & 4096 ? 3 : q[3] & 2048 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0; t.scan = +q[14] || 0; t.snare = +q[15] || 0; t.invuln = +q[16] || 0;
+    t.stun = q[3] & 8 ? 1 : 0; t.dash = q[3] & 16 ? 1 : 0; t.gat = q[3] & 64 ? 1 : 0; t.cloak = q[3] & 128 ? 1 : 0; t.chill = q[3] & 256 ? 1 : 0; t.armor = q[3] & 512 ? 1 : 0; t.reflect = q[3] & 1024 ? 1 : 0; t.spin = q[3] & 8192 ? 1 : 0; t.flame = q[3] & 16384 ? 1 : 0; t.heat = q[3] & 32768 ? 1 : 0; t.frozen = q[3] & 65536 ? C.FREEZE_TIME * 0.6 : 0; t.absorb = q[3] & 131072 ? 1 : 0; { const hk = (q[3] >> 18) & 15; t.held = hk ? { kind: HELD_KINDS[hk - 1], n: (t.held && t.held.n) || 3 } : null; } t.rail = q[3] & 4096 ? 3 : q[3] & 2048 ? 1 : 0; t.hp = q[3] & 32 ? 1 : 2; t.dcool = +q[12] || 0; t.scool = +q[13] || 0; t.scan = +q[14] || 0; t.snare = +q[15] || 0; t.invuln = +q[16] || 0;
     t.laserPath = t.charge > 0 ? aimPath(t) : null;
   }
   const byId = list => { const m = new Map(); if (Array.isArray(list)) for (const e of list) m.set(e[0], e); return m; };
@@ -6313,6 +6451,9 @@ const sfx = {
   slam: () => { hiss({ dur: 0.24, vol: 0.2, f0: 1200, f1: 80, send: 0.3 }); voice({ f: 95, to: 45, dur: 0.2, type: 'sine', vol: 0.2 }); },
   crack: () => { hiss({ dur: 0.1, vol: 0.13, kind: 'bandpass', f0: 2400, f1: 500, q: 1 }); voice({ f: 170, to: 80, dur: 0.09, type: 'triangle', vol: 0.06 }); },
   spin: () => voice({ f: 120, to: 900, dur: 0.35, type: 'sawtooth', vol: 0.045, lp: 2000 }),
+  hole: () => { voice({ f: 220, to: 45, dur: 0.6, type: 'sine', vol: 0.18, send: 0.5 }); hiss({ dur: 0.6, vol: 0.1, kind: 'lowpass', f0: 1800, f1: 200, send: 0.5 }); },
+  gulp: () => { voice({ f: 700, to: 120, dur: 0.12, type: 'sine', vol: 0.08 }); },
+  unhole: () => { voice({ f: 60, to: 600, dur: 0.25, type: 'triangle', vol: 0.08, send: 0.4 }); hiss({ dur: 0.2, vol: 0.08, kind: 'bandpass', f0: 400, f1: 3000, q: 1 }); },
   nova: () => { voice({ f: 2400, to: 600, dur: 0.5, type: 'sine', vol: 0.07, send: 0.6 }); hiss({ dur: 0.5, vol: 0.14, kind: 'highpass', f0: 6000, f1: 2500, send: 0.4 }); voice({ f: 3600, dur: 0.25, type: 'triangle', vol: 0.03, delay: 0.05 }); },
   shatter: () => { for (let i = 0; i < 4; i++) voice({ f: 2600 + Math.random() * 2400, dur: 0.08, type: 'triangle', vol: 0.05, delay: i * 0.025 }); hiss({ dur: 0.25, vol: 0.14, kind: 'highpass', f0: 4000, f1: 2000 }); },
   flame: () => { hiss({ dur: 0.75, vol: 0.16, kind: 'lowpass', f0: 2600, f1: 900, send: 0.3 }); voice({ f: 70, to: 55, dur: 0.7, type: 'sawtooth', vol: 0.04, lp: 400 }); },
@@ -7729,7 +7870,9 @@ function drawTank(t) {
     ctx.globalAlpha = 0.5; ctx.strokeStyle = COL.white; ctx.lineWidth = Math.max(1, P * 0.015); ctx.beginPath(); ctx.arc(x, y, r + Math.max(1.5, P * 0.035), 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
   }
+  if (t.alive !== false && (t.absorb || 0) > 0) drawHoleFx({ x: t.x, y: t.y, absorb: 1 });
   drawTankSprite(t);
+  if (t.alive !== false && t.held && state !== 'skins') drawHoleFx({ x: t.x, y: t.y, held: t.held });
   if (t.alive !== false && (t.frozen || 0) > 0) drawIceBlock(t);
   if (t.alive !== false && ((t.spin || 0) > 0 || (t.slashAt && performance.now() - t.slashAt < C.SLASH_TIME * 1000))) drawBladeFx(t);
 }
@@ -8052,6 +8195,11 @@ function drawTankBody(t) {
     ctx.strokeStyle = shade(body, 0.35); ctx.lineWidth = Math.max(1.2, P * 0.03);
     ctx.beginPath(); ctx.arc(-L * 0.3, 0, P * 0.08, -Math.PI * 0.75, Math.PI * 0.75); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-L * 0.3 - P * 0.08 * Math.cos(Math.PI * 0.25), P * 0.08 * Math.sin(Math.PI * 0.25) + P * 0.03); ctx.lineTo(-L * 0.3 - P * 0.06, P * 0.06); ctx.lineTo(-L * 0.3 - P * 0.11, P * 0.07); ctx.stroke();
+  } else if (sk === 'blackhole') {
+    // a round-ended hull with a ring of the dark round its back
+    rrect(-L * 0.46, -W * 0.36, L * 0.92, W * 0.72, W * 0.36); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = shade(body, 0.45); ctx.lineWidth = Math.max(1.2, P * 0.026);
+    ctx.beginPath(); ctx.arc(-L * 0.32, 0, P * 0.07, 0.4, Math.PI * 2 - 0.4); ctx.stroke();
   } else if (sk === 'frost') {
     // an angular hull with ice crystals jutting from its back
     ctx.beginPath();
@@ -8295,6 +8443,10 @@ function drawTankBody(t) {
     ctx.save(); ctx.rotate(hand - t.angle);
     ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -P * 0.085); ctx.moveTo(0, 0); ctx.lineTo(P * 0.055, 0); ctx.stroke();
     ctx.restore();
+  } else if (sk === 'blackhole') {
+    ctx.beginPath(); ctx.arc(0, 0, P * 0.17, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#05020c'; ctx.beginPath(); ctx.arc(0, 0, P * 0.1, 0, Math.PI * 2); ctx.fill();   // the event horizon
+    ctx.strokeStyle = capCol; ctx.lineWidth = Math.max(1.2, P * 0.03); ctx.beginPath(); ctx.arc(0, 0, P * 0.125, 0, Math.PI * 2); ctx.stroke();
   } else if (sk === 'frost') {
     ctx.beginPath(); ctx.arc(0, 0, P * 0.165, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     ctx.strokeStyle = capCol; ctx.lineWidth = Math.max(1.2, P * 0.028); ctx.lineCap = 'round';     // a snowflake
@@ -9325,20 +9477,22 @@ function drawStrip(p, seat) {
   // class skill button: active ability with its own cooldown
   if (!zom) {
     const sk = skillSpot(), cls = classOf(t.skin || skinOf(seat));
-    const sPressed = pl.skillId !== null, sReady = t.alive && !(t.scool > 0) && !(t.stun > 0) && !(t.charge > 0) && !(cls.id === 'striker' && t.snare > 0);
+    const held = cls.id === 'blackhole' && t.held;
+    const sPressed = pl.skillId !== null, sReady = t.alive && (!(t.scool > 0) || held) && !(t.stun > 0) && !(t.charge > 0) && !(cls.id === 'striker' && t.snare > 0);
     if (sReady && sPressed) glow(sk.x, sk.y, sk.r * 1.6, col, 0.45);
     ctx.lineWidth = Math.max(1.8, sk.r * 0.07); ctx.strokeStyle = col; ctx.fillStyle = col;
     ctx.globalAlpha = sPressed ? 0.48 : sReady ? 0.18 : 0.05;
     ctx.beginPath(); ctx.arc(sk.x, sk.y, sk.r * (sPressed ? 0.94 : 1), 0, Math.PI * 2); ctx.fill();
     ctx.globalAlpha = sReady ? 0.95 : 0.32; ctx.stroke();
-    if (t.scool > 0) {
+    if (held) glow(sk.x, sk.y, sk.r * 1.5, HELD_COL[held.kind], 0.5);
+    if (t.scool > 0 && !held) {
       const k = clamp(1 - t.scool / cls.scool, 0, 1);
       ctx.lineCap = 'round'; ctx.strokeStyle = col; ctx.lineWidth = Math.max(2.5, sk.r * 0.11);
       ctx.globalAlpha = 0.85; ctx.beginPath(); ctx.arc(sk.x, sk.y, sk.r + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k); ctx.stroke();
       ctx.lineCap = 'butt';
     }
     ctx.globalAlpha = sReady ? 1 : 0.45;
-    plain(cls.skill, sk.x, sk.y + sk.r * 0.04, sk.r * 0.44, sReady ? shade(col, 0.6) : col, FONT_T, true);
+    plain(held ? HELD_LABEL[held.kind] : cls.skill, sk.x, sk.y + sk.r * 0.04, sk.r * (held && HELD_LABEL[held.kind].length > 6 ? 0.34 : 0.44), sReady ? shade(col, 0.6) : col, FONT_T, true);
     ctx.globalAlpha = 1;
     label('skill', sk.x, sk.y + sk.r + Math.min(13, S * 0.085), Math.min(14, S * 0.095), col, FONT_B, sReady ? 0.72 : 0.4);
   }
@@ -10416,7 +10570,7 @@ if (hot && hot.snapshot) hot.snapshot(() => ({ scores: mode === 'local' ? scores
 // hooks for testing from the console
 window.__tank = {
   C, MAPS, SKINS, classOf, tanks, players, settings: () => settings, setSettings: s => { settings = validSettings(s) || settings; },
-  get mySkin() { return mySkin; }, get skinRoll() { return skinRoll; }, startRoll, stepRoll, openSkins, closeSkins, get skinSlot() { return skinSlot; }, set skinSlot(v) { skinSlot = v; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, wxRule, snowGrip, strikeBolt, gust, get banks() { return banks; }, set banks(v) { banks = v; }, inBank, stepGust, get boltT() { return boltT; }, set boltT(v) { boltT = v; }, get boltFlash() { return boltFlash; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy, get clouds() { return clouds; }, get hooks() { return hooks; }, get pools() { return pools; }, get frost() { return frost; }, iceAt, slipAt, driveSpeed, get firebombs() { return firebombs; }, get flames() { return flames; }, inCloud, railPath,
+  get mySkin() { return mySkin; }, get skinRoll() { return skinRoll; }, startRoll, stepRoll, openSkins, closeSkins, get skinSlot() { return skinSlot; }, set skinSlot(v) { skinSlot = v; }, setMySkin, get p2Skin() { return p2Skin; }, setP2Skin, get cpuSkins() { return cpuSkins; }, setCpuSkin, get skins() { return skins; }, get pings() { return pings; }, get lamps() { return lamps; }, DARK_MAPS, litAt, inDark, lampOut, lightReaches, lightPoly, themeOf, get TH() { return TH; }, get puddles() { return puddles; }, wxRule, snowGrip, strikeBolt, gust, get banks() { return banks; }, set banks(v) { banks = v; }, inBank, stepGust, get boltT() { return boltT; }, set boltT(v) { boltT = v; }, get boltFlash() { return boltFlash; }, get weather() { return weather; }, set weather(v) { weather = v; }, get weatherOn() { return weatherOn; }, setWeatherOn, pickWeather, get decoys() { return decoys; }, popDecoy, get clouds() { return clouds; }, get hooks() { return hooks; }, get pools() { return pools; }, get frost() { return frost; }, get missiles() { return missiles; }, iceAt, slipAt, driveSpeed, get firebombs() { return firebombs; }, get flames() { return flames; }, inCloud, railPath,
   get COLS() { return COLS; }, get ROWS() { return ROWS; }, get mapId() { return mapId; },
   showMap: i => { loadMap(i); resetEntities(); layout(); },
   loadMap, resetEntities, circleHitsWall, resolveCircle, stepPhysics, update, fire, kill, usePower, useSkill, pressSkill, pressSkillFrom, skillSpot, tracePath, castRay, planWaypoint, driveSpeed,
